@@ -1,0 +1,2 @@
+Honey App database migrations managed by Alembic.
+Run lembic upgrade head after modifying versions under migrations/versions.

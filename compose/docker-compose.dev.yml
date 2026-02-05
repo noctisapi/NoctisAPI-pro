@@ -1,0 +1,56 @@
+version: "3.9"
+
+services:
+  migrate:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    env_file:
+      - ../.env.dev
+    volumes:
+      - ../:/app
+      - hp_dev_data:/data
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    env_file:
+      - ../.env.dev
+    volumes:
+      - ../:/app
+      - hp_dev_data:/data
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      - "8000:8000"
+    command: ["uvicorn", "app.honeypot_public:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    healthcheck:
+      test:
+        ["CMD", "python", "scripts/check_app_ready.py"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  admin:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    env_file:
+      - ../.env.dev
+    volumes:
+      - ../:/app
+      - hp_dev_data:/data
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:9001:9001"
+    command: ["uvicorn", "app.panel_mvp:app", "--host", "0.0.0.0", "--port", "9001", "--reload"]
+
+volumes:
+  hp_dev_data:

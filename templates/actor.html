@@ -1,0 +1,393 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <h1>Actor {{ actor.short }}</h1>
+    <div class="sub">{{ actor.actor_id }}</div>
+  </div>
+
+  <div class="kpis">
+    <div class="kpi">
+      <div class="kpi-label">Stage</div>
+      <div class="kpi-value">S{{ actor.stage }}</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Score</div>
+      <div class="kpi-value">{{ actor.score }}</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Visto</div>
+      <div class="kpi-value">{{ actor.last_seen_fmt }}</div>
+    </div>
+  </div>
+</div>
+
+<div class="card actor-actions">
+  <div class="actor-actions__info">
+    <div class="actor-actions__eyebrow">Quick Actions</div>
+    <div class="actor-actions__title">Gestión express del actor</div>
+    <div class="actor-actions__subtitle">Archiva, vincula casos o revisa sus sesiones sin salir de esta vista.</div>
+  </div>
+  <div class="actor-actions__buttons">
+    <button class="btn btn-ghost" type="button" data-action="archive" data-busy-text="Actualizando..." onclick="archiveActor(this)">
+      <span class="btn-label">{% if actor.is_archived %}Unarchive{% else %}Archive{% endif %}</span>
+    </button>
+    <button class="btn btn-primary" type="button" data-action="open-case-modal" data-busy-text="Cargando..." onclick="openCaseModal(this)">
+      <span class="btn-label">Add to Case</span>
+    </button>
+    {% if actor.latest_session_id %}
+    <a class="btn btn-outline" href="/dashboard/sessions/{{ actor.latest_session_id }}">
+      <span class="btn-label">Open Replay</span>
+    </a>
+    {% endif %}
+    <a class="btn btn-outline" href="/dashboard/actors/{{ actor.actor_id }}/sessions">
+      <span class="btn-label">Sessions</span>
+    </a>
+  </div>
+</div>
+
+{% if actor_campaign %}
+<div class="card campaign-card">
+  <div class="card-head">
+    <div class="card-title">Campaign Insight</div>
+    <div class="card-sub mono"><a class="link" href="/dashboard/campaigns/{{ actor_campaign.campaign_id }}">View campaign</a></div>
+  </div>
+  <div class="campaign-body">
+    <div class="campaign-meta-row">
+      <div class="mono">{{ actor_campaign.campaign_id }}</div>
+      <span class="tag">Confidence {{ actor_campaign.confidence|round(2) }}</span>
+    </div>
+    {% if actor_campaign.reasons %}
+    <div class="reason-list">
+      {% if actor_campaign.reasons.shared_stage_flow %}
+        <span class="reason-pill">Flow {{ actor_campaign.reasons.shared_stage_flow }}</span>
+      {% endif %}
+      {% if actor_campaign.reasons.shared_paths %}
+        <span class="reason-pill">Paths {{ actor_campaign.reasons.shared_paths|join(', ') }}</span>
+      {% endif %}
+      {% if actor_campaign.reasons.shared_timing %}
+        <span class="reason-pill">Timing {{ actor_campaign.reasons.shared_timing }}</span>
+      {% endif %}
+      {% if actor_campaign.reasons.shared_errors %}
+        <span class="reason-pill">Errors {{ actor_campaign.reasons.shared_errors|join(', ') }}</span>
+      {% endif %}
+      {% if actor_campaign.reasons.shared_ua %}
+        <span class="reason-pill">UA {{ actor_campaign.reasons.shared_ua }}</span>
+      {% endif %}
+    </div>
+    {% endif %}
+    <div class="campaign-actions">
+      {% if actor_campaign.representative_session_id %}
+        <a class="btn btn-primary btn-small" href="/dashboard/sessions/{{ actor_campaign.representative_session_id }}">Representative Replay</a>
+      {% elif actor.latest_session_id %}
+        <a class="btn btn-outline btn-small" href="/dashboard/sessions/{{ actor.latest_session_id }}">Latest Replay</a>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<div id="actionToast" class="toast" role="status" aria-live="polite"></div>
+
+<!-- Case Modal -->
+<div id="caseModal" class="modal-backdrop" aria-hidden="true">
+  <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="caseModalTitle">
+    <div class="modal-head">
+      <div>
+        <h3 id="caseModalTitle">Add to Case</h3>
+        <p class="modal-subtitle">Pick an existing case or crea uno nuevo en segundos.</p>
+      </div>
+      <button type="button" class="btn btn-icon" onclick="closeCaseModal()" aria-label="Close case modal">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div id="caseMeta" class="modal-hint" aria-live="polite">Loading cases...</div>
+      <div id="caseList" class="case-list">
+        <div class="case-loader"><span class="spinner"></span> Loading cases...</div>
+      </div>
+    </div>
+    <div class="modal-form">
+      <label for="newCaseTitle">Crear caso rápido</label>
+      <div class="modal-form-row">
+        <input type="text" id="newCaseTitle" placeholder="Ej. Credential stuffing en tienda" class="input input-lg" autocomplete="off">
+        <button type="button" class="btn btn-primary" data-action="quick-case" data-busy-text="Creando..." onclick="quickCreateCase(this)">Crear y vincular</button>
+      </div>
+      <p class="modal-help">Se creará un caso con severidad media y este actor quedará marcado como participante principal.</p>
+      <button type="button" class="btn btn-ghost" onclick="closeCaseModal()">Cerrar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Tokens -->
+<div class="card">
+  <div class="card-head">
+    <div class="card-title">Tokens ({{ tokens|length }})</div>
+    <div class="card-sub mono">/ <a class="link" href="/">dashboard</a></div>
+  </div>
+
+  {% if tokens %}
+    <div class="table-wrap">
+      <table class="table table-sortable">
+        <thead>
+          <tr>
+            <th data-type="text">Token</th>
+            <th data-type="number">Stage</th>
+            <th data-type="text">Type</th>
+            <th data-type="date">Created</th>
+            <th data-type="number">Used</th>
+            <th data-type="date">Last Used</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for t in tokens %}
+          <tr>
+            <td class="mono clip">{{ t.token }}</td>
+            <td><span class="pill">S{{ t.stage }}</span></td>
+            <td>{{ t.gift_type }}</td>
+            <td class="mono">{{ t.created_fmt }}</td>
+            <td class="mono">{{ t.used_count }}</td>
+            <td class="mono">{{ t.last_used_fmt or "-" }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="muted">Sin tokens</div>
+  {% endif %}
+</div>
+
+<!-- Events -->
+<div class="card">
+  <div class="card-head">
+    <div class="card-title">Events ({{ events|length }})</div>
+  </div>
+
+  {% if events %}
+    <div class="table-wrap">
+      <table class="table table-sortable" id="eventsTable">
+        <thead>
+          <tr class="header">
+            <th data-type="date">Timestamp</th>
+            <th data-type="text">Icon</th>
+            <th data-type="text">Kind</th>
+            <th data-type="text">Method</th>
+            <th data-type="text">Path</th>
+            <th data-type="text">IP</th>
+            <th data-type="text">Token</th>
+            <th data-type="text">Body</th>
+          </tr>
+          <tr class="table-filters">
+            <th><input class="table-filter" data-col="0" placeholder="Filter timestamp" aria-label="Filter timestamp"></th>
+            <th><input class="table-filter" data-col="1" placeholder="Filter icon" aria-label="Filter icon"></th>
+            <th><input class="table-filter" data-col="2" placeholder="Filter kind" aria-label="Filter kind"></th>
+            <th><input class="table-filter" data-col="3" placeholder="Filter method" aria-label="Filter method"></th>
+            <th><input class="table-filter" data-col="4" placeholder="Filter path" aria-label="Filter path"></th>
+            <th><input class="table-filter" data-col="5" placeholder="Filter IP" aria-label="Filter IP"></th>
+            <th><input class="table-filter" data-col="6" placeholder="Filter token" aria-label="Filter token"></th>
+            <th><input class="table-filter" data-col="7" placeholder="Filter body" aria-label="Filter body"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for e in events %}
+          <tr>
+            <td class="mono">{{ e.ts_fmt }}</td>
+            <td>{{ e.icon }}</td>
+            <td>{{ e.kind }}</td>
+            <td class="mono">{{ e.method }}</td>
+            <td class="mono" title="{{ e.path }}">{{ e.path }}</td>
+            <td class="mono">{{ e.ip }}</td>
+            <td class="mono" title="{{ e.token }}">{{ e.token if e.token else '-' }}</td>
+            <td class="mono" title="{{ e.body_sample }}">{{ e.body_sample if e.body_sample else '-' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="muted">Sin events</div>
+  {% endif %}
+</div>
+
+<!-- Auto-refresh (solo si la pestana esta visible) -->
+<script>
+  const actor_id = "{{ actor.actor_id }}";
+  let autoRefreshEnabled = true;
+  let addToCaseBusy = false;
+  let quickCreateBusy = false;
+  let toastTimer = null;
+  const toastEl = document.getElementById('actionToast');
+  const caseModal = document.getElementById('caseModal');
+  const caseListHost = document.getElementById('caseList');
+  const caseMeta = document.getElementById('caseMeta');
+  let eventsTableHelper = null;
+
+  function ensureEventsTableHelper(){
+    if(!eventsTableHelper && window.TableFilterSort){
+      eventsTableHelper = window.TableFilterSort.initTable(document.getElementById('eventsTable'));
+    }
+    return eventsTableHelper;
+  }
+
+  const refreshTimer = setInterval(() => {
+    if (autoRefreshEnabled && !document.hidden) {
+      const helper = ensureEventsTableHelper();
+      if (helper && helper.isActive()) return;
+      window.location.reload();
+    }
+  }, 5000);
+
+  function showToast(message, type = 'info'){
+    if(!toastEl) return;
+    toastEl.textContent = message;
+    toastEl.dataset.type = type;
+    toastEl.classList.add('is-visible');
+    if(toastTimer){ clearTimeout(toastTimer); }
+    toastTimer = setTimeout(() => toastEl.classList.remove('is-visible'), 4000);
+  }
+
+  function setButtonBusy(btn, busy, label){
+    if(!btn) return;
+    if(busy){
+      if(!btn.dataset.originalLabel){
+        btn.dataset.originalLabel = btn.innerHTML;
+      }
+      btn.innerHTML = `<span class="spinner"></span>${label || btn.dataset.busyText || 'Working...'}`;
+    }else if(btn.dataset.originalLabel){
+      btn.innerHTML = btn.dataset.originalLabel;
+    }
+    btn.disabled = !!busy;
+    btn.classList.toggle('is-busy', !!busy);
+  }
+
+  async function archiveActor(btn){
+    const busyText = (btn && btn.dataset && btn.dataset.busyText) ? btn.dataset.busyText : 'Actualizando...';
+    setButtonBusy(btn, true, busyText);
+    const is_archived = parseInt("{{ actor.is_archived|default('0') }}");
+    const endpoint = is_archived ? 'unarchive' : 'archive';
+    const url = `/dashboard/actors/${actor_id}/${endpoint}`;
+    try{
+      const res = await fetch(url, {method:'POST'});
+      if(res.ok){
+        showToast(is_archived ? 'Actor unarchived' : 'Actor archived', 'success');
+        setTimeout(() => window.location.reload(), 600);
+      }else{
+        const text = await res.text();
+        showToast('Error ' + res.status + ': ' + text, 'error');
+      }
+    }catch(e){
+      showToast('Error: ' + e.message, 'error');
+    }finally{
+      setButtonBusy(btn, false);
+    }
+  }
+
+  async function openCaseModal(btn){
+    if(!caseModal || !caseListHost){
+      showToast('Case modal not available', 'error');
+      return;
+    }
+    if(caseModal.classList.contains('is-open')) return;
+    autoRefreshEnabled = false;
+    const busyText = (btn && btn.dataset && btn.dataset.busyText) ? btn.dataset.busyText : 'Cargando...';
+    setButtonBusy(btn, true, busyText);
+    try{
+      const res = await fetch(`/dashboard/actor_add_case/${actor_id}`);
+      const html = await res.text();
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(html, 'text/html');
+      const caseList = doc.querySelector('[id="caseList"]');
+      if(caseList){
+        caseListHost.innerHTML = caseList.innerHTML;
+        const count = caseListHost.querySelectorAll('.case-option').length;
+        if(caseMeta){
+          caseMeta.textContent = count ? `Selecciona uno de los ${count} casos abiertos` : 'No hay casos abiertos.';
+        }
+        caseModal.classList.add('is-open');
+        caseModal.setAttribute('aria-hidden', 'false');
+      }else{
+        showToast('Error loading cases', 'error');
+        if(caseMeta){ caseMeta.textContent = 'No se pudo cargar la lista de casos.'; }
+        autoRefreshEnabled = true;
+      }
+    }catch(e){
+      showToast('Error: ' + e.message, 'error');
+      if(caseMeta){ caseMeta.textContent = 'No se pudo cargar la lista de casos.'; }
+      autoRefreshEnabled = true;
+    }finally{
+      setButtonBusy(btn, false);
+    }
+  }
+
+  function closeCaseModal(){
+    if(!caseModal) return;
+    caseModal.classList.remove('is-open');
+    caseModal.setAttribute('aria-hidden', 'true');
+    autoRefreshEnabled = true;
+  }
+
+  async function addToCase(case_id, el){
+    if(addToCaseBusy){ return; }
+    addToCaseBusy = true;
+    setButtonBusy(el, true, 'Adding...');
+    try{
+      const res = await fetch(`/dashboard/cases/${case_id}/actors?actor_id=${actor_id}`, {method:'POST'});
+      if(res.ok){
+        showToast('Actor added to case #' + case_id, 'success');
+        setTimeout(() => window.location.reload(), 800);
+      }else{
+        const text = await res.text();
+        showToast('Error: ' + text, 'error');
+      }
+    }catch(e){
+      showToast('Error: ' + e.message, 'error');
+    }finally{
+      addToCaseBusy = false;
+      setButtonBusy(el, false);
+    }
+  }
+
+  async function quickCreateCase(btn){
+    const title = document.getElementById('newCaseTitle').value.trim();
+    if(!title){
+      showToast('Enter case title', 'error');
+      return;
+    }
+    if(quickCreateBusy){ return; }
+    quickCreateBusy = true;
+    const busyText = (btn && btn.dataset && btn.dataset.busyText) ? btn.dataset.busyText : 'Creando...';
+    setButtonBusy(btn, true, busyText);
+    try{
+      const res = await fetch(`/dashboard/cases/quick?title=${encodeURIComponent(title)}&actor_id=${actor_id}`, {method:'POST'});
+      if(res.ok){
+        showToast('Case created and actor linked', 'success');
+        setTimeout(() => window.location.reload(), 900);
+      }else{
+        const text = await res.text();
+        showToast('Error: ' + text, 'error');
+      }
+    }catch(e){
+      showToast('Error: ' + e.message, 'error');
+    }finally{
+      quickCreateBusy = false;
+      setButtonBusy(btn, false);
+    }
+  }
+
+  if(caseModal){
+    document.addEventListener('keydown', (evt) => {
+      if(evt.key === 'Escape' && caseModal.classList.contains('is-open')){
+        closeCaseModal();
+      }
+    });
+    caseModal.addEventListener('click', (evt) => {
+      if(evt.target === caseModal){
+        closeCaseModal();
+      }
+    });
+  }
+
+  ensureEventsTableHelper();
+</script>
+
+{% endblock %}

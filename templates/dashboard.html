@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <h1>Actors</h1>
+    <div class="sub">Últimos 200 · ordenados por actividad</div>
+  </div>
+
+  <div class="kpis">
+    <div class="kpi">
+      <div class="kpi-label">Total visibles</div>
+      <div class="kpi-value">{{ actors|length }}</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Top stage</div>
+      <div class="kpi-value">
+        S{{ max_stage or 0 }}
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-head">
+    <div class="card-title">Listado</div>
+    <div class="card-sub mono">/ (dashboard)</div>
+  </div>
+
+  <div class="table-wrap">
+    <table class="table table-sortable">
+      <thead>
+        <tr>
+          <th data-type="text">Actor</th>
+          <th data-type="number">Stage</th>
+          <th data-type="number">Score</th>
+          <th data-type="text">Señales</th>
+          <th data-type="text">IP</th>
+          <th data-type="text">User-Agent</th>
+          <th data-type="date">Last seen</th>
+          <th data-type="text">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for a in actors %}
+        <tr>
+          <td><a class="link" href="/actor/{{ a.actor_id }}">{{ a.short }}</a></td>
+          <td><span class="pill">S{{ a.stage }}</span></td>
+          <td class="mono">{{ a.score }}</td>
+          <td>
+            {% for b in a.badges %}
+              <span class="badge">{{ b }}</span>
+            {% endfor %}
+            {% if a.badges|length == 0 %}
+              <span class="muted">-</span>
+            {% endif %}
+          </td>
+          <td class="mono">{% if a.geo_flag %}<span class="flag" title="{{ a.geo_name }} ({{ a.geo_iso2 }})">{{ a.geo_flag }}</span> {% endif %}{{ a.last_ip }}</td>
+          <td class="mono clip">{{ a.last_ua }}</td>
+          <td class="mono">{{ a.last_seen_fmt }}</td>
+          <td>
+            <button class="btn btn-danger btn-small" type="button" onclick="trashActor('{{ a.actor_id }}', this)">Delete</button>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Auto-refresh (solo si la pestaña está visible) -->
+<script>
+  let dashboardTableHelper = null;
+
+  function ensureDashboardTableHelper(){
+    if(!dashboardTableHelper && window.TableFilterSort){
+      dashboardTableHelper = window.TableFilterSort.initTable(document.querySelector('.table-sortable'));
+    }
+    return dashboardTableHelper;
+  }
+  setInterval(() => {
+    if (!document.hidden) {
+      const helper = ensureDashboardTableHelper();
+      if (helper && helper.isActive()) return;
+      window.location.reload();
+    }
+  }, 5000);
+
+  async function trashActor(actorId, btn){
+    if(!confirm('Move actor to deleted list?')){ return; }
+    if(btn){ btn.disabled = true; }
+    try{
+      const res = await fetch(`/dashboard/actors/${actorId}/trash`, {method:'POST'});
+      if(res.ok){
+        const row = btn.closest('tr');
+        if(row){ row.remove(); }
+      }else{
+        const text = await res.text();
+        alert('Error: ' + text);
+      }
+    }catch(e){
+      alert('Error: ' + e.message);
+    }finally{
+      if(btn){ btn.disabled = false; }
+    }
+  }
+</script>
+
+{% endblock %}

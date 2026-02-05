@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+*.egg-info/
+*.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+ENV/
+
+# Environment files
+.env
+.env.*
+
+# Logs
+*.log
+logs/
+
+# Data / DB
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# Secrets / certs
+compose/nginx/certs/
+*.pem
+*.key
+*.crt
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Build / cache
+dist/
+build/

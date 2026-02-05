@@ -1,0 +1,173 @@
+:root{
+  --bg:#0b1020;
+  --panel:#0f172a;
+  --panel2:#111c36;
+  --stroke:#1f2a44;
+  --text:#e5e7eb;
+  --muted:#93a4bd;
+  --link:#93c5fd;
+  --badge-bg:#0b1220;
+}
+
+*{ box-sizing:border-box; }
+body{
+  margin:0;
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial;
+  background: radial-gradient(1200px 600px at 15% 0%, #13204a 0%, var(--bg) 55%);
+  color:var(--text);
+}
+
+a{ color:var(--link); text-decoration:none; }
+a:hover{ text-decoration:underline; }
+
+.topbar{
+  position:sticky; top:0;
+  display:flex; justify-content:space-between; align-items:center;
+  padding:14px 18px;
+  background:rgba(15,23,42,.92);
+  border-bottom:1px solid var(--stroke);
+  backdrop-filter: blur(8px);
+}
+.brand{ font-weight:800; letter-spacing:.2px; }
+.container{ max-width:1240px; margin:0 auto; padding:18px; }
+
+h1{ margin:6px 0 4px; font-size:26px; }
+.sub{ color:var(--muted); font-size:13px; }
+
+.page-head{
+  display:flex; align-items:flex-end; justify-content:space-between;
+  gap:14px; margin-bottom:14px;
+}
+
+.kpis{ display:flex; gap:10px; flex-wrap:wrap; }
+.kpi{
+  background:linear-gradient(180deg, var(--panel2), var(--panel));
+  border:1px solid var(--stroke);
+  border-radius:14px;
+  padding:10px 12px;
+  min-width:140px;
+}
+.kpi-label{ color:var(--muted); font-size:12px; }
+.kpi-value{ font-size:22px; font-weight:800; margin-top:2px; }
+
+.card{
+  background:linear-gradient(180deg, var(--panel2), var(--panel));
+  border:1px solid var(--stroke);
+  border-radius:16px;
+  box-shadow: 0 10px 30px rgba(0,0,0,.25);
+  margin-bottom:14px;
+}
+.card-head{
+  display:flex; justify-content:space-between; align-items:center;
+  padding:12px 14px;
+  border-bottom:1px solid var(--stroke);
+}
+.card-title{ font-weight:800; }
+.card-sub{ color:var(--muted); font-size:12px; }
+
+.table-wrap{ overflow:auto; }
+.table-wrap.small{ max-height:340px; }
+.table{
+  width:100%;
+  border-collapse:collapse;
+}
+.table th, .table td{
+  padding:10px 12px;
+  border-bottom:1px solid rgba(31,42,68,.7);
+  vertical-align:top;
+}
+.table th{
+  text-align:left;
+  color:#cbd5e1;
+  font-weight:700;
+  font-size:12px;
+  background: rgba(0,0,0,.15);
+}
+.table tr:hover td{ background: rgba(147,197,253,.06); }
+
+.mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+.muted{ color:var(--muted); }
+.clip{ max-width:520px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+
+.badge{
+  display:inline-flex; align-items:center; gap:6px;
+  padding:3px 10px;
+  border:1px solid #2a3a5f;
+  border-radius:999px;
+  background: var(--badge-bg);
+  font-size:12px;
+  margin-right:6px;
+  white-space:nowrap;
+}
+.pill{
+  display:inline-block;
+  padding:3px 10px;
+  border-radius:999px;
+  border:1px solid #2a3a5f;
+  background: rgba(147,197,253,.08);
+  font-weight:700;
+  font-size:12px;
+}
+
+.back{ display:inline-block; margin-bottom:8px; }
+
+.grid-2{
+  display:grid;
+  grid-template-columns: 1.1fr 1.6fr;
+  gap:14px;
+}
+@media (max-width: 980px){
+  .page-head{ align-items:flex-start; flex-direction:column; }
+  .grid-2{ grid-template-columns:1fr; }
+  .clip{ max-width:260px; }
+}
+
+.kv{
+  display:grid;
+  grid-template-columns: 120px 1fr;
+  gap:8px 12px;
+  padding:12px 14px;
+}
+.k{ color:var(--muted); }
+.v{ }
+
+.timeline{ padding:12px 14px; }
+.evt{
+  display:grid;
+  grid-template-columns: 18px 1fr;
+  gap:12px;
+  padding:10px 0;
+}
+.evt-rail{ position:relative; display:flex; justify-content:center; }
+.evt-dot{
+  width:10px; height:10px; border-radius:50%;
+  background:#93c5fd;
+  box-shadow: 0 0 0 4px rgba(147,197,253,.14);
+  margin-top:7px;
+}
+.evt-line{
+  position:absolute;
+  top:18px; bottom:-12px;
+  width:2px;
+  background: rgba(147,197,253,.18);
+}
+.evt:last-child .evt-line{ display:none; }
+
+.evt-body{ }
+.evt-top{
+  display:flex; justify-content:space-between; align-items:center;
+  gap:10px;
+}
+.evt-kind{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.icon{ font-size:16px; }
+.evt-ts{ font-size:12px; }
+.evt-meta{ font-size:12px; margin-top:6px; }
+
+.pre{
+  margin-top:10px;
+  background: rgba(0,0,0,.25);
+  border:1px solid rgba(31,42,68,.9);
+  border-radius:12px;
+  padding:10px 12px;
+  overflow:auto;
+}

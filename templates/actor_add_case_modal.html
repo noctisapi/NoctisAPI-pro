@@ -1,0 +1,17 @@
+<div id="caseList" class="case-list">
+  {% if cases %}
+    {% for c in cases %}
+      <button type="button" class="case-option" data-case-id="{{ c.id }}" onclick="addToCase({{ c.id }}, this)">
+        <div class="case-option-row">
+          <div>
+            <div class="case-option-title">{{ c.title }}</div>
+            <div class="case-option-meta">#{{ c.id }} &middot; {{ c.status|default('open')|capitalize }} &middot; Updated {{ c.updated_at }}</div>
+          </div>
+          <span class="case-tag case-tag-{{ c.severity|default('medium') }}">{{ c.severity|default('medium')|capitalize }}</span>
+        </div>
+      </button>
+    {% endfor %}
+  {% else %}
+    <div class="case-empty">No open cases. Create one below.</div>
+  {% endif %}
+</div>

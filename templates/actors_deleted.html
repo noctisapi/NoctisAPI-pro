@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <h1>Deleted Actors</h1>
+    <div class="sub">Actors moved to the deleted list</div>
+  </div>
+  <div class="kpis">
+    <div class="kpi">
+      <div class="kpi-label">Total</div>
+      <div class="kpi-value">{{ actors|length }}</div>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-head">
+    <div class="card-title">Deleted</div>
+    <div class="card-sub mono">/dashboard/actors/deleted</div>
+    {% if actors %}
+    <div class="card-actions">
+      <button class="btn btn-danger btn-small" type="button" onclick="purgeSelected()">Delete selected</button>
+    </div>
+    {% endif %}
+  </div>
+
+  {% if actors %}
+    <div class="table-wrap">
+      <table class="table table-sortable">
+        <thead>
+          <tr>
+            <th data-type="text">
+              <input type="checkbox" id="select-all-actors" onclick="toggleAllActors(this)">
+            </th>
+            <th data-type="text">Actor</th>
+            <th data-type="number">Stage</th>
+            <th data-type="number">Score</th>
+            <th data-type="date">First seen</th>
+            <th data-type="date">Last seen</th>
+            <th data-type="text">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for a in actors %}
+          <tr>
+            <td>
+              <input type="checkbox" class="actor-select" value="{{ a.actor_id }}">
+            </td>
+            <td class="mono">{{ a.short }}</td>
+            <td><span class="pill">S{{ a.stage }}</span></td>
+            <td class="mono">{{ a.score }}</td>
+            <td class="mono">{{ a.first_seen_fmt }}</td>
+            <td class="mono">{{ a.last_seen_fmt }}</td>
+            <td>
+              <button class="btn btn-ghost btn-small" type="button" onclick="restoreActor('{{ a.actor_id }}', this)">Restore</button>
+              <button class="btn btn-danger btn-small" type="button" onclick="purgeActor('{{ a.actor_id }}', this)">Delete permanently</button>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="case-empty" style="margin:14px;">No deleted actors.</div>
+  {% endif %}
+</div>
+
+<script>
+  async function restoreActor(actorId, btn){
+    if(btn){ btn.disabled = true; }
+    try{
+      const res = await fetch(`/dashboard/actors/${actorId}/restore`, {method:'POST'});
+      if(res.ok){
+        const row = btn.closest('tr');
+        if(row){ row.remove(); }
+      }else{
+        const text = await res.text();
+        alert('Error: ' + text);
+      }
+    }catch(e){
+      alert('Error: ' + e.message);
+    }finally{
+      if(btn){ btn.disabled = false; }
+    }
+  }
+
+  async function purgeActor(actorId, btn){
+    if(!confirm('Delete actor permanently? This removes sessions, events and evidence.')){ return; }
+    if(btn){ btn.disabled = true; }
+    try{
+      const res = await fetch(`/dashboard/actors/${actorId}/purge`, {method:'POST'});
+      if(res.ok){
+        const row = btn.closest('tr');
+        if(row){ row.remove(); }
+      }else{
+        const text = await res.text();
+        alert('Error: ' + text);
+      }
+    }catch(e){
+      alert('Error: ' + e.message);
+    }finally{
+      if(btn){ btn.disabled = false; }
+    }
+  }
+
+  function toggleAllActors(source){
+    const boxes = document.querySelectorAll('.actor-select');
+    boxes.forEach(b => { b.checked = source.checked; });
+  }
+
+  async function purgeSelected(){
+    const ids = Array.from(document.querySelectorAll('.actor-select:checked')).map(b => b.value);
+    if(ids.length === 0){
+      alert('Select at least one actor.');
+      return;
+    }
+    if(!confirm(`Delete ${ids.length} actors permanently? This removes sessions, events and evidence.`)){ return; }
+    try{
+      const res = await fetch('/dashboard/actors/purge_bulk', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({actor_ids: ids})
+      });
+      if(res.ok){
+        ids.forEach(id => {
+          const row = document.querySelector(`.actor-select[value="${id}"]`)?.closest('tr');
+          if(row){ row.remove(); }
+        });
+        const selectAll = document.getElementById('select-all-actors');
+        if(selectAll){ selectAll.checked = false; }
+      }else{
+        const text = await res.text();
+        alert('Error: ' + text);
+      }
+    }catch(e){
+      alert('Error: ' + e.message);
+    }
+  }
+</script>
+
+{% endblock %}

@@ -1,0 +1,108 @@
+# VPS Deployment (Ubuntu 22.04+)
+
+This is a concrete, repeatable deployment flow for a single VPS with Docker + Nginx.
+
+## 1. System Prep
+
+```bash
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl gnupg lsb-release ufw
+```
+
+Install Docker + Compose plugin:
+
+```bash
+sudo install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+sudo chmod a+r /etc/apt/keyrings/docker.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" \
+  | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+```
+
+Firewall (open only SSH + web):
+
+```bash
+sudo ufw allow OpenSSH
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+sudo ufw --force enable
+```
+
+## 2. App Layout
+
+```bash
+sudo mkdir -p /opt/hp-app
+sudo chown -R $USER:$USER /opt/hp-app
+cd /opt/hp-app
+```
+
+Copy the repo here (git clone or rsync).
+
+## 3. Production Env
+
+```bash
+cp .aenv.prod
+```
+
+Edit `.env.prod` and set:
+
+- `APP_VERSION` to the pushed image tag.
+- `HP_PUBLIC_BASE_URL=https://<your-domain>`
+- `HP_SEED` to a long random secret.
+- `HP_GEOIP_DB=/app/data/GeoLite2-Country.mmdb` (keep default unless you move it).
+
+## 4. TLS
+
+Provide TLS certs in:
+
+```
+compose/nginx/certs/fullchain.pem
+compose/nginx/certs/privkey.pem
+```
+
+And update `compose/nginx/nginx.conf` with your `server_name`.
+
+If you use Let’s Encrypt, copy the certs into that folder (or bind-mount the LE path).
+
+## 5. Launch
+
+```bash
+docker compose -f compose/docker-compose.prod.yml --env-file .env.prod pull
+docker compose -f compose/docker-compose.prod.yml --env-file .env.prod up -d
+```
+
+Verify:
+
+```bash
+curl -sS https://<your-domain>/health
+```
+
+The admin panel is bound to `127.0.0.1:9001`. Use an SSH tunnel:
+
+```bash
+ssh -L 9001:127.0.0.1:9001 <user>@<vps-ip>
+```
+
+Then visit: http://127.0.0.1:9001
+
+## 6. systemd (optional)
+
+Enable auto-start with the unit file in `ops/vps/hp-app.service`:
+
+```bash
+sudo cp ops/vps/hp-app.service /etc/systemd/system/hp-app.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now hp-app.service
+sudo systemctl status hp-app.service
+```
+
+## 7. Backups
+
+Configure the cron from `ops/cron/yourapp-backup` and point it to:
+
+- `BACKUP_DIR=/var/backups/honey-app`
+- `DATA_VOLUME=hp_prod_data`
+- `APP_DB_PATH=/data/honeypot.db`
+

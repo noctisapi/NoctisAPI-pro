@@ -1,0 +1,26 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Honeypot Panel</title>
+    <link rel="stylesheet" href="/static/style.css?v=20260204" />
+  </head>
+  <body>
+    <div class="topbar">
+      <div class="topbar-nav">
+        <div class="brand">Honeypot Panel</div>
+        <a class="link" href="/">Dashboard</a>
+        <a class="link" href="/dashboard/cases">Cases</a>
+        <a class="link" href="/dashboard/campaigns">Campaigns</a>
+        <a class="link" href="/dashboard/actors/deleted">Deleted</a>
+        <a class="link" href="/dashboard/honeypot">API Health</a>
+      </div>
+      <div class="muted">private &middot; localhost only &middot; SSH tunnel</div>
+    </div>
+    <div class="container">
+      {% block content %}{% endblock %}
+    </div>
+    <script src="/static/table_utils.js?v=20260204"></script>
+  </body>
+</html>

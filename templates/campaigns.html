@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Campaigns</h1>
+    <div class="sub">Detected lateral movement groups</div>
+  </div>
+  <div>
+    <button id="recomputeBtn" class="btn btn-primary" type="button" onclick="recomputeCampaigns(this)">Recompute groups</button>
+    <div id="campaignJobStatus" class="muted tiny-text" style="margin-top:6px;"></div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-head">
+    <div class="card-title">Campaigns</div>
+    <div class="card-sub">Auto clustering of actors by behavior</div>
+  </div>
+  {% if campaigns %}
+    <div class="table-wrap">
+      <table class="table table-sortable">
+        <thead>
+          <tr>
+            <th data-type="text">ID</th>
+            <th data-type="text">Label</th>
+            <th data-type="date">Created</th>
+            <th data-type="date">Last Seen</th>
+            <th data-type="number">Members</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for c in campaigns %}
+          <tr>
+            <td><a class="link" href="/dashboard/campaigns/{{ c.campaign_id }}">{{ c.campaign_id }}</a></td>
+            <td>{{ c.label or 'Unnamed' }}</td>
+            <td class="mono">{{ c.created_at }}</td>
+            <td class="mono">{{ c.last_seen_at or '-' }}</td>
+            <td>{{ c.member_count }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="case-empty" style="margin:14px;">No campaigns yet. Run a recompute to generate clusters.</div>
+  {% endif %}
+</div>
+
+<script>
+  const jobStatusEl = document.getElementById('campaignJobStatus');
+  const recomputeBtn = document.getElementById('recomputeBtn');
+  let jobPollTimer = null;
+  let autoRefreshOnComplete = false;
+  let lastJobStatus = '';
+
+  function renderJobStatus(job){
+    if(!jobStatusEl) return;
+    if(!job || !job.status || job.status === 'none' || job.status === 'disabled'){
+      jobStatusEl.textContent = '';
+      if(recomputeBtn){ recomputeBtn.disabled = false; recomputeBtn.textContent = 'Recompute groups'; }
+      return;
+    }
+    let msg = `Recompute: ${job.status}`;
+    if(job.status === 'queued'){
+      msg += ` · queued ${job.created_at || ''}`;
+    }
+    if(job.status === 'running'){
+      msg += ` · started ${job.started_at || ''}`;
+    }
+    if(job.status === 'completed'){
+      if(job.duration_ms !== undefined){ msg += ` · ${job.duration_ms}ms`; }
+      if(job.actors_considered !== undefined){ msg += ` · actors ${job.actors_considered}`; }
+      if(job.features_cached !== undefined){ msg += ` · cached ${job.features_cached}`; }
+      if(job.features_built !== undefined){ msg += ` · built ${job.features_built}`; }
+    }
+    if(job.status === 'failed'){
+      msg += job.error ? ` · ${job.error}` : '';
+    }
+    jobStatusEl.textContent = msg;
+    if(recomputeBtn){
+      recomputeBtn.disabled = job.status === 'queued' || job.status === 'running';
+      recomputeBtn.textContent = recomputeBtn.disabled ? 'Recomputing...' : 'Recompute groups';
+    }
+  }
+
+  async function fetchJobStatus(){
+    try{
+      const res = await fetch('/dashboard/campaigns/recompute/status');
+      if(!res.ok) return;
+      const data = await res.json();
+      renderJobStatus(data);
+      const status = data.status || '';
+      if(status !== lastJobStatus){
+        lastJobStatus = status;
+      }
+      if(status === 'queued' || status === 'running'){
+        jobPollTimer = setTimeout(fetchJobStatus, 1500);
+      }else if(status === 'completed'){
+        if(autoRefreshOnComplete){
+          autoRefreshOnComplete = false;
+          setTimeout(() => location.reload(), 800);
+        }
+      }
+    }catch(e){
+      // ignore
+    }
+  }
+
+  async function recomputeCampaigns(btn){
+    const original = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Recomputing...';
+    try{
+      const res = await fetch('/dashboard/campaigns/recompute', {method:'POST'});
+      if(res.ok){
+        const data = await res.json();
+        renderJobStatus(data.job || data);
+        autoRefreshOnComplete = true;
+        if(!jobPollTimer){ jobPollTimer = setTimeout(fetchJobStatus, 1500); }
+      }else{
+        const text = await res.text();
+        alert('Error: ' + text);
+      }
+    }catch(e){
+      alert('Error: ' + e.message);
+    }finally{
+      if(!btn.disabled){
+        btn.textContent = original;
+      }
+    }
+  }
+
+  fetchJobStatus();
+</script>
+{% endblock %}

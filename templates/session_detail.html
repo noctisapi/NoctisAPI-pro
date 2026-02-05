@@ -1,0 +1,243 @@
+{% extends "base.html" %}
+{% block content %}
+<a class="back" href="/actor/{{ session.actor_id }}">&larr; Back to actor</a>
+<div class="page-head">
+  <div>
+    <h1>Session {{ session.session_id }}</h1>
+    <div class="sub">Actor {{ session.actor_id }} - Stage {{ session.stage_max or 0 }}</div>
+  </div>
+  <div class="kpis">
+    <div class="kpi">
+      <div class="kpi-label">Started</div>
+      <div class="kpi-value mono">{{ session.started_fmt }}</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Ended</div>
+      <div class="kpi-value mono">{{ session.ended_fmt }}</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Duration</div>
+      <div class="kpi-value">{{ session.duration_seconds or '-' }}s</div>
+    </div>
+  </div>
+</div>
+
+<div class="card session-meta">
+  <div class="session-summary">
+    <div>
+      <div class="muted tiny-text">Summary</div>
+      <div>{{ session.summary or 'No resumen disponible' }}</div>
+    </div>
+    <div>
+      <div class="muted tiny-text">Max Stage</div>
+      <div class="tag">S{{ session.stage_max or 0 }}</div>
+    </div>
+  </div>
+  <div class="session-case-form">
+    {% if cases %}
+      <label for="caseSelect" class="muted">Attach evidence to case</label>
+      <div class="case-picker">
+        <select id="caseSelect">
+          <option value="">Select open case</option>
+          {% for c in cases %}
+            <option value="{{ c.id }}">#{{ c.id }} - {{ c.title }} ({{ c.severity|default('medium')|capitalize }})</option>
+          {% endfor %}
+        </select>
+        <input type="text" id="caseNote" class="input input-lg" placeholder="Optional note..." autocomplete="off">
+        <button class="btn btn-primary" type="button" onclick="addSessionEvidence()">Add session to case</button>
+        <button class="btn btn-outline" type="button" onclick="addSessionToLastCase()">Add session to last case</button>
+      </div>
+      <p class="case-picker-help">Selecciona un caso y usa los botones de cada step para adjuntar evidencia granular.</p>
+    {% else %}
+      <div class="case-empty">No hay casos abiertos para adjuntar esta sesión.</div>
+    {% endif %}
+  </div>
+</div>
+
+<div id="sessionToast" class="toast" role="status" aria-live="polite"></div>
+
+<div class="card">
+  <div class="card-head"><div class="card-title">Steps ({{ steps|length }})</div></div>
+  <div class="table-wrap">
+    <div class="table-toolbar">
+      <button class="btn btn-ghost btn-small" type="button" onclick="selectAllSteps(true)">Select all</button>
+      <button class="btn btn-ghost btn-small" type="button" onclick="selectAllSteps(false)">Clear</button>
+      <button class="btn btn-primary btn-small" type="button" onclick="addSelectedSteps()">Add selected to case</button>
+      <button class="btn btn-outline btn-small" type="button" onclick="addSelectedStepsToLastCase()">Add selected to last case</button>
+      <span id="selectedCount" class="muted tiny-text"></span>
+    </div>
+    <table class="table table-sortable" id="stepsTable">
+      <thead>
+        <tr class="header">
+          <th data-type="text"><input type="checkbox" id="selectAllSteps" aria-label="Select all steps"></th>
+          <th data-type="number">#</th>
+          <th data-type="date">Timestamp</th>
+          <th data-type="text">Method</th>
+          <th data-type="text">Path</th>
+          <th data-type="number">Stage</th>
+          <th data-type="number">Status</th>
+          <th data-type="text">Actions</th>
+        </tr>
+        <tr class="table-filters">
+          <th></th>
+          <th><input class="table-filter" data-col="1" placeholder="Filter #" aria-label="Filter #"></th>
+          <th><input class="table-filter" data-col="2" placeholder="Filter timestamp" aria-label="Filter timestamp"></th>
+          <th><input class="table-filter" data-col="3" placeholder="Filter method" aria-label="Filter method"></th>
+          <th><input class="table-filter" data-col="4" placeholder="Filter path" aria-label="Filter path"></th>
+          <th><input class="table-filter" data-col="5" placeholder="Filter stage" aria-label="Filter stage"></th>
+          <th><input class="table-filter" data-col="6" placeholder="Filter status" aria-label="Filter status"></th>
+          <th><input class="table-filter" data-col="7" placeholder="Filter actions" aria-label="Filter actions"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in steps %}
+        {% set stage = s.stage_after if s.stage_after is not none else s.stage_before %}
+        <tr>
+          <td><input type="checkbox" class="step-select" data-step-id="{{ s.id }}" data-step-seq="{{ s.seq }}" aria-label="Select step {{ s.seq }}"></td>
+          <td>{{ s.seq }}</td>
+          <td class="mono">{{ s.ts }}</td>
+          <td class="mono">{{ s.method }}</td>
+          <td class="mono" title="{{ s.path }}">{{ s.path }}</td>
+          <td><span class="tag">S{{ stage or 0 }}</span></td>
+          <td>{{ s.response_status or '-' }}</td>
+          <td class="step-actions">
+            {% if cases %}
+              <button class="btn btn-ghost btn-small" type="button" onclick="addStepEvidence({{ s.id }}, {{ s.seq }})">Add step to case</button>
+            {% else %}
+              <span class="muted tiny-text">No cases</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+  const sessionId = "{{ session.session_id }}";
+  const toastEl = document.getElementById('sessionToast');
+  const LAST_CASE_KEY = 'hp_last_case_id';
+
+  function showSessionToast(message, type = 'info'){
+    if(!toastEl) return;
+    toastEl.textContent = message;
+    toastEl.dataset.type = type;
+    toastEl.classList.add('is-visible');
+    setTimeout(() => toastEl.classList.remove('is-visible'), 3000);
+  }
+
+  function currentCaseId(){
+    const select = document.getElementById('caseSelect');
+    return select ? select.value : '';
+  }
+
+  function setLastCaseId(caseId){
+    if(!caseId) return;
+    try{ localStorage.setItem(LAST_CASE_KEY, caseId); }catch(e){}
+  }
+
+  function getLastCaseId(){
+    try{ return localStorage.getItem(LAST_CASE_KEY) || ''; }catch(e){ return ''; }
+  }
+
+  async function addSessionEvidence(){
+    const caseId = currentCaseId();
+    if(!caseId){ showSessionToast('Select a case first', 'error'); return; }
+    await submitEvidence(caseId, 'session', sessionId, 'Session');
+    setLastCaseId(caseId);
+  }
+
+  async function addStepEvidence(stepId, seq){
+    const caseId = currentCaseId();
+    if(!caseId){ showSessionToast('Select a case first', 'error'); return; }
+    await submitEvidence(caseId, 'step', stepId, `Step #${seq}`);
+    setLastCaseId(caseId);
+  }
+
+  async function addSessionToLastCase(){
+    const caseId = getLastCaseId();
+    if(!caseId){ showSessionToast('No last case stored', 'error'); return; }
+    await submitEvidence(caseId, 'session', sessionId, 'Session');
+  }
+
+  async function submitEvidence(caseId, refType, refId, label){
+    try{
+      const params = new URLSearchParams({ref_type: refType, ref_id: refId});
+      const note = document.getElementById('caseNote')?.value.trim();
+      if(note){ params.append('note', note); }
+      const res = await fetch(`/dashboard/cases/${caseId}/evidence?${params.toString()}`, {method:'POST'});
+      if(res.ok){
+        showSessionToast(`${label} added to case #${caseId}`, 'success');
+      }else{
+        const text = await res.text();
+        showSessionToast(`Error: ${text}`, 'error');
+      }
+    }catch(e){
+      showSessionToast(`Error: ${e.message}`, 'error');
+    }
+  }
+
+  function updateSelectedCount(){
+    const count = document.querySelectorAll('.step-select:checked').length;
+    const el = document.getElementById('selectedCount');
+    if(el){ el.textContent = count ? `${count} selected` : ''; }
+  }
+
+  function selectAllSteps(checked){
+    document.querySelectorAll('.step-select').forEach(cb => { cb.checked = checked; });
+    const master = document.getElementById('selectAllSteps');
+    if(master){ master.checked = checked; }
+    updateSelectedCount();
+  }
+
+  async function addSelectedSteps(){
+    const caseId = currentCaseId();
+    if(!caseId){ showSessionToast('Select a case first', 'error'); return; }
+    await addSelectedStepsToCase(caseId);
+    setLastCaseId(caseId);
+  }
+
+  async function addSelectedStepsToLastCase(){
+    const caseId = getLastCaseId();
+    if(!caseId){ showSessionToast('No last case stored', 'error'); return; }
+    await addSelectedStepsToCase(caseId);
+  }
+
+  async function addSelectedStepsToCase(caseId){
+    const selected = Array.from(document.querySelectorAll('.step-select:checked'));
+    if(selected.length === 0){ showSessionToast('No steps selected', 'error'); return; }
+    for(const cb of selected){
+      const stepId = cb.dataset.stepId;
+      const seq = cb.dataset.stepSeq;
+      await submitEvidence(caseId, 'step', stepId, `Step #${seq}`);
+    }
+    showSessionToast(`Added ${selected.length} steps to case #${caseId}`, 'success');
+  }
+
+  if(window.TableFilterSort){
+    window.TableFilterSort.initTable(document.getElementById('stepsTable'));
+  }
+
+  const caseSelect = document.getElementById('caseSelect');
+  if(caseSelect){
+    const lastCaseId = getLastCaseId();
+    if(lastCaseId && !caseSelect.value){
+      caseSelect.value = lastCaseId;
+    }
+    caseSelect.addEventListener('change', () => {
+      if(caseSelect.value){ setLastCaseId(caseSelect.value); }
+    });
+  }
+
+  const masterSelect = document.getElementById('selectAllSteps');
+  if(masterSelect){
+    masterSelect.addEventListener('change', (e) => selectAllSteps(e.target.checked));
+  }
+  document.querySelectorAll('.step-select').forEach(cb => {
+    cb.addEventListener('change', updateSelectedCount);
+  });
+  updateSelectedCount();
+</script>
+
+{% endblock %}

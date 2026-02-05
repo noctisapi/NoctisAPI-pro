@@ -1,0 +1,280 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <h1>Api health</h1>
+    {% if availability.configured %}
+      <div class="sub mono">{{ availability.base_url }} &middot; server-side reachability checks</div>
+    {% else %}
+      <div class="sub">Configure <code>HONEYPOT_PUBLIC_BASE_URL</code> to enable monitoring.</div>
+    {% endif %}
+  </div>
+  {% if availability.configured %}
+    <button id="hp-recheck-btn" class="btn">Re-check all</button>
+  {% endif %}
+</div>
+
+{% if not availability.configured %}
+  <div class="card">
+    <div class="empty-state">
+      The monitor is disabled. Set <code>HONEYPOT_PUBLIC_BASE_URL</code> (reachable from the admin container) and redeploy to start collecting availability data.
+    </div>
+  </div>
+{% else %}
+  <style>
+    .controls-card {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 20px;
+      flex-wrap: wrap;
+    }
+    .controls-card .filter-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .controls-card input {
+      padding: 6px 10px;
+      border: 1px solid var(--stroke);
+      background: var(--panel2);
+      color: var(--text);
+      border-radius: 4px;
+      min-width: 240px;
+    }
+    .endpoint-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 16px;
+      margin-top: 16px;
+    }
+    .endpoint-card {
+      border: 1px solid var(--stroke);
+      border-radius: 8px;
+      padding: 16px;
+      background: linear-gradient(180deg, var(--panel2), var(--panel));
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .endpoint-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+    }
+    .endpoint-path {
+      font-weight: 600;
+    }
+    .endpoint-meta {
+      font-size: 0.85rem;
+      color: var(--muted);
+    }
+    .endpoint-status {
+      font-weight: 600;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 0.85rem;
+      text-transform: uppercase;
+    }
+    .endpoint-status.status-ok {
+      background: rgba(26,191,107,.18);
+      color: #7ee2b8;
+    }
+    .endpoint-status.status-fail {
+      background: rgba(231,76,60,.18);
+      color: #f2a6a6;
+    }
+    .endpoint-status.status-unknown {
+      background: rgba(255,255,255,.08);
+      color: var(--muted);
+    }
+    .endpoint-kpis {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      gap: 12px;
+    }
+    .endpoint-kpi {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .endpoint-kpi .label {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .timeline {
+      display: flex;
+      gap: 4px;
+      flex-wrap: wrap;
+    }
+    .timeline-dot {
+      width: 14px;
+      height: 14px;
+      border-radius: 3px;
+      background: #555;
+    }
+    .timeline-dot.ok { background: #1abf6b; }
+    .timeline-dot.fail { background: #e74c3c; }
+    .timeline-dot.unknown { background: #666; }
+    .endpoint-actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      justify-content: flex-end;
+    }
+  </style>
+
+  <div class="card controls-card">
+    <div>
+      <div class="card-title">Monitoring {{ availability.endpoints_count }} endpoints</div>
+      <div class="card-sub mono">Interval {{ availability.interval_seconds }}s &middot; timeout {{ availability.timeout_seconds }}s</div>
+    </div>
+    <div class="filter-row">
+      <label for="hp-endpoint-filter" class="mono muted">Filter</label>
+      <input type="search" id="hp-endpoint-filter" placeholder="Search endpoint, error, status code..." />
+    </div>
+  </div>
+
+  {% if not availability.endpoints %}
+    <div class="card">
+      <div class="empty-state">No endpoints have been checked yet.</div>
+    </div>
+  {% else %}
+    <div class="endpoint-grid" id="hp-endpoint-grid">
+      {% for endpoint in availability.endpoints %}
+        <div class="endpoint-card" data-endpoint="{{ endpoint.endpoint|lower }}">
+          <div class="endpoint-head">
+            <div>
+              <div class="endpoint-path mono">{{ endpoint.endpoint }}</div>
+              <div class="endpoint-meta mono">
+                {% if endpoint.last %}
+                  Last check {{ endpoint.last.ts_fmt }}
+                {% else %}
+                  No checks recorded
+                {% endif %}
+              </div>
+            </div>
+            <div class="endpoint-status {{ endpoint.last.status_class if endpoint.last else 'status-unknown' }}">
+              {{ endpoint.status_label }}
+            </div>
+          </div>
+
+          <div class="endpoint-kpis">
+            <div class="endpoint-kpi">
+              <div class="label">HTTP code</div>
+              <div class="mono">
+                {% if endpoint.last and endpoint.last.status_code is not none %}
+                  {{ endpoint.last.status_code }}
+                {% else %}
+                  n/a
+                {% endif %}
+              </div>
+            </div>
+            <div class="endpoint-kpi">
+              <div class="label">Latency</div>
+              <div class="mono">
+                {% if endpoint.last and endpoint.last.latency_ms is not none %}
+                  {{ endpoint.last.latency_ms }} ms
+                {% else %}
+                  n/a
+                {% endif %}
+              </div>
+            </div>
+            <div class="endpoint-kpi">
+              <div class="label">Fail streak</div>
+              <div class="mono">{{ endpoint.fail_streak }}</div>
+            </div>
+            <div class="endpoint-kpi">
+              <div class="label">Last error</div>
+              <div class="mono clip">
+                {% if endpoint.last and endpoint.last.error %}
+                  {{ endpoint.last.error }}
+                {% else %}
+                  -
+                {% endif %}
+              </div>
+            </div>
+          </div>
+
+          <div class="endpoint-chart">
+            <div class="mono muted" style="margin-bottom: 6px;">Recent checks</div>
+            <div class="timeline" title="Most recent first">
+              {% if endpoint.history %}
+                {% for sample in endpoint.history %}
+                  <span class="timeline-dot {{ 'ok' if sample.ok else 'fail' }}" title="{{ sample.ts_fmt }} &middot; code {{ sample.status_code if sample.status_code is not none else 'n/a' }}"></span>
+                {% endfor %}
+              {% else %}
+                <span class="muted">No samples recorded.</span>
+              {% endif %}
+            </div>
+          </div>
+
+          <div class="endpoint-actions">
+            <button class="btn btn-ghost hp-recheck-endpoint" data-endpoint="{{ endpoint.endpoint }}">Re-check</button>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  {% endif %}
+{% endif %}
+
+{% if availability.configured %}
+<script>
+  const globalButton = document.getElementById('hp-recheck-btn');
+  if (globalButton) {
+    globalButton.addEventListener('click', async () => {
+      globalButton.disabled = true;
+      globalButton.textContent = 'Checking...';
+      try {
+        const resp = await fetch('/admin/health/honeypot/recheck', { method: 'POST' });
+        if (!resp.ok) {
+          const data = await resp.json().catch(() => ({}));
+          alert('Re-check failed: ' + (data.detail || resp.statusText));
+        }
+      } catch (err) {
+        alert('Re-check failed: ' + err);
+      } finally {
+        window.location.reload();
+      }
+    });
+  }
+
+  document.querySelectorAll('.hp-recheck-endpoint').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const endpoint = btn.dataset.endpoint;
+      if (!endpoint) {
+        return;
+      }
+      btn.disabled = true;
+      btn.textContent = 'Checking...';
+      try {
+        const resp = await fetch(`/admin/health/honeypot/recheck?endpoint=${encodeURIComponent(endpoint)}`, { method: 'POST' });
+        if (!resp.ok) {
+          const data = await resp.json().catch(() => ({}));
+          alert(`Re-check for ${endpoint} failed: ` + (data.detail || resp.statusText));
+        }
+      } catch (err) {
+        alert(`Re-check for ${endpoint} failed: ` + err);
+      } finally {
+        window.location.reload();
+      }
+    });
+  });
+
+  const filterInput = document.getElementById('hp-endpoint-filter');
+  if (filterInput) {
+    filterInput.addEventListener('input', () => {
+      const query = filterInput.value.trim().toLowerCase();
+      document.querySelectorAll('#hp-endpoint-grid .endpoint-card').forEach((card) => {
+        const haystack = card.textContent.toLowerCase();
+        card.style.display = haystack.includes(query) ? '' : 'none';
+      });
+    });
+  }
+</script>
+{% endif %}
+
+{% endblock %}

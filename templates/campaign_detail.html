@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Campaign {{ campaign.campaign_id }}</h1>
+    <div class="sub">{{ campaign.label }}</div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-head">
+    <div class="card-title">Summary</div>
+  </div>
+  <div class="kv">
+    <div class="k">Group Size</div><div>{{ campaign.summary.group_size or links|length }}</div>
+    <div class="k">Seed Actor</div><div class="mono">{{ campaign.summary.seed_actor or '-' }}</div>
+    <div class="k">Thresholds</div><div>Jaccard &ge; {{ campaign.summary.min_jaccard or '0.65' }}, overlap &ge; {{ campaign.summary.min_intersection or '4' }}</div>
+    <div class="k">Seed Paths</div>
+    <div>
+      {% if campaign.summary.seed_paths_sample %}
+        <div class="mono small-text">{{ campaign.summary.seed_paths_sample|join(', ') }}</div>
+      {% else %}
+        <span class="muted">No sample available</span>
+      {% endif %}
+    </div>
+    <div class="k">Stage Flow</div><div>{{ campaign.summary.stage_flow or '-' }}</div>
+    <div class="k">Stage Counts</div>
+    <div>
+      {% if campaign.summary.stage_counts %}
+        <div class="mono small-text">
+          {% for item in campaign.summary.stage_counts %}
+            {{ item.stage }}: {{ item.count }}{% if not loop.last %}, {% endif %}
+          {% endfor %}
+        </div>
+      {% else %}
+        <span class="muted">-</span>
+      {% endif %}
+    </div>
+    <div class="k">Timing</div><div>{{ campaign.summary.timing or 'unknown' }}</div>
+    <div class="k">Top Paths</div>
+    <div>
+      {% if campaign.summary.dominant_paths %}
+        <div class="mono small-text">{{ campaign.summary.dominant_paths|join(', ') }}</div>
+      {% else %}
+        <span class="muted">No data</span>
+      {% endif %}
+    </div>
+  </div>
+  {% if campaign.summary.representative_session_id or campaign.representative_session_id %}
+    <div class="modal-actions" style="margin-top:10px;">
+      <a class="btn btn-primary" href="/dashboard/sessions/{{ campaign.summary.representative_session_id or campaign.representative_session_id }}">Open Representative Replay</a>
+    </div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <div class="card-head"><div class="card-title">Actors</div></div>
+  <div class="table-wrap">
+    <table class="table table-sortable">
+      <thead>
+        <tr>
+          <th data-type="text">Actor</th>
+          <th data-type="text">Overlap Paths</th>
+          <th data-type="number">Jaccard</th>
+          <th data-type="date">Linked</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for l in links %}
+        {% set reason = l.reasons or {} %}
+        <tr>
+          <td><a class="link" href="/actor/{{ l.actor_id }}">{{ l.actor_id[:8] }}</a></td>
+          <td>
+            {% if reason.shared_paths %}
+              <div class="mono small-text">{{ reason.shared_paths|join(', ') }}</div>
+            {% else %}
+              <span class="muted">-</span>
+            {% endif %}
+            <div class="muted tiny-text">
+              Total: {{ reason.overlap_count or 0 }} &middot; Stage {{ reason.shared_stage_flow or '-' }} &middot; Timing {{ reason.shared_timing or 'unknown' }}
+            </div>
+            {% if reason.stage_counts %}
+              <div class="muted tiny-text">
+                Stage counts:
+                {% for item in reason.stage_counts %}
+                  {{ item.stage }}={{ item.count }}{% if not loop.last %}, {% endif %}
+                {% endfor %}
+              </div>
+            {% endif %}
+          </td>
+          <td>
+            {{ reason.jaccard_vs_seed or l.confidence }}
+            {% if reason.shared_errors %}
+              <div class="muted tiny-text">Errors {{ reason.shared_errors|join(', ') }}</div>
+            {% endif %}
+            {% if reason.shared_ua %}
+              <div class="muted tiny-text">UA {{ reason.shared_ua }}</div>
+            {% endif %}
+          </td>
+          <td class="mono">{{ l.linked_at }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

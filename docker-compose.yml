@@ -1,0 +1,18 @@
+services:
+  migrate:
+    extends:
+      file: compose/docker-compose.dev.yml
+      service: migrate
+
+  app:
+    extends:
+      file: compose/docker-compose.dev.yml
+      service: app
+
+  admin:
+    extends:
+      file: compose/docker-compose.dev.yml
+      service: admin
+
+volumes:
+  hp_dev_data: {}

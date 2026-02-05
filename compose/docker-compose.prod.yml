@@ -1,0 +1,87 @@
+version: "3.9"
+
+services:
+  migrate:
+    image: ${HP_IMAGE:-ghcr.io/<ORG>/hp-app}:${APP_VERSION}
+    command: ["alembic", "upgrade", "head"]
+    env_file:
+      - ../.env.prod
+    volumes:
+      - hp_prod_data:/data
+    restart: "no"
+
+  app:
+    image: ${HP_IMAGE:-ghcr.io/<ORG>/hp-app}:${APP_VERSION}
+    env_file:
+      - ../.env.prod
+    command: ["uvicorn", "app.honeypot_public:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips=127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"]
+    volumes:
+      - hp_prod_data:/data
+    expose:
+      - "8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        ["CMD", "python", "scripts/check_app_ready.py"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.hp-api.rule=Host(`${HP_PUBLIC_HOST}`)"
+      - "traefik.http.routers.hp-api.entrypoints=websecure"
+      - "traefik.http.routers.hp-api.tls.certresolver=letsencrypt"
+      - "traefik.http.services.hp-api.loadbalancer.server.port=8000"
+
+  admin:
+    image: ${HP_IMAGE:-ghcr.io/<ORG>/hp-app}:${APP_VERSION}
+    env_file:
+      - ../.env.prod
+    command: ["uvicorn", "app.panel_mvp:app", "--host", "0.0.0.0", "--port", "9001", "--proxy-headers", "--forwarded-allow-ips=127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"]
+    volumes:
+      - hp_prod_data:/data
+    expose:
+      - "9001"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.hp-admin.rule=Host(`${HP_ADMIN_HOST}`)"
+      - "traefik.http.routers.hp-admin.entrypoints=websecure"
+      - "traefik.http.routers.hp-admin.tls.certresolver=letsencrypt"
+      - "traefik.http.services.hp-admin.loadbalancer.server.port=9001"
+
+  traefik:
+    image: traefik:v2.11
+    restart: unless-stopped
+    command:
+      - "--api.dashboard=false"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
+      - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik_letsencrypt:/letsencrypt
+    depends_on:
+      app:
+        condition: service_healthy
+      admin:
+        condition: service_started
+
+volumes:
+  hp_prod_data:
+  traefik_letsencrypt:

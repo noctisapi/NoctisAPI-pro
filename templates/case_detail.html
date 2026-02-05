@@ -1,0 +1,157 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>{{ case.title }}</h1>
+    <div class="case-rename">
+      <input id="caseTitleInput" class="input input-lg" value="{{ case.title }}" placeholder="Case title">
+      <button class="btn btn-primary" type="button" onclick="renameCase()">Rename</button>
+    </div>
+    <div class="sub">Status: {{ case.status }} - Severity: {{ case.severity or 'n/a' }}</div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-head"><div class="card-title">Actors</div></div>
+  <div class="table-wrap">
+    <table class="table table-sortable">
+      <thead>
+        <tr>
+          <th data-type="text">Actor</th>
+          <th data-type="text">Role</th>
+          <th data-type="date">Added</th>
+          <th data-type="text">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for a in actors %}
+        <tr>
+          <td><a class="link" href="/actor/{{ a.actor_id }}">{{ a.actor_id[:8] }}</a></td>
+          <td>{{ a.role }}</td>
+          <td class="mono">{{ a.added_at }}</td>
+          <td><button class="btn btn-ghost btn-small" type="button" onclick="removeCaseActor('{{ case.id }}','{{ a.actor_id }}', this)">Remove</button></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-head"><div class="card-title">Replay Evidence</div></div>
+  {% if replay_sessions or replay_steps %}
+    {% if replay_sessions %}
+    <div class="evidence-section-title">Sessions</div>
+    <div class="evidence-list">
+      {% for s in replay_sessions %}
+      <div class="evidence-item">
+        <div class="evidence-item-head">
+          <div>
+            <div class="evidence-title"><a class="link" href="/dashboard/sessions/{{ s.session_id }}">Session {{ s.session_id_short }}</a></div>
+            <div class="evidence-meta">Actor {{ s.actor_id }} - Stage S{{ s.stage_max or 0 }} - Added {{ s.added_at }}</div>
+          </div>
+          <div class="evidence-actions">
+            <button class="btn btn-ghost btn-small" type="button" onclick="removeEvidence('{{ case.id }}', '{{ s.evidence_id }}', this)">Remove</button>
+            <span class="tag">Session</span>
+          </div>
+        </div>
+        <div class="evidence-body">
+          <div class="mono small-text">{{ s.started_fmt }} → {{ s.ended_fmt }}</div>
+          {% if s.note %}<div class="evidence-note">{{ s.note }}</div>{% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+    {% if replay_steps %}
+    <div class="evidence-section-title">Steps</div>
+    <div class="evidence-list">
+      {% for st in replay_steps %}
+      <div class="evidence-item">
+        <div class="evidence-item-head">
+          <div>
+            <div class="evidence-title">Step #{{ st.seq }} - <a class="link" href="/dashboard/sessions/{{ st.session_id }}">{{ st.session_id[:8] }}</a></div>
+            <div class="evidence-meta">{{ st.method }} {{ st.path }} - Status {{ st.response_status or '-' }} - Added {{ st.added_at }}</div>
+          </div>
+          <div class="evidence-actions">
+            <button class="btn btn-ghost btn-small" type="button" onclick="removeEvidence('{{ case.id }}', '{{ st.evidence_id }}', this)">Remove</button>
+            <span class="tag tag-muted">Step</span>
+          </div>
+        </div>
+        <div class="evidence-body">
+          <div class="mono small-text">{{ st.ts_fmt }}</div>
+          {% if st.note %}<div class="evidence-note">{{ st.note }}</div>{% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  {% else %}
+    <div class="case-empty">No replay evidence linked to este caso.</div>
+  {% endif %}
+</div>
+
+
+<script>
+  async function removeCaseActor(caseId, actorId, btn){
+    if(!confirm('Remove actor from case?')){ return; }
+    if(btn){ btn.disabled = true; }
+    try{
+      const res = await fetch(`/dashboard/cases/${caseId}/actors/remove?actor_id=${actorId}`, {method:'POST'});
+      if(res.ok){
+        const row = btn.closest('tr');
+        if(row){ row.remove(); }
+      }else{
+        const text = await res.text();
+        alert('Error: ' + text);
+      }
+    }catch(e){
+      alert('Error: ' + e.message);
+    }finally{
+      if(btn){ btn.disabled = false; }
+    }
+  }
+
+  async function removeEvidence(caseId, evidenceId, btn){
+    if(!confirm('Remove evidence from case?')){ return; }
+    if(btn){ btn.disabled = true; }
+    try{
+      const res = await fetch(`/dashboard/cases/${caseId}/evidence/remove?evidence_id=${evidenceId}`, {method:'POST'});
+      if(res.ok){
+        const item = btn.closest('.evidence-item');
+        if(item){ item.remove(); }
+      }else{
+        const text = await res.text();
+        alert('Error: ' + text);
+      }
+    }catch(e){
+      alert('Error: ' + e.message);
+    }finally{
+      if(btn){ btn.disabled = false; }
+    }
+  }
+</script>
+
+
+<script>
+  async function renameCase(){
+    const input = document.getElementById('caseTitleInput');
+    if(!input){ return; }
+    const title = input.value.trim();
+    if(!title){ alert('Title required'); return; }
+    try{
+      const res = await fetch(`/dashboard/cases/{{ case.id }}/rename?title=${encodeURIComponent(title)}`, {method:'POST'});
+      if(res.ok){
+        const h1 = document.querySelector('h1');
+        if(h1){ h1.textContent = title; }
+      }else{
+        const text = await res.text();
+        alert('Error: ' + text);
+      }
+    }catch(e){
+      alert('Error: ' + e.message);
+    }
+  }
+</script>
+
+{% endblock %}

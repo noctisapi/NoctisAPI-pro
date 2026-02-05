@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Cases</h1>
+    <div class="sub">Incidents and archived groups</div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-head"><div class="card-title">Cases</div></div>
+  <div class="table-wrap">
+    <table class="table table-sortable">
+      <thead>
+        <tr>
+          <th data-type="number">ID</th>
+          <th data-type="text">Title</th>
+          <th data-type="text">Severity</th>
+          <th data-type="text">Status</th>
+          <th data-type="date">Updated</th>
+          <th data-type="text">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for c in cases %}
+        <tr>
+          <td><a class="link" href="/dashboard/cases/{{ c.id }}">{{ c.id }}</a></td>
+          <td>{{ c.title }}</td>
+          <td>{{ c.severity }}</td>
+          <td>{{ c.status }}</td>
+          <td class="mono">{{ c.updated_at }}</td>
+          <td>
+            <button class="btn btn-danger" type="button" onclick="deleteCase({{ c.id }}, this)">Delete</button>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+  async function deleteCase(caseId, btn){
+    if(!confirm(`Delete case #${caseId}? This cannot be undone.`)){ return; }
+    if(btn){ btn.disabled = true; }
+    try{
+      const res = await fetch(`/dashboard/cases/${caseId}`, {method:'DELETE'});
+      if(res.ok){
+        if(btn){
+          const row = btn.closest('tr');
+          if(row){ row.remove(); }
+        }else{
+          location.reload();
+        }
+      }else{
+        const text = await res.text();
+        alert('Error deleting case: ' + text);
+      }
+    }catch(e){
+      alert('Error: ' + e.message);
+    }finally{
+      if(btn){ btn.disabled = false; }
+    }
+  }
+</script>
+
+{% endblock %}
