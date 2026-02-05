@@ -16,11 +16,11 @@ Three new features added to the honeypot dashboard for advanced attack investiga
 - `actors.is_archived`, `actors.lifecycle_state`
 
 #### API:
-- `POST /dashboard/cases?title=...&description=...&severity=...` → create
-- `GET /dashboard/cases` → list
-- `GET /dashboard/cases/{id}` → detail + actors + replay evidence
-- `POST /dashboard/cases/{id}/actors?actor_id=...&role=...` → associate
-- `POST /dashboard/actors/{id}/archive` / `/unarchive` → archive/unarchive
+- `POST /dashboard/cases?title=...&description=...&severity=...` -> create
+- `GET /dashboard/cases` -> list
+- `GET /dashboard/cases/{id}` -> detail + actors + replay evidence
+- `POST /dashboard/cases/{id}/actors?actor_id=...&role=...` -> associate
+- `POST /dashboard/actors/{id}/archive` / `/unarchive` -> archive/unarchive
 
 ---
 
@@ -36,11 +36,11 @@ Three new features added to the honeypot dashboard for advanced attack investiga
 
 #### Integration:
 - Automatically created on every event insert in `app/honeypot_public.py`
-- Heuristic: if gap > 15 min OR fingerprint changes → new session
+- Heuristic: if gap > 15 min OR fingerprint changes -> new session
 
 #### API:
-- `GET /dashboard/actors/{id}/sessions` → list sessions
-- `GET /dashboard/sessions/{session_id}` → detail + steps
+- `GET /dashboard/actors/{id}/sessions` -> list sessions
+- `GET /dashboard/sessions/{session_id}` -> detail + steps
 
 ---
 
@@ -59,9 +59,9 @@ Three new features added to the honeypot dashboard for advanced attack investiga
 - `POST /dashboard/campaigns/recompute` -> enqueue recompute (status: `/dashboard/campaigns/recompute/status`)
 
 #### API:
-- `GET /dashboard/campaigns` → list
-- `GET /dashboard/campaigns/{id}` → detail + linked actors
-- `GET /dashboard/actors/{id}/campaign` → actor's campaign (if any)
+- `GET /dashboard/campaigns` -> list
+- `GET /dashboard/campaigns/{id}` -> detail + linked actors
+- `GET /dashboard/actors/{id}/campaign` -> actor's campaign (if any)
 
 ---
 
@@ -147,4 +147,5 @@ curl "http://127.0.0.1:8080/dashboard/actors/<actor_id>/sessions"
 - Implement event purge job that respects archived actors
 - Add export/forensics endpoints (PCAP-like replay)
 - Implement ML-based feature extraction (entropy, protocol deviation)
+
 

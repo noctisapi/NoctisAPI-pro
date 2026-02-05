@@ -1,6 +1,6 @@
 # VPS Deployment (Ubuntu 22.04+)
 
-This is a concrete, repeatable deployment flow for a single VPS with Docker + Nginx.
+This is a concrete, repeatable deployment flow for a single VPS with Docker + Traefik (ACME).
 
 ## 1. System Prep
 
@@ -42,29 +42,23 @@ Copy the repo here (git clone or rsync).
 
 ## 3. Production Env
 
-```bash
-cp .aenv.prod
-```
-
 Edit `.env.prod` and set:
 
-- `APP_VERSION` to the pushed image tag.
-- `HP_PUBLIC_BASE_URL=https://<your-domain>`
+- `APP_VERSION` to the pushed image tag (e.g., `latest`).
+- `HP_PUBLIC_BASE_URL=https://<your-api-host>`
+- `HP_PUBLIC_HOST=<api-host>`
+- `HP_ADMIN_HOST=<admin-host>`
+- `ACME_EMAIL=<you@example.com>`
 - `HP_SEED` to a long random secret.
 - `HP_GEOIP_DB=/app/data/GeoLite2-Country.mmdb` (keep default unless you move it).
 
-## 4. TLS
+## 4. TLS (Traefik + ACME)
 
-Provide TLS certs in:
-
-```
-compose/nginx/certs/fullchain.pem
-compose/nginx/certs/privkey.pem
-```
-
-And update `compose/nginx/nginx.conf` with your `server_name`.
-
-If you use Let’s Encrypt, copy the certs into that folder (or bind-mount the LE path).
+Traefik handles certificates automatically via ACME HTTP-01.
+Ensure:
+- Ports 80/443 are open
+- `ACME_EMAIL` is set in `.env.prod`
+Once Traefik starts, it will request certs automatically.
 
 ## 5. Launch
 
@@ -76,16 +70,10 @@ docker compose -f compose/docker-compose.prod.yml --env-file .env.prod up -d
 Verify:
 
 ```bash
-curl -sS https://<your-domain>/health
+curl -sS https://<your-api-host>/health
 ```
 
-The admin panel is bound to `127.0.0.1:9001`. Use an SSH tunnel:
-
-```bash
-ssh -L 9001:127.0.0.1:9001 <user>@<vps-ip>
-```
-
-Then visit: http://127.0.0.1:9001
+The admin panel is exposed via Traefik on `HP_ADMIN_HOST`.
 
 ## 6. systemd (optional)
 
@@ -105,4 +93,3 @@ Configure the cron from `ops/cron/yourapp-backup` and point it to:
 - `BACKUP_DIR=/var/backups/honey-app`
 - `DATA_VOLUME=hp_prod_data`
 - `APP_DB_PATH=/data/honeypot.db`
-

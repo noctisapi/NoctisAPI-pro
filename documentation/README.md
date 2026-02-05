@@ -6,8 +6,7 @@ This repo packages both the public honeypot API (`app/honeypot_public.py`) and t
 
 - `docker-compose.yml`  thin wrapper that reuses the dev stack so `docker compose ...` works without extra flags.
 - `compose/docker-compose.dev.yml`  local developer stack with reload + automatic migrations.
-- `compose/docker-compose.prod.yml`  production stack (migrate, app, admin, nginx reverse proxy).
-- `compose/nginx/nginx.conf`  TLS-terminating reverse proxy with `/api/` rate limiting.
+- `compose/docker-compose.prod.yml`  production stack (migrate, app, admin, traefik reverse proxy).
 - `migrations/`, `alembic.ini`  database migrations executed via Alembic.
 - `backup_sqlite.sh` + `ops/cron/yourapp-backup`  host-side backup automation (14-day retention).
 - `.env.dev` / `.env.prod.example`  environment defaults (set both `HP_DB_PATH` and `DATABASE_URL`).
@@ -67,9 +66,6 @@ Recommended layout:
 /opt/hp-app/
 +-- compose/
    +-- docker-compose.prod.yml
-   +-- nginx/
-       +-- nginx.conf
-       +-- certs/{fullchain.pem,privkey.pem}
 +-- backup_sqlite.sh
 +-- .env.prod
 ```
@@ -92,7 +88,7 @@ Steps:
    - `HP_CAMPAIGN_PATH_NGRAM_TOP_K=12`
    - `HP_CAMPAIGN_PATH_TOP_K=10`
    - `HP_CAMPAIGN_ACTOR_LIMIT=200`
-2. Provide TLS files in `compose/nginx/certs/` (`fullchain.pem`, `privkey.pem`) and adjust `server_name` inside `compose/nginx/nginx.conf`.
+2. Ensure `.env.prod` includes `HP_PUBLIC_HOST`, `HP_ADMIN_HOST`, and `ACME_EMAIL` for Traefik.
 3. Run:
 
 ```
@@ -105,10 +101,10 @@ The production compose file defines four services:
 
 - `migrate`  runs `alembic upgrade head` and must finish successfully before others start.
 - `app`  FastAPI service whose Docker healthcheck runs `python scripts/check_app_ready.py`.
-- `admin`  `app/panel_mvp.py` served via Uvicorn on port 9001 and only reachable through the tunnel/reverse proxy.
-- `nginx`  TLS termination + reverse proxy with `limit_req` (10 req/s, burst 20) on `/api/`.
+- `admin`  `app/panel_mvp.py` served via Uvicorn on port 9001 and exposed via Traefik.
+- `traefik`  TLS termination + reverse proxy with ACME.
 
-SQLite lives in the `hp_prod_data` volume mounted at `/data`. Nginx publishes 80/443 directly. All traffic to `/api/` is rate limited per-client IP, and the real `/health` + `/ready` endpoints stay confined to the admin service (tunneled/localhost only).
+SQLite lives in the `hp_prod_data` volume mounted at `/data`. Traefik publishes 80/443 directly. The real `/health` + `/ready` endpoints stay confined to the admin service, while the public API keeps its decoy `/health`.
 
 ## Make Targets
 

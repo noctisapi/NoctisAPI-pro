@@ -110,6 +110,7 @@ Steps:
    - `bash ops/vps/deploy.sh`
 
 ## Notes on Public IP Accuracy
-- Ensure your proxy (Nginx) sets `X-Forwarded-For` and `X-Real-IP`.
+- Ensure your proxy (Traefik) sets `X-Forwarded-For` and `X-Real-IP`.
 - Uvicorn should run with `--proxy-headers` and `--forwarded-allow-ips` if you want trusted proxy headers.
 - If you need hard guarantees, restrict `forwarded-allow-ips` to your proxy IP.
+
