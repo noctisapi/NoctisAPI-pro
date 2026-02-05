@@ -1,1 +1,0 @@
-Place your TLS certificate chain as fullchain.pem and private key as privkey.pem in this directory before deploying nginx.

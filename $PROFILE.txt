@@ -1,8 +1,0 @@
-# Microsoft.PowerShell_profile.ps1
-
-# Definición de Alias
-# 'clear-host' es el nombre real del comando tras 'cls'
-Set-Alias -Name clear -Value cls
-
-# Nota: PowerShell por defecto ya suele mapear 'clear' a 'Clear-Host' 
-# en sistemas modernos, pero esto asegura la consistencia.
