@@ -1081,6 +1081,7 @@ async def log_all_requests(request: Request, call_next):
     t0 = time.perf_counter()
     response = None
     exc = None
+    skip_log = False
     try:
         response = await call_next(request)
         return response
@@ -1089,135 +1090,136 @@ async def log_all_requests(request: Request, call_next):
         raise
     finally:
         if request.url.path.startswith("/static/"):
-            return
+            skip_log = True
         if (request.headers.get("x-internal-monitor") or "").strip() == "1":
-            return
+            skip_log = True
         ua_hdr = (request.headers.get("user-agent") or "").strip()
         if HONEYPOT_MONITOR_UA and ua_hdr == HONEYPOT_MONITOR_UA:
-            return
+            skip_log = True
 
-        latency_ms = int((time.perf_counter() - t0) * 1000.0)
+        if not skip_log:
+            latency_ms = int((time.perf_counter() - t0) * 1000.0)
 
-        kind = "probe"
-        if request.url.path == "/health":
-            kind = "health"
+            kind = "probe"
+            if request.url.path == "/health":
+                kind = "health"
 
-        token = None
-        auth = (request.headers.get("authorization") or "").strip()
-        if auth.lower().startswith("bearer "):
-            token = auth.split(" ", 1)[1].strip()[:200]
+            token = None
+            auth = (request.headers.get("authorization") or "").strip()
+            if auth.lower().startswith("bearer "):
+                token = auth.split(" ", 1)[1].strip()[:200]
 
-        status_code = 0
-        if response is not None:
-            status_code = getattr(response, "status_code", 0) or 0
-        elif exc is not None:
-            status_code = 500
+            status_code = 0
+            if response is not None:
+                status_code = getattr(response, "status_code", 0) or 0
+            elif exc is not None:
+                status_code = 500
 
-        actor_id = _actor_id_from_request(request)
-        ip = _client_ip(request)
-        ua = _user_agent(request)
+            actor_id = _actor_id_from_request(request)
+            ip = _client_ip(request)
+            ua = _user_agent(request)
 
-        # extras requested:
-        # - full headers
-        # - latency per request
-        # - geoip for public IP (flag)
-        # - error counters per actor (stored in actors table; also surface snapshot here)
-        req_headers = _safe_headers(request)
-        geo = _geoip_country(ip)
+            # extras requested:
+            # - full headers
+            # - latency per request
+            # - geoip for public IP (flag)
+            # - error counters per actor (stored in actors table; also surface snapshot here)
+            req_headers = _safe_headers(request)
+            geo = _geoip_country(ip)
 
-        conn = _db()
-        try:
-            _ensure_schema(conn)
+            conn = _db()
+            try:
+                _ensure_schema(conn)
 
-            hp_event = getattr(request.state, "hp_event", None)
-            path = request.url.path
-            if not hp_event:
-                recon_map = {
-                    "/docs": "recon_docs",
-                    "/openapi.json": "recon_openapi",
-                    "/redoc": "recon_redoc",
-                    "/swagger": "recon_swagger",
-                    "/.env": "recon_env",
-                    "/config.json": "recon_config",
-                    "/.well-known/security.txt": "recon_security",
-                }
-                if path in recon_map:
-                    recon_kind = recon_map[path]
-                    points = _rand_points(1, 3)
-                    if recon_kind in ("recon_env", "recon_config"):
-                        points = _rand_points(3, 6)
-                    hp_event = {
-                        "kind": recon_kind,
-                        "points": points,
-                        "trap_flags": ["recon"],
-                        "extra": {
-                            "recon": True,
-                            "openapi": path == "/openapi.json",
-                            "scanner": _is_scanner_ua(ua),
-                            "endpoint_count": len(app.routes),
-                        },
+                hp_event = getattr(request.state, "hp_event", None)
+                path = request.url.path
+                if not hp_event:
+                    recon_map = {
+                        "/docs": "recon_docs",
+                        "/openapi.json": "recon_openapi",
+                        "/redoc": "recon_redoc",
+                        "/swagger": "recon_swagger",
+                        "/.env": "recon_env",
+                        "/config.json": "recon_config",
+                        "/.well-known/security.txt": "recon_security",
                     }
+                    if path in recon_map:
+                        recon_kind = recon_map[path]
+                        points = _rand_points(1, 3)
+                        if recon_kind in ("recon_env", "recon_config"):
+                            points = _rand_points(3, 6)
+                        hp_event = {
+                            "kind": recon_kind,
+                            "points": points,
+                            "trap_flags": ["recon"],
+                            "extra": {
+                                "recon": True,
+                                "openapi": path == "/openapi.json",
+                                "scanner": _is_scanner_ua(ua),
+                                "endpoint_count": len(app.routes),
+                            },
+                        }
 
-            token_valid = False
-            if token:
-                if _token_lookup(conn, token):
-                    token_valid = True
-                    if not hp_event:
-                        kind = "token_used"
-                else:
-                    if not hp_event:
-                        kind = "unknown_token"
+                token_valid = False
+                if token:
+                    if _token_lookup(conn, token):
+                        token_valid = True
+                        if not hp_event:
+                            kind = "token_used"
+                    else:
+                        if not hp_event:
+                            kind = "unknown_token"
 
-            if hp_event:
-                kind = hp_event.get("kind", kind)
+                if hp_event:
+                    kind = hp_event.get("kind", kind)
 
-            _insert_event(
-                conn,
-                req=request,
-                kind=kind,
-                status=status_code,
-                body=body,
-                token=token,
-                points_delta=hp_event.get("points") if hp_event else None,
-                trap_flags=hp_event.get("trap_flags") if hp_event else None,
-                extra={
-                    "rt": "mw",
-                    "latency_ms": latency_ms,
-                    "headers": req_headers,
-                    "geo": geo,
-                    "token_valid": token_valid,
-                    **(hp_event.get("extra") if hp_event else {}),
-                },
-            )
-
-            _update_actor_error_counters(conn, actor_id, int(status_code))
-
-            # add counters snapshot to this event (optional, but helps dashboards)
-            row = conn.execute(
-                "SELECT err_total, err_consecutive, last_status, last_error_ts FROM actors WHERE actor_id=?",
-                (actor_id,),
-            ).fetchone()
-            if row:
-                # update the just-inserted event's extra_json with counter snapshot
-                # (keep it lightweight; do not rewrite headers)
-                last_event_id = conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
-                try:
-                    existing = conn.execute("SELECT extra_json FROM events WHERE id=?", (last_event_id,)).fetchone()
-                    extra_obj = json.loads(existing["extra_json"] or "{}")
-                except Exception:
-                    extra_obj = {}
-                extra_obj["err_total"] = int(row["err_total"] or 0)
-                extra_obj["err_consecutive"] = int(row["err_consecutive"] or 0)
-                extra_obj["last_status"] = row["last_status"]
-                extra_obj["last_error_ts"] = row["last_error_ts"]
-                conn.execute(
-                    "UPDATE events SET extra_json=? WHERE id=?",
-                    (json.dumps(extra_obj, ensure_ascii=False), int(last_event_id)),
+                _insert_event(
+                    conn,
+                    req=request,
+                    kind=kind,
+                    status=status_code,
+                    body=body,
+                    token=token,
+                    points_delta=hp_event.get("points") if hp_event else None,
+                    trap_flags=hp_event.get("trap_flags") if hp_event else None,
+                    extra={
+                        "rt": "mw",
+                        "latency_ms": latency_ms,
+                        "headers": req_headers,
+                        "geo": geo,
+                        "token_valid": token_valid,
+                        **(hp_event.get("extra") if hp_event else {}),
+                    },
                 )
 
-            conn.commit()
-        finally:
-            conn.close()
+                _update_actor_error_counters(conn, actor_id, int(status_code))
+
+                # add counters snapshot to this event (optional, but helps dashboards)
+                row = conn.execute(
+                    "SELECT err_total, err_consecutive, last_status, last_error_ts FROM actors WHERE actor_id=?",
+                    (actor_id,),
+                ).fetchone()
+                if row:
+                    # update the just-inserted event's extra_json with counter snapshot
+                    # (keep it lightweight; do not rewrite headers)
+                    last_event_id = conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
+                    try:
+                        existing = conn.execute("SELECT extra_json FROM events WHERE id=?", (last_event_id,)).fetchone()
+                        extra_obj = json.loads(existing["extra_json"] or "{}")
+                    except Exception:
+                        extra_obj = {}
+                    extra_obj["err_total"] = int(row["err_total"] or 0)
+                    extra_obj["err_consecutive"] = int(row["err_consecutive"] or 0)
+                    extra_obj["last_status"] = row["last_status"]
+                    extra_obj["last_error_ts"] = row["last_error_ts"]
+                    conn.execute(
+                        "UPDATE events SET extra_json=? WHERE id=?",
+                        (json.dumps(extra_obj, ensure_ascii=False), int(last_event_id)),
+                    )
+
+                conn.commit()
+            finally:
+                conn.close()
 
 
 @app.get("/health", tags=["Health"], response_class=JSONResponse)
