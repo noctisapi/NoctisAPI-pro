@@ -14,7 +14,6 @@ required_vars=(
   HP_IMAGE
   APP_VERSION
   HP_PUBLIC_HOST
-  HP_ADMIN_HOST
   ACME_EMAIL
 )
 
