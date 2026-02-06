@@ -1092,6 +1092,8 @@ async def log_all_requests(request: Request, call_next):
             skip_log = True
         if (request.headers.get("x-internal-monitor") or "").strip() == "1":
             skip_log = True
+        if request.query_params.get("__hp_monitor") == "1":
+            skip_log = True
         ua_hdr = (request.headers.get("user-agent") or "").strip()
         if HONEYPOT_MONITOR_UA and ua_hdr == HONEYPOT_MONITOR_UA:
             skip_log = True
