@@ -10,7 +10,9 @@ from alembic.config import Config
 from alembic.script import ScriptDirectory
 
 DB_PATH = os.getenv("HP_DB_PATH", "/data/honeypot.db")
-ALEMBIC_INI_PATH = Path(os.getenv("ALEMBIC_INI_PATH", Path(__file__).resolve().parent / "alembic.ini"))
+ALEMBIC_INI_PATH = Path(
+    os.getenv("ALEMBIC_INI_PATH", Path(__file__).resolve().parent.parent / "alembic.ini")
+)
 
 
 def _connect() -> sqlite3.Connection:
