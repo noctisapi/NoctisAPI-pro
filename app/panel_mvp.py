@@ -674,17 +674,33 @@ def dashboard(request: Request):
         cur = conn.cursor()
         cur.execute(
             """
+            WITH last_events AS (
+              SELECT e.*
+              FROM events e
+              JOIN (
+                SELECT actor_id, MAX(id) AS max_id
+                FROM events
+                GROUP BY actor_id
+              ) m ON e.actor_id = m.actor_id AND e.id = m.max_id
+            )
             SELECT
               a.actor_id, a.first_seen, a.last_seen, a.score,
               a.err_total, a.err_consecutive, a.last_status, a.last_error_ts,
-              (SELECT e.ip FROM events e WHERE e.actor_id = a.actor_id ORDER BY e.id DESC LIMIT 1) AS last_ip,
-              (SELECT e.ua FROM events e WHERE e.actor_id = a.actor_id ORDER BY e.id DESC LIMIT 1) AS last_ua,
-              (SELECT e.extra_json FROM events e WHERE e.actor_id = a.actor_id ORDER BY e.id DESC LIMIT 1) AS last_extra_json,
+              le.ip AS last_ip,
+              le.ua AS last_ua,
+              le.extra_json AS last_extra_json,
               (SELECT e.extra_json FROM events e WHERE e.actor_id = a.actor_id AND e.extra_json LIKE '%country_iso2%' ORDER BY e.id DESC LIMIT 1) AS last_geo_extra_json,
               (SELECT COUNT(*) FROM events e WHERE e.actor_id = a.actor_id AND e.kind = 'token_used') AS token_used_count,
               (SELECT COUNT(*) FROM events e WHERE e.actor_id = a.actor_id AND e.kind = 'unknown_token') AS unknown_token_count
             FROM actors a
+            LEFT JOIN last_events le ON le.actor_id = a.actor_id
             WHERE COALESCE(a.lifecycle_state, 'active') != 'deleted'
+              AND NOT (
+                COALESCE(le.ua, '') = 'HealthCheck/1.0'
+                OR COALESCE(le.path, '') LIKE '%__hp_monitor=1%'
+                OR COALESCE(le.extra_json, '') LIKE '%\"__hp_monitor\"%'
+                OR COALESCE(le.extra_json, '') LIKE '%\"x-internal-monitor\"%'
+              )
             ORDER BY a.last_seen DESC
             LIMIT 200
             """
