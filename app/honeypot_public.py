@@ -1089,6 +1089,8 @@ async def log_all_requests(request: Request, call_next):
     finally:
         if request.url.path.startswith("/static/"):
             return
+        if (request.headers.get("x-internal-monitor") or "").strip() == "1":
+            return
 
         latency_ms = int((time.perf_counter() - t0) * 1000.0)
 

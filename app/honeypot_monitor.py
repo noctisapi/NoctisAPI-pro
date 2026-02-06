@@ -358,7 +358,7 @@ class HoneypotAvailabilityMonitor:
         return result
 
     def _base_headers(self) -> Dict[str, str]:
-        headers = {"User-Agent": HONEYPOT_MONITOR_UA}
+        headers = {"User-Agent": HONEYPOT_MONITOR_UA, "X-Internal-Monitor": "1"}
         if HONEYPOT_MONITOR_XFF:
             headers["X-Forwarded-For"] = HONEYPOT_MONITOR_XFF
         return headers
