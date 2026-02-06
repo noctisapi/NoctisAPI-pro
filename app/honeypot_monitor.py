@@ -18,7 +18,6 @@ HONEYPOT_CHECK_MAX_ROWS = int(os.getenv("HONEYPOT_CHECK_MAX_ROWS", "10000"))
 HONEYPOT_MONITORED_ENDPOINTS_RAW = os.getenv("HONEYPOT_MONITORED_ENDPOINTS", "")
 HONEYPOT_MONITOR_UA = os.getenv("HONEYPOT_MONITOR_UA", "HealthCheck/1.0")
 HONEYPOT_MONITOR_XFF = os.getenv("HONEYPOT_MONITOR_XFF", "127.0.0.1")
-HONEYPOT_MONITOR_PARAM = os.getenv("HONEYPOT_MONITOR_PARAM", "__hp_monitor")
 
 
 def _utc_now_iso() -> str:
@@ -240,8 +239,6 @@ def _safe_json(resp: httpx.Response) -> Dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def _monitor_params() -> Dict[str, str]:
-    return {HONEYPOT_MONITOR_PARAM: "1"}
 
 
 def _render_path(path: str, ctx: Dict[str, Any]) -> str:
@@ -325,7 +322,6 @@ class HoneypotAvailabilityMonitor:
     def _run_single(self, client: httpx.Client, check: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
         path = _render_path(check["path"], ctx)
         params = _render_query(check.get("query"), ctx)
-        params.update(_monitor_params())
         url = f"{self.base_url}{path}"
         started = time.perf_counter()
         status_code: Optional[int] = None
@@ -438,10 +434,7 @@ class HoneypotAvailabilityMonitor:
             if content_type and body is not None:
                 req_headers.setdefault("Content-Type", content_type)
             try:
-                req_params = dict(_monitor_params())
-                if params:
-                    req_params.update(params)
-                return client.request(method, url, headers=req_headers, params=req_params, content=body)
+                return client.request(method, url, headers=req_headers, params=params, content=body)
             except Exception:
                 return None
 

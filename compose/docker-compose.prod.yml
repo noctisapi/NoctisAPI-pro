@@ -48,6 +48,11 @@ services:
       - "traefik.http.middlewares.hp-monitor-headers.headers.customrequestheaders.X-Internal-Monitor=1"
       - "traefik.http.middlewares.hp-monitor-ratelimit.ratelimit.average=30"
       - "traefik.http.middlewares.hp-monitor-ratelimit.ratelimit.burst=60"
+      - "traefik.http.routers.hp-internal.rule=PathPrefix(`/`)"
+      - "traefik.http.routers.hp-internal.entrypoints=webinternal"
+      - "traefik.http.routers.hp-internal.service=hp-api"
+      - "traefik.http.routers.hp-internal.priority=120"
+      - "traefik.http.routers.hp-internal.middlewares=hp-monitor-headers,hp-monitor-ratelimit"
 
   admin:
     image: ${HP_IMAGE:-ghcr.io/<ORG>/hp-app}:${APP_VERSION}
@@ -77,6 +82,7 @@ services:
       - "--providers.docker.exposedbydefault=false"
       - "--entrypoints.web.address=:80"
       - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.webinternal.address=127.0.0.1:8081"
       - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
       - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
       - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}"
@@ -84,6 +90,7 @@ services:
     ports:
       - "80:80"
       - "443:443"
+      - "127.0.0.1:8081:8081"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - traefik_letsencrypt:/letsencrypt
