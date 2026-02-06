@@ -46,16 +46,12 @@ services:
       - hp_prod_data:/data
     expose:
       - "9001"
+    ports:
+      - "127.0.0.1:9001:9001"
     depends_on:
       migrate:
         condition: service_completed_successfully
     restart: unless-stopped
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.hp-admin.rule=Host(`${HP_ADMIN_HOST}`)"
-      - "traefik.http.routers.hp-admin.entrypoints=websecure"
-      - "traefik.http.routers.hp-admin.tls.certresolver=letsencrypt"
-      - "traefik.http.services.hp-admin.loadbalancer.server.port=9001"
 
   traefik:
     image: traefik:v2.11

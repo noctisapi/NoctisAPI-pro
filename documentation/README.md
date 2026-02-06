@@ -88,7 +88,7 @@ Steps:
    - `HP_CAMPAIGN_PATH_NGRAM_TOP_K=12`
    - `HP_CAMPAIGN_PATH_TOP_K=10`
    - `HP_CAMPAIGN_ACTOR_LIMIT=200`
-2. Ensure `.env.prod` includes `HP_PUBLIC_HOST`, `HP_ADMIN_HOST`, and `ACME_EMAIL` for Traefik.
+2. Ensure `.env.prod` includes `HP_PUBLIC_HOST` and `ACME_EMAIL` for Traefik.
 3. Run:
 
 ```
@@ -101,7 +101,7 @@ The production compose file defines four services:
 
 - `migrate`  runs `alembic upgrade head` and must finish successfully before others start.
 - `app`  FastAPI service whose Docker healthcheck runs `python scripts/check_app_ready.py`.
-- `admin`  `app/panel_mvp.py` served via Uvicorn on port 9001 and exposed via Traefik.
+- `admin`  `app/panel_mvp.py` served via Uvicorn on port 9001 and bound to `127.0.0.1` (SSH tunnel).
 - `traefik`  TLS termination + reverse proxy with ACME.
 
 SQLite lives in the `hp_prod_data` volume mounted at `/data`. Traefik publishes 80/443 directly. The real `/health` + `/ready` endpoints stay confined to the admin service, while the public API keeps its decoy `/health`.

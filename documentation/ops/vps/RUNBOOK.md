@@ -51,7 +51,6 @@ This runbook covers:
    - Add:
      - `HP_IMAGE=ghcr.io/<ORG>/hp-app`
      - `HP_PUBLIC_HOST=<SUBDOMAIN>.duckdns.org`
-     - `HP_ADMIN_HOST=<ADMIN_SUBDOMAIN>.duckdns.org`
      - `ACME_EMAIL=<you@example.com>`
 
 ## Phase 4: Certificates (Traefik + ACME)
@@ -67,7 +66,7 @@ Traefik handles certificates automatically via ACME HTTP-01.
 3. Verify:
    - `curl -i https://<SUBDOMAIN>.duckdns.org/health`
    - `curl -i https://<SUBDOMAIN>.duckdns.org/docs`
-   - `curl -i https://<ADMIN_SUBDOMAIN>.duckdns.org/dashboard/honeypot`
+   - Admin panel is available via SSH tunnel on `127.0.0.1:9001`
 
 ## Phase 5.1: GeoIP database (flags)
 MaxMind GeoLite2 is not committed to git. Download it on the server:
