@@ -39,6 +39,15 @@ services:
       - "traefik.http.routers.hp-api.entrypoints=websecure"
       - "traefik.http.routers.hp-api.tls.certresolver=letsencrypt"
       - "traefik.http.services.hp-api.loadbalancer.server.port=8000"
+      - "traefik.http.routers.hp-health.rule=Host(`${HP_PUBLIC_HOST}`) && (Path(`/health`) || Path(`/status`))"
+      - "traefik.http.routers.hp-health.entrypoints=websecure"
+      - "traefik.http.routers.hp-health.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.hp-health.service=hp-api"
+      - "traefik.http.routers.hp-health.priority=100"
+      - "traefik.http.routers.hp-health.middlewares=hp-monitor-headers,hp-monitor-ratelimit"
+      - "traefik.http.middlewares.hp-monitor-headers.headers.customrequestheaders.X-Internal-Monitor=1"
+      - "traefik.http.middlewares.hp-monitor-ratelimit.ratelimit.average=30"
+      - "traefik.http.middlewares.hp-monitor-ratelimit.ratelimit.burst=60"
 
   admin:
     image: ${HP_IMAGE:-ghcr.io/<ORG>/hp-app}:${APP_VERSION}

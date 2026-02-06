@@ -695,12 +695,6 @@ def dashboard(request: Request):
             FROM actors a
             LEFT JOIN last_events le ON le.actor_id = a.actor_id
             WHERE COALESCE(a.lifecycle_state, 'active') != 'deleted'
-              AND NOT (
-                COALESCE(le.ua, '') = 'HealthCheck/1.0'
-                OR COALESCE(le.path, '') LIKE '%__hp_monitor=1%'
-                OR COALESCE(le.extra_json, '') LIKE '%\"__hp_monitor\"%'
-                OR COALESCE(le.extra_json, '') LIKE '%\"x-internal-monitor\"%'
-              )
             ORDER BY a.last_seen DESC
             LIMIT 200
             """

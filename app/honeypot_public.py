@@ -1092,11 +1092,6 @@ async def log_all_requests(request: Request, call_next):
             skip_log = True
         if (request.headers.get("x-internal-monitor") or "").strip() == "1":
             skip_log = True
-        if request.query_params.get("__hp_monitor") == "1":
-            skip_log = True
-        ua_hdr = (request.headers.get("user-agent") or "").strip()
-        if HONEYPOT_MONITOR_UA and ua_hdr == HONEYPOT_MONITOR_UA:
-            skip_log = True
 
         if not skip_log:
             latency_ms = int((time.perf_counter() - t0) * 1000.0)
@@ -1174,9 +1169,6 @@ async def log_all_requests(request: Request, call_next):
                 if hp_event:
                     kind = hp_event.get("kind", kind)
 
-                if kind in ("token_used", "unknown_token") and not ua and ip in ("0.0.0.0", "127.0.0.1"):
-                    return
-
                 _insert_event(
                     conn,
                     req=request,
@@ -1241,6 +1233,19 @@ async def health(request: Request):
         "version": f"public-{secrets.randbelow(9) + 1}.0",
     }
     return JSONResponse(fake_payload)
+
+
+@app.get("/status", tags=["Health"], response_class=JSONResponse)
+async def status(request: Request):
+    await _sleep_jitter()
+    actor = _actor_id_from_request(request)
+    payload = {
+        "status": "ok",
+        "service": "platform-api",
+        "instance": actor[:12],
+        "version": APP_VERSION,
+    }
+    return JSONResponse(payload)
 
 
 @app.get("/", tags=["Health"], response_class=JSONResponse)
@@ -1456,10 +1461,10 @@ async def swagger_decoy(request: Request):
     )
     html = """
     <html>
-      <head><title>Swagger UI</title></head>
+      <head><title>Platform API - Swagger UI</title></head>
       <body style="font-family: sans-serif; padding: 20px;">
-        <h2>Swagger UI (decoy)</h2>
-        <p>Download OpenAPI: <a href="/openapi.json">/openapi.json</a></p>
+        <h2>Platform API - Swagger UI</h2>
+        <p>OpenAPI spec: <a href="/openapi.json">/openapi.json</a></p>
       </body>
     </html>
     """
@@ -1479,11 +1484,20 @@ async def recon_env(request: Request):
     payload = "\n".join(
         [
             "APP_ENV=production",
+            "APP_NAME=Platform API",
             "DB_HOST=10.12.0.8",
-            "DB_USER=app_user",
+            "DB_PORT=5432",
+            "DB_NAME=platform",
+            "DB_USER=platform_svc",
             "DB_PASSWORD=SuperSecret123!",
+            "JWT_ISSUER=https://platform-api.duckdns.org",
+            "JWT_AUDIENCE=platform-api",
             "JWT_SECRET=dev_only_change_me",
-            "S3_BUCKET=app-assets",
+            "REDIS_URL=redis://10.12.0.9:6379/0",
+            "S3_BUCKET=platform-assets",
+            "S3_REGION=eu-west-1",
+            "PUBLIC_BASE_URL=https://platform-api.duckdns.org",
+            "SUPPORT_EMAIL=support@platform-api.duckdns.org",
         ]
     )
     return PlainTextResponse(payload)
@@ -1501,10 +1515,15 @@ async def recon_config(request: Request):
     )
     return JSONResponse(
         {
-            "service": "account-api",
+            "service": "platform-api",
             "region": "eu-west-1",
-            "auth": {"issuer": "https://login.example.com", "jwks": "/.well-known/jwks.json"},
-            "features": {"beta_access": True, "sandbox_mode": False},
+            "auth": {
+                "issuer": "https://platform-api.duckdns.org",
+                "jwks": "/.well-known/jwks.json",
+                "audience": "platform-api",
+            },
+            "features": {"beta_access": True, "sandbox_mode": False, "webhooks": True},
+            "contact": {"support": "support@platform-api.duckdns.org"},
         }
     )
 
@@ -1521,10 +1540,10 @@ async def recon_security(request: Request):
     )
     payload = "\n".join(
         [
-            "Contact: security@example.com",
-            "Encryption: https://example.com/pgp.txt",
+            "Contact: security@platform-api.duckdns.org",
+            "Encryption: https://platform-api.duckdns.org/pgp.txt",
             "Preferred-Languages: en, es",
-            "Policy: https://example.com/security",
+            "Policy: https://platform-api.duckdns.org/security",
         ]
     )
     return PlainTextResponse(payload)
