@@ -27,6 +27,10 @@ Open:
 - Public API: `http://127.0.0.1:8000/docs`
 - Admin panel: `http://127.0.0.1:9001`
 
+Notes:
+- The dev stack runs a one-shot migrator before starting services.
+- SQLite is stored in the `hp_dev_data` volume.
+
 ## Production
 See `documentation/ops/vps/RUNBOOK.md` for a step‑by‑step VPS deployment with Traefik + ACME and GHCR.
 
