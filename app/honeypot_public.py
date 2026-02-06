@@ -143,6 +143,10 @@ def _user_agent(req: Request) -> str:
     return (req.headers.get("user-agent") or "")[:400]
 
 
+def _is_monitor(req: Request) -> bool:
+    return (req.headers.get("x-internal-monitor") or "").strip() == "1"
+
+
 def _actor_id_from_request(req: Request) -> str:
     ip = _client_ip(req)
     ua = _user_agent(req)
@@ -619,6 +623,9 @@ def require_bearer(
         raise HTTPException(status_code=401, detail="Unauthorized")
     token = creds.credentials[:200]
 
+    if _is_monitor(request):
+        return token
+
     conn = _db()
     try:
         _ensure_schema(conn)
@@ -638,6 +645,9 @@ def require_api_key(request: Request) -> str:
     if not api_key:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
+    if _is_monitor(request):
+        return api_key
+
     conn = _db()
     try:
         _ensure_schema(conn)
@@ -654,6 +664,9 @@ def require_backup_token(request: Request) -> str:
     bkp = (request.headers.get("x-backup-token") or "").strip()[:200]
     if not bkp:
         raise HTTPException(status_code=401, detail="Unauthorized")
+
+    if _is_monitor(request):
+        return bkp
 
     conn = _db()
     try:
@@ -672,6 +685,9 @@ def require_admin_secret(request: Request) -> str:
     if not adm:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
+    if _is_monitor(request):
+        return adm
+
     conn = _db()
     try:
         _ensure_schema(conn)
@@ -688,6 +704,9 @@ def require_vault_token(request: Request) -> str:
     v = (request.headers.get("x-vault-token") or "").strip()[:200]
     if not v:
         raise HTTPException(status_code=401, detail="Unauthorized")
+
+    if _is_monitor(request):
+        return v
 
     conn = _db()
     try:
@@ -706,6 +725,9 @@ def require_cloud_token(request: Request) -> str:
     if not c:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
+    if _is_monitor(request):
+        return c
+
     conn = _db()
     try:
         _ensure_schema(conn)
@@ -722,6 +744,9 @@ def require_root_token(request: Request) -> str:
     r = (request.headers.get("x-root-token") or "").strip()[:200]
     if not r:
         raise HTTPException(status_code=401, detail="Unauthorized")
+
+    if _is_monitor(request):
+        return r
 
     conn = _db()
     try:
@@ -1090,7 +1115,7 @@ async def log_all_requests(request: Request, call_next):
     finally:
         if request.url.path.startswith("/static/"):
             skip_log = True
-        if (request.headers.get("x-internal-monitor") or "").strip() == "1":
+        if _is_monitor(request):
             skip_log = True
 
         if not skip_log:
@@ -1281,25 +1306,28 @@ async def issue_token(request: Request):
         password = str(form.get("password") or form.get("pass") or "")
         grant_type = str(form.get("grant_type") or "")
 
-    conn = _db()
-    try:
-        _ensure_schema(conn)
-
-        actor_id = _actor_id_from_request(request)
-        score = _actor_score(conn, actor_id)
-        stage = _stage_from_actor_score(score)
-
+    if _is_monitor(request):
         token = _mint_token()
-        conn.execute(
-            """
-            INSERT INTO tokens(actor_id, token, created_ts, stage, gift_type, used_count, last_used_ts)
-            VALUES(?,?,?,?,?,?,?)
-            """,
-            (actor_id, token, _utc_now_iso(), int(stage), "standard", 0, None),
-        )
-        conn.commit()
-    finally:
-        conn.close()
+    else:
+        conn = _db()
+        try:
+            _ensure_schema(conn)
+
+            actor_id = _actor_id_from_request(request)
+            score = _actor_score(conn, actor_id)
+            stage = _stage_from_actor_score(score)
+
+            token = _mint_token()
+            conn.execute(
+                """
+                INSERT INTO tokens(actor_id, token, created_ts, stage, gift_type, used_count, last_used_ts)
+                VALUES(?,?,?,?,?,?,?)
+                """,
+                (actor_id, token, _utc_now_iso(), int(stage), "standard", 0, None),
+            )
+            conn.commit()
+        finally:
+            conn.close()
 
     return {
         "access_token": token,
@@ -1339,20 +1367,23 @@ async def list_keys(request: Request, token: str = Depends(require_bearer)):
     conn = _db()
     try:
         _ensure_schema(conn)
+        if _is_monitor(request):
+            api_key = "ak_live_" + secrets.token_hex(8)
+            backup_token = None
+        else:
+            row = _token_lookup(conn, token)
+            actor_id = str(row["actor_id"])
+            score = _actor_score(conn, actor_id)
+            stage = _stage_from_actor_score(score)
 
-        row = _token_lookup(conn, token)
-        actor_id = str(row["actor_id"])
-        score = _actor_score(conn, actor_id)
-        stage = _stage_from_actor_score(score)
+            api_key = _get_or_create_secret(conn, actor_id, "api_key", "ak_live")
 
-        api_key = _get_or_create_secret(conn, actor_id, "api_key", "ak_live")
+            backup_token = None
+            if stage >= 3:
+                backup_token = _get_or_create_secret(conn, actor_id, "backup_token", "bkp")
 
-        backup_token = None
-        if stage >= 3:
-            backup_token = _get_or_create_secret(conn, actor_id, "backup_token", "bkp")
-
-        _bump_actor(conn, actor_id, score_delta=_score_for("keys_issued"))
-        conn.commit()
+            _bump_actor(conn, actor_id, score_delta=_score_for("keys_issued"))
+            conn.commit()
     finally:
         conn.close()
 
@@ -1557,40 +1588,44 @@ async def auth_login(request: Request):
     password = str(data.get("password") or data.get("pass") or "")
     scopes = str(data.get("scope") or data.get("scopes") or "read write")
 
-    conn = _db()
-    try:
-        _ensure_schema(conn)
-        actor_id = _actor_id_from_request(request)
-        token_issued = random.random() < 0.7
-        token = None
-        if token_issued:
-            token = _fake_jwt(actor_id, scopes)
-            stage = _stage_from_actor_score(_actor_score(conn, actor_id))
-            conn.execute(
-                """
-                INSERT INTO tokens(actor_id, token, created_ts, stage, gift_type, used_count, last_used_ts)
-                VALUES(?,?,?,?,?,?,?)
-                """,
-                (actor_id, token, _utc_now_iso(), int(stage), "login", 0, None),
-            )
-            conn.commit()
+    if _is_monitor(request):
+        token_issued = True
+        token = _fake_jwt("monitor", scopes)
+    else:
+        conn = _db()
+        try:
+            _ensure_schema(conn)
+            actor_id = _actor_id_from_request(request)
+            token_issued = random.random() < 0.7
+            token = None
+            if token_issued:
+                token = _fake_jwt(actor_id, scopes)
+                stage = _stage_from_actor_score(_actor_score(conn, actor_id))
+                conn.execute(
+                    """
+                    INSERT INTO tokens(actor_id, token, created_ts, stage, gift_type, used_count, last_used_ts)
+                    VALUES(?,?,?,?,?,?,?)
+                    """,
+                    (actor_id, token, _utc_now_iso(), int(stage), "login", 0, None),
+                )
+                conn.commit()
 
-        points = 5 + (8 if token_issued else 0)
-        _set_hp_event(
-            request,
-            kind="auth_login",
-            points=points,
-            trap_flags=["auth"],
-            extra={
-                "username": username,
-                "password_hash": _hash_text(password),
-                "scopes": scopes,
-                "token_fingerprint": _hash_text(token or ""),
-                "token_issued": token_issued,
-            },
-        )
-    finally:
-        conn.close()
+            points = 5 + (8 if token_issued else 0)
+            _set_hp_event(
+                request,
+                kind="auth_login",
+                points=points,
+                trap_flags=["auth"],
+                extra={
+                    "username": username,
+                    "password_hash": _hash_text(password),
+                    "scopes": scopes,
+                    "token_fingerprint": _hash_text(token or ""),
+                    "token_issued": token_issued,
+                },
+            )
+        finally:
+            conn.close()
 
     if not token_issued:
         return JSONResponse(status_code=401, content={"error": "invalid_credentials"})
@@ -1613,32 +1648,35 @@ async def auth_mfa(request: Request):
     code = str(data.get("code") or data.get("otp") or "")
     success = code == "000000" or random.random() < 0.1
 
-    conn = _db()
-    try:
-        _ensure_schema(conn)
-        actor_id = _actor_id_from_request(request)
-        token = None
-        if success:
-            token = _fake_jwt(actor_id, "read write")
-            stage = _stage_from_actor_score(_actor_score(conn, actor_id))
-            conn.execute(
-                """
-                INSERT INTO tokens(actor_id, token, created_ts, stage, gift_type, used_count, last_used_ts)
-                VALUES(?,?,?,?,?,?,?)
-                """,
-                (actor_id, token, _utc_now_iso(), int(stage), "mfa", 0, None),
-            )
-            conn.commit()
+    if _is_monitor(request):
+        token = _fake_jwt("monitor", "read write") if success else None
+    else:
+        conn = _db()
+        try:
+            _ensure_schema(conn)
+            actor_id = _actor_id_from_request(request)
+            token = None
+            if success:
+                token = _fake_jwt(actor_id, "read write")
+                stage = _stage_from_actor_score(_actor_score(conn, actor_id))
+                conn.execute(
+                    """
+                    INSERT INTO tokens(actor_id, token, created_ts, stage, gift_type, used_count, last_used_ts)
+                    VALUES(?,?,?,?,?,?,?)
+                    """,
+                    (actor_id, token, _utc_now_iso(), int(stage), "mfa", 0, None),
+                )
+                conn.commit()
 
-        _set_hp_event(
-            request,
-            kind="auth_mfa",
-            points=2 + (8 if success else 0),
-            trap_flags=["auth"],
-            extra={"mfa_code": code, "mfa_passed": success, "token_fingerprint": _hash_text(token or "")},
-        )
-    finally:
-        conn.close()
+            _set_hp_event(
+                request,
+                kind="auth_mfa",
+                points=2 + (8 if success else 0),
+                trap_flags=["auth"],
+                extra={"mfa_code": code, "mfa_passed": success, "token_fingerprint": _hash_text(token or "")},
+            )
+        finally:
+            conn.close()
 
     if not success:
         return JSONResponse(status_code=401, content={"error": "mfa_failed"})
@@ -1650,13 +1688,14 @@ async def auth_forgot(request: Request):
     await _sleep_jitter()
     data = await _read_json_or_form(request)
     email = str(data.get("email") or data.get("user") or "")
-    _set_hp_event(
-        request,
-        kind="auth_forgot",
-        points=3,
-        trap_flags=["auth"],
-        extra={"email": email},
-    )
+    if not _is_monitor(request):
+        _set_hp_event(
+            request,
+            kind="auth_forgot",
+            points=3,
+            trap_flags=["auth"],
+            extra={"email": email},
+        )
     return JSONResponse({"status": "ok", "reset_hint": "Check your email for a reset link."})
 
 
@@ -1666,13 +1705,14 @@ async def auth_reset(request: Request):
     data = await _read_json_or_form(request)
     token = str(data.get("token") or data.get("reset_token") or "")
     password = str(data.get("password") or "")
-    _set_hp_event(
-        request,
-        kind="auth_reset",
-        points=3,
-        trap_flags=["auth"],
-        extra={"reset_token": token, "password_hash": _hash_text(password)},
-    )
+    if not _is_monitor(request):
+        _set_hp_event(
+            request,
+            kind="auth_reset",
+            points=3,
+            trap_flags=["auth"],
+            extra={"reset_token": token, "password_hash": _hash_text(password)},
+        )
     return JSONResponse({"status": "ok", "message": "Password updated."})
 
 
@@ -1684,15 +1724,17 @@ async def auth_me(request: Request, creds: Optional[HTTPAuthorizationCredentials
         _ensure_schema(conn)
         token = (creds.credentials if creds else "").strip()[:200]
         if not _token_is_valid(conn, token):
-            _set_hp_event(request, kind="auth_me", points=0, trap_flags=["auth"], extra={"token_valid": False})
+            if not _is_monitor(request):
+                _set_hp_event(request, kind="auth_me", points=0, trap_flags=["auth"], extra={"token_valid": False})
             return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
-        _set_hp_event(
-            request,
-            kind="auth_me",
-            points=3,
-            trap_flags=["auth"],
-            extra={"token_fingerprint": _hash_text(token)},
-        )
+        if not _is_monitor(request):
+            _set_hp_event(
+                request,
+                kind="auth_me",
+                points=3,
+                trap_flags=["auth"],
+                extra={"token_fingerprint": _hash_text(token)},
+            )
     finally:
         conn.close()
     return JSONResponse({"id": "user_me", "name": "Service User", "role": "member"})
@@ -1706,7 +1748,8 @@ async def auth_sessions(request: Request, creds: Optional[HTTPAuthorizationCrede
         _ensure_schema(conn)
         token = (creds.credentials if creds else "").strip()[:200]
         if not _token_is_valid(conn, token):
-            _set_hp_event(request, kind="auth_sessions", points=0, trap_flags=["auth"], extra={"token_valid": False})
+            if not _is_monitor(request):
+                _set_hp_event(request, kind="auth_sessions", points=0, trap_flags=["auth"], extra={"token_valid": False})
             return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
         actor_id = _token_actor(conn, token) or _actor_id_from_request(request)
         rows = conn.execute(
@@ -1717,13 +1760,14 @@ async def auth_sessions(request: Request, creds: Optional[HTTPAuthorizationCrede
             {"id": r["session_id"], "started_at": r["started_at"], "ended_at": r["ended_at"], "stage": r["stage_max"]}
             for r in rows
         ]
-        _set_hp_event(
-            request,
-            kind="auth_sessions",
-            points=3,
-            trap_flags=["auth"],
-            extra={"session_count": len(sessions)},
-        )
+        if not _is_monitor(request):
+            _set_hp_event(
+                request,
+                kind="auth_sessions",
+                points=3,
+                trap_flags=["auth"],
+                extra={"session_count": len(sessions)},
+            )
     finally:
         conn.close()
     return JSONResponse({"sessions": sessions})
@@ -1741,15 +1785,17 @@ async def auth_sessions_delete(
         _ensure_schema(conn)
         token = (creds.credentials if creds else "").strip()[:200]
         if not _token_is_valid(conn, token):
-            _set_hp_event(request, kind="auth_sessions", points=0, trap_flags=["auth"], extra={"token_valid": False})
+            if not _is_monitor(request):
+                _set_hp_event(request, kind="auth_sessions", points=0, trap_flags=["auth"], extra={"token_valid": False})
             return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
-        _set_hp_event(
-            request,
-            kind="auth_sessions",
-            points=3,
-            trap_flags=["auth"],
-            extra={"deleted_session": session_id},
-        )
+        if not _is_monitor(request):
+            _set_hp_event(
+                request,
+                kind="auth_sessions",
+                points=3,
+                trap_flags=["auth"],
+                extra={"deleted_session": session_id},
+            )
     finally:
         conn.close()
     return JSONResponse({"status": "deleted", "id": session_id})
@@ -1763,17 +1809,21 @@ async def auth_apikeys_post(request: Request, creds: Optional[HTTPAuthorizationC
         _ensure_schema(conn)
         token = (creds.credentials if creds else "").strip()[:200]
         if not _token_is_valid(conn, token):
-            _set_hp_event(request, kind="auth_apikey", points=0, trap_flags=["auth"], extra={"token_valid": False})
+            if not _is_monitor(request):
+                _set_hp_event(request, kind="auth_apikey", points=0, trap_flags=["auth"], extra={"token_valid": False})
             return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
         actor_id = _token_actor(conn, token) or _actor_id_from_request(request)
-        api_key = _get_or_create_secret(conn, actor_id, "api_key", "ak_live")
-        _set_hp_event(
-            request,
-            kind="auth_apikey",
-            points=6,
-            trap_flags=["auth"],
-            extra={"api_key_fingerprint": _hash_text(api_key)},
-        )
+        if _is_monitor(request):
+            api_key = "ak_live_" + secrets.token_hex(8)
+        else:
+            api_key = _get_or_create_secret(conn, actor_id, "api_key", "ak_live")
+            _set_hp_event(
+                request,
+                kind="auth_apikey",
+                points=6,
+                trap_flags=["auth"],
+                extra={"api_key_fingerprint": _hash_text(api_key)},
+            )
     finally:
         conn.close()
     return JSONResponse({"api_key": api_key, "scopes": ["read", "write"]})
@@ -1787,17 +1837,21 @@ async def auth_apikeys_get(request: Request, creds: Optional[HTTPAuthorizationCr
         _ensure_schema(conn)
         token = (creds.credentials if creds else "").strip()[:200]
         if not _token_is_valid(conn, token):
-            _set_hp_event(request, kind="auth_apikey", points=0, trap_flags=["auth"], extra={"token_valid": False})
+            if not _is_monitor(request):
+                _set_hp_event(request, kind="auth_apikey", points=0, trap_flags=["auth"], extra={"token_valid": False})
             return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
         actor_id = _token_actor(conn, token) or _actor_id_from_request(request)
-        api_key = _get_or_create_secret(conn, actor_id, "api_key", "ak_live")
-        _set_hp_event(
-            request,
-            kind="auth_apikey",
-            points=3,
-            trap_flags=["auth"],
-            extra={"api_key_fingerprint": _hash_text(api_key)},
-        )
+        if _is_monitor(request):
+            api_key = "ak_live_" + secrets.token_hex(8)
+        else:
+            api_key = _get_or_create_secret(conn, actor_id, "api_key", "ak_live")
+            _set_hp_event(
+                request,
+                kind="auth_apikey",
+                points=3,
+                trap_flags=["auth"],
+                extra={"api_key_fingerprint": _hash_text(api_key)},
+            )
     finally:
         conn.close()
     return JSONResponse({"data": [{"id": "key_primary", "value": api_key, "status": "active"}]})
