@@ -24,6 +24,7 @@ APP_VERSION = os.getenv("HP_API_VERSION", "1.0.0")
 
 DB_PATH = os.getenv("HP_DB_PATH", "/data/honeypot.db")
 HP_SEED = os.getenv("HP_SEED", "CHANGE_ME_LONG_RANDOM_SEED")
+HONEYPOT_MONITOR_UA = os.getenv("HONEYPOT_MONITOR_UA", "HealthCheck/1.0")
 HP_PUBLIC_BASE_URL = os.getenv("HP_PUBLIC_BASE_URL", "http://127.0.0.1:8080").rstrip("/")
 
 SAMPLE_FILE_ID = "sample"
@@ -1090,6 +1091,9 @@ async def log_all_requests(request: Request, call_next):
         if request.url.path.startswith("/static/"):
             return
         if (request.headers.get("x-internal-monitor") or "").strip() == "1":
+            return
+        ua_hdr = (request.headers.get("user-agent") or "").strip()
+        if HONEYPOT_MONITOR_UA and ua_hdr == HONEYPOT_MONITOR_UA:
             return
 
         latency_ms = int((time.perf_counter() - t0) * 1000.0)
