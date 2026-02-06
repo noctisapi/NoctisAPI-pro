@@ -1174,6 +1174,9 @@ async def log_all_requests(request: Request, call_next):
                 if hp_event:
                     kind = hp_event.get("kind", kind)
 
+                if kind in ("token_used", "unknown_token") and not ua and ip in ("0.0.0.0", "127.0.0.1"):
+                    return
+
                 _insert_event(
                     conn,
                     req=request,
