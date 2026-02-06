@@ -52,6 +52,7 @@ This runbook covers:
      - `HP_IMAGE=ghcr.io/<ORG>/hp-app`
      - `HP_PUBLIC_HOST=<SUBDOMAIN>.duckdns.org`
      - `ACME_EMAIL=<you@example.com>`
+     - `HONEYPOT_PUBLIC_BASE_URL=http://app:8000` (internal URL for admin health checks)
 
 ## Phase 4: Certificates (Traefik + ACME)
 Traefik handles certificates automatically via ACME HTTP-01.

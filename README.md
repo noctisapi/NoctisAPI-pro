@@ -37,3 +37,4 @@ See `documentation/ops/vps/RUNBOOK.md` for a step‑by‑step VPS deployment wit
 ## Notes
 - Do not commit real secrets or GeoLite2 database files.
 - Use `.env.prod` on the server and keep it out of Git.
+ - For admin health checks, set `HONEYPOT_PUBLIC_BASE_URL=http://app:8000` in `.env.prod`.
