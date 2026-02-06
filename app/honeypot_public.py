@@ -1084,7 +1084,6 @@ async def log_all_requests(request: Request, call_next):
     skip_log = False
     try:
         response = await call_next(request)
-        return response
     except Exception as e:
         exc = e
         raise
@@ -1220,6 +1219,10 @@ async def log_all_requests(request: Request, call_next):
                 conn.commit()
             finally:
                 conn.close()
+
+    if response is None:
+        response = JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
+    return response
 
 
 @app.get("/health", tags=["Health"], response_class=JSONResponse)
