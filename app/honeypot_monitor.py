@@ -11,6 +11,7 @@ import httpx
 HoneypotDBFactory = Callable[[], sqlite3.Connection]
 
 HONEYPOT_PUBLIC_BASE_URL = os.getenv("HONEYPOT_PUBLIC_BASE_URL", "").strip().rstrip("/")
+HONEYPOT_MONITOR_BASE_URL = os.getenv("HONEYPOT_MONITOR_BASE_URL", "").strip().rstrip("/")
 HONEYPOT_CHECK_INTERVAL = max(15, int(os.getenv("HONEYPOT_CHECK_INTERVAL", "60")))
 HONEYPOT_CHECK_TIMEOUT = float(os.getenv("HONEYPOT_CHECK_TIMEOUT", "5"))
 HONEYPOT_CHECK_RETENTION_SECONDS = int(os.getenv("HONEYPOT_CHECK_RETENTION_SECONDS", str(7 * 24 * 3600)))
@@ -267,7 +268,9 @@ def _render_query(query: Optional[str], ctx: Dict[str, Any]) -> Dict[str, str]:
 class HoneypotAvailabilityMonitor:
     def __init__(self, db_factory: HoneypotDBFactory, base_url: Optional[str] = None, endpoints: Optional[List[str]] = None, checks: Optional[List[Dict[str, Any]]] = None) -> None:
         self.db_factory = db_factory
-        self.base_url = _sanitize_base(base_url if base_url is not None else HONEYPOT_PUBLIC_BASE_URL)
+        chosen = base_url if base_url is not None else (HONEYPOT_MONITOR_BASE_URL or HONEYPOT_PUBLIC_BASE_URL)
+        self.base_url = _sanitize_base(chosen)
+        self.public_base_url = _sanitize_base(HONEYPOT_PUBLIC_BASE_URL)
         self.checks = checks or DEFAULT_CHECKS
         self.endpoints = endpoints or [c["label"] for c in self.checks]
         self._check_map = {c["label"]: c for c in self.checks}
@@ -279,6 +282,10 @@ class HoneypotAvailabilityMonitor:
     @property
     def configured(self) -> bool:
         return bool(self.base_url and self.checks)
+
+    @property
+    def display_base_url(self) -> str:
+        return self.public_base_url or self.base_url
 
     def start(self) -> None:
         if not self.configured or self._thread is not None:
@@ -303,7 +310,7 @@ class HoneypotAvailabilityMonitor:
 
     def run_check(self, endpoint: Optional[str] = None) -> List[Dict[str, Any]] | Dict[str, Any]:
         if not self.configured:
-            raise RuntimeError("HONEYPOT_PUBLIC_BASE_URL/HONEYPOT_MONITORED_ENDPOINTS are not configured")
+            raise RuntimeError("HONEYPOT_MONITOR_BASE_URL/HONEYPOT_PUBLIC_BASE_URL are not configured")
 
         with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
             ctx = self._prepare_context(client)

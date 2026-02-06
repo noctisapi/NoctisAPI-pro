@@ -125,7 +125,7 @@ def internal_ready():
 def _honeypot_snapshot(conn: sqlite3.Connection, limit: int = 20) -> dict:
     summary = hp_get_summary(
         conn,
-        honeypot_monitor.base_url,
+        honeypot_monitor.display_base_url,
         honeypot_monitor.endpoints,
         limit=limit,
     )
@@ -174,7 +174,7 @@ def honeypot_health(limit: int = 20):
 @app.post("/admin/health/honeypot/recheck")
 def honeypot_recheck(endpoint: Optional[str] = None):
     if not honeypot_monitor.configured:
-        raise HTTPException(status_code=400, detail="HONEYPOT_PUBLIC_BASE_URL is not configured")
+        raise HTTPException(status_code=400, detail="HONEYPOT_MONITOR_BASE_URL is not configured")
     try:
         result = honeypot_monitor.run_check(endpoint=endpoint)
     except Exception as exc:
