@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
+{% set cases_enabled = "cases" in license_features %}
 <a class="back" href="/actor/{{ session.actor_id }}">&larr; Back to actor</a>
 <div class="page-head">
   <div>
@@ -34,7 +35,7 @@
     </div>
   </div>
   <div class="session-case-form">
-    {% if cases %}
+    {% if cases_enabled and cases %}
       <label for="caseSelect" class="muted">Attach evidence to case</label>
       <div class="case-picker">
         <select id="caseSelect">
@@ -47,13 +48,14 @@
         <button class="btn btn-primary" type="button" onclick="addSessionEvidence()">Add session to case</button>
         <button class="btn btn-outline" type="button" onclick="addSessionToLastCase()">Add session to last case</button>
       </div>
-      <p class="case-picker-help">Selecciona un caso y usa los botones de cada step para adjuntar evidencia granular.</p>
+      <p class="case-picker-help">Select a case and use step buttons to attach granular evidence.</p>
+    {% elif cases_enabled %}
+      <div class="case-empty">No open cases available for this session.</div>
     {% else %}
-      <div class="case-empty">No hay casos abiertos para adjuntar esta sesión.</div>
+      <div class="case-empty">Cases are available on the PRO plan.</div>
     {% endif %}
   </div>
 </div>
-
 <div id="sessionToast" class="toast" role="status" aria-live="polite"></div>
 
 <div class="card">
@@ -62,8 +64,8 @@
     <div class="table-toolbar">
       <button class="btn btn-ghost btn-small" type="button" onclick="selectAllSteps(true)">Select all</button>
       <button class="btn btn-ghost btn-small" type="button" onclick="selectAllSteps(false)">Clear</button>
-      <button class="btn btn-primary btn-small" type="button" onclick="addSelectedSteps()">Add selected to case</button>
-      <button class="btn btn-outline btn-small" type="button" onclick="addSelectedStepsToLastCase()">Add selected to last case</button>
+      <button class="btn btn-primary btn-small{% if not cases_enabled %} is-disabled{% endif %}" type="button" onclick="addSelectedSteps()" {% if not cases_enabled %}disabled title="PRO feature"{% endif %}>Add selected to case</button>
+      <button class="btn btn-outline btn-small{% if not cases_enabled %} is-disabled{% endif %}" type="button" onclick="addSelectedStepsToLastCase()" {% if not cases_enabled %}disabled title="PRO feature"{% endif %}>Add selected to last case</button>
       <span id="selectedCount" class="muted tiny-text"></span>
     </div>
     <table class="table table-sortable" id="stepsTable">
@@ -101,10 +103,12 @@
           <td><span class="tag">S{{ stage or 0 }}</span></td>
           <td>{{ s.response_status or '-' }}</td>
           <td class="step-actions">
-            {% if cases %}
+            {% if cases_enabled and cases %}
               <button class="btn btn-ghost btn-small" type="button" onclick="addStepEvidence({{ s.id }}, {{ s.seq }})">Add step to case</button>
-            {% else %}
+            {% elif cases_enabled %}
               <span class="muted tiny-text">No cases</span>
+            {% else %}
+              <span class="muted tiny-text">PRO</span>
             {% endif %}
           </td>
         </tr>
@@ -117,6 +121,7 @@
 <script>
   const sessionId = "{{ session.session_id }}";
   const toastEl = document.getElementById('sessionToast');
+  const casesEnabled = {{ 'true' if cases_enabled else 'false' }};
   const LAST_CASE_KEY = 'hp_last_case_id';
 
   function showSessionToast(message, type = 'info'){
@@ -142,6 +147,7 @@
   }
 
   async function addSessionEvidence(){
+    if(!casesEnabled){ showSessionToast('Cases are a PRO feature', 'info'); return; }
     const caseId = currentCaseId();
     if(!caseId){ showSessionToast('Select a case first', 'error'); return; }
     await submitEvidence(caseId, 'session', sessionId, 'Session');
@@ -149,6 +155,7 @@
   }
 
   async function addStepEvidence(stepId, seq){
+    if(!casesEnabled){ showSessionToast('Cases are a PRO feature', 'info'); return; }
     const caseId = currentCaseId();
     if(!caseId){ showSessionToast('Select a case first', 'error'); return; }
     await submitEvidence(caseId, 'step', stepId, `Step #${seq}`);
@@ -156,6 +163,7 @@
   }
 
   async function addSessionToLastCase(){
+    if(!casesEnabled){ showSessionToast('Cases are a PRO feature', 'info'); return; }
     const caseId = getLastCaseId();
     if(!caseId){ showSessionToast('No last case stored', 'error'); return; }
     await submitEvidence(caseId, 'session', sessionId, 'Session');
@@ -192,6 +200,7 @@
   }
 
   async function addSelectedSteps(){
+    if(!casesEnabled){ showSessionToast('Cases are a PRO feature', 'info'); return; }
     const caseId = currentCaseId();
     if(!caseId){ showSessionToast('Select a case first', 'error'); return; }
     await addSelectedStepsToCase(caseId);
@@ -199,6 +208,7 @@
   }
 
   async function addSelectedStepsToLastCase(){
+    if(!casesEnabled){ showSessionToast('Cases are a PRO feature', 'info'); return; }
     const caseId = getLastCaseId();
     if(!caseId){ showSessionToast('No last case stored', 'error'); return; }
     await addSelectedStepsToCase(caseId);
