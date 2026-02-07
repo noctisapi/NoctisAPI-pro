@@ -102,13 +102,38 @@ def main():
     tables = get_tables_with_actor_id(conn)
     updated_rows = defaultdict(int)
     for table, _cols in tables:
-        if table in ("events", "actors"):
+        if table in ("events", "actors", "actor_fingerprints"):
             continue
         for old_id, new_id in mapping.items():
             if old_id == new_id:
                 continue
             cur.execute(f"UPDATE {table} SET actor_id=? WHERE actor_id=?", (new_id, old_id))
             updated_rows[table] += cur.rowcount
+
+    # Handle actor_fingerprints separately (unique PK on actor_id)
+    if "actor_fingerprints" in {t for t, _ in tables}:
+        cur.execute("SELECT actor_id, fp_json, updated_at FROM actor_fingerprints")
+        fp_rows = [dict(r) for r in cur.fetchall()]
+        fp_by_actor = {r["actor_id"]: r for r in fp_rows}
+        for old_id, new_id in mapping.items():
+            if old_id == new_id:
+                continue
+            old_fp = fp_by_actor.get(old_id)
+            if not old_fp:
+                continue
+            new_fp = fp_by_actor.get(new_id)
+            if new_fp:
+                # Keep the newest updated_at if available
+                old_ts = old_fp.get("updated_at") or ""
+                new_ts = new_fp.get("updated_at") or ""
+                if old_ts and (not new_ts or old_ts > new_ts):
+                    cur.execute(
+                        "UPDATE actor_fingerprints SET fp_json=?, updated_at=? WHERE actor_id=?",
+                        (old_fp.get("fp_json"), old_fp.get("updated_at"), new_id),
+                    )
+                cur.execute("DELETE FROM actor_fingerprints WHERE actor_id=?", (old_id,))
+            else:
+                cur.execute("UPDATE actor_fingerprints SET actor_id=? WHERE actor_id=?", (new_id, old_id))
 
     # Rebuild actors table aggregated by new actor_id
     # Load all actors after updates to capture latest actor_id values
