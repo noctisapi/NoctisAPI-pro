@@ -16,5 +16,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . /app
 
+RUN useradd -r -u 10001 -g root appuser \
+    && chown -R appuser:root /data /app
+
 EXPOSE 8000
+USER appuser
 CMD ["uvicorn", "app.honeypot_public:app", "--host", "0.0.0.0", "--port", "8000"]

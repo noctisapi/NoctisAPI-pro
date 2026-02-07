@@ -13,6 +13,7 @@ import random
 import re
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, Tuple, List
+import sys
 
 from fastapi import FastAPI, Request, HTTPException, Depends, Security
 from fastapi.responses import JSONResponse, PlainTextResponse, HTMLResponse
@@ -24,6 +25,7 @@ APP_VERSION = os.getenv("HP_API_VERSION", "1.0.0")
 
 DB_PATH = os.getenv("HP_DB_PATH", "/data/honeypot.db")
 HP_SEED = os.getenv("HP_SEED", "CHANGE_ME_LONG_RANDOM_SEED")
+HP_REQUIRE_SEED = (os.getenv("HP_REQUIRE_SEED", "") or "").strip().lower() in ("1", "true", "yes")
 HONEYPOT_MONITOR_UA = os.getenv("HONEYPOT_MONITOR_UA", "HealthCheck/1.0")
 HP_PUBLIC_BASE_URL = os.getenv("HP_PUBLIC_BASE_URL", "http://127.0.0.1:8080").rstrip("/")
 HP_ACTOR_UA_MODE = os.getenv("HP_ACTOR_UA_MODE", "family").strip().lower()
@@ -107,6 +109,19 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
+
+
+def _warn_if_default_seed() -> None:
+    if HP_SEED == "CHANGE_ME_LONG_RANDOM_SEED":
+        msg = "[WARNING] HP_SEED is using the default placeholder. Set a strong, stable value in production."
+        print(msg, file=sys.stderr)
+        if HP_REQUIRE_SEED:
+            raise RuntimeError("HP_SEED must be set (HP_REQUIRE_SEED=1).")
+
+
+@app.on_event("startup")
+async def _startup_checks() -> None:
+    _warn_if_default_seed()
 
 
 def _utc_now_iso() -> str:
