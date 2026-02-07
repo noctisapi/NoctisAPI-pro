@@ -1,4 +1,4 @@
-# VPS Deployment (Ubuntu 22.04+)
+# ShadowAPI VPS Deployment (Ubuntu 22.04+)
 
 This is a concrete, repeatable deployment flow for a single VPS with Docker + Traefik (ACME).
 

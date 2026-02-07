@@ -1,4 +1,4 @@
-AUTOMATIONS (automatic behavior)
+ShadowAPI Automations (automatic behavior)
 
 This document describes what the system does automatically in two areas:
 sessions (event grouping) and campaign recompute. The source of truth is

@@ -1,4 +1,4 @@
-Validation checklist
+ShadowAPI validation checklist
 
 1) Ensure schema applied
 

@@ -18,7 +18,7 @@ from app import status_checks
 from app import licensing
 from app.honeypot_monitor import HoneypotAvailabilityMonitor, get_history as hp_get_history, get_summary as hp_get_summary
 
-APP_NAME = "honeypot-panel-mvp"
+APP_NAME = "shadowapi-panel"
 DB_PATH = os.getenv("HP_DB_PATH", "/data/honeypot.db")
 HP_GEOIP_DB = os.getenv("HP_GEOIP_DB", "/data/GeoLite2-Country.mmdb")
 

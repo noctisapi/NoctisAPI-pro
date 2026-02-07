@@ -1,8 +1,8 @@
-# Honeypot Features: Cases, Replay, Campaign
+# ShadowAPI Features: Cases, Replay, Campaign
 
 ## Overview
 
-Three new features added to the honeypot dashboard for advanced attack investigation and actor correlation:
+Three new features added to the ShadowAPI dashboard for advanced attack investigation and actor correlation:
 
 ### 1) **Cases** (Incident Management)
 

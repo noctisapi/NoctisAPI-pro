@@ -3,7 +3,7 @@
 ShadowAPI is a compact deception platform that exposes a realistic public API surface and an internal admin panel for observing, scoring, and grouping attacker behavior. It is designed for safe, non-executing interaction while providing rich telemetry for analysis.
 
 ## What?s Included
-- Core (always on): public honeypot API, internal/admin decoys, GeoIP flags, availability monitoring, basic admin (actors, sessions, API health), basic scoring + stages, bulk actor management, retention pruning, backup script, Docker + Traefik deploy
+- Core (always on): public ShadowAPI honeypot API, internal/admin decoys, GeoIP flags, availability monitoring, basic admin (actors, sessions, API health), basic scoring + stages, bulk actor management, retention pruning, backup script, Docker + Traefik deploy
 - Pro (paid): cases workflow, campaigns explorer + recompute, replay/evidence linkage, advanced scoring, file upload + analysis simulation pipeline
 
 ## Licensing

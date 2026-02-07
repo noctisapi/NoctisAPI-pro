@@ -1,6 +1,6 @@
-# hp-app Container Workflow
+# ShadowAPI Container Workflow
 
-This repo packages both the public honeypot API (`app/honeypot_public.py`) and the internal admin panel (`app/panel_mvp.py`) into a single Docker image. Docker Compose drives each environment while Alembic manages the SQLite schema.
+This repo packages both the public ShadowAPI honeypot API (`app/honeypot_public.py`) and the internal admin panel (`app/panel_mvp.py`) into a single Docker image. Docker Compose drives each environment while Alembic manages the SQLite schema.
 
 ## Repository Layout
 
@@ -144,7 +144,7 @@ Steps:
    - `HP_DB_PATH=/data/honeypot.db`
    - `DATABASE_URL=sqlite+pysqlite:////data/honeypot.db`
    - `LOG_LEVEL=info`
-   - `HP_PUBLIC_BASE_URL=<https://public-domain>` (used in download URLs exposed by the honeypot API)
+   - `HP_PUBLIC_BASE_URL=<https://public-domain>` (used in download URLs exposed by the ShadowAPI honeypot API)
    - `HP_GEOIP_DB=/app/data/GeoLite2-Country.mmdb`
    - `HP_SEED=<long random secret>` (stable seed for actor ids + secrets)
    - `HP_CAMPAIGN_MIN_FEATURES=4`
