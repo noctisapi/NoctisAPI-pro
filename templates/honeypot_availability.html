@@ -145,7 +145,11 @@
   {% else %}
     <div class="endpoint-grid" id="hp-endpoint-grid">
       {% for endpoint in availability.endpoints %}
-        <div class="endpoint-card" data-endpoint="{{ endpoint.endpoint|lower }}">
+        <div class="endpoint-card"
+             data-endpoint="{{ endpoint.endpoint|lower }}"
+             data-status="{{ endpoint.status_label|lower }}"
+             data-code="{{ endpoint.last.status_code if endpoint.last and endpoint.last.status_code is not none else '' }}"
+             data-error="{{ endpoint.last.error if endpoint.last and endpoint.last.error else '' }}">
           <div class="endpoint-head">
             <div>
               <div class="endpoint-path mono">{{ endpoint.endpoint }}</div>
@@ -192,6 +196,8 @@
               <div class="mono clip">
                 {% if endpoint.last and endpoint.last.error %}
                   {{ endpoint.last.error }}
+                {% elif endpoint.last and endpoint.last.ok == 0 and endpoint.last.status_code is not none %}
+                  HTTP {{ endpoint.last.status_code }}
                 {% else %}
                   -
                 {% endif %}
@@ -269,7 +275,30 @@
     filterInput.addEventListener('input', () => {
       const query = filterInput.value.trim().toLowerCase();
       document.querySelectorAll('#hp-endpoint-grid .endpoint-card').forEach((card) => {
-        const haystack = card.textContent.toLowerCase();
+        if (!query) {
+          card.style.display = '';
+          return;
+        }
+        const status = (card.dataset.status || '').toLowerCase();
+        const code = (card.dataset.code || '').toLowerCase();
+        const error = (card.dataset.error || '').toLowerCase();
+        const endpoint = (card.dataset.endpoint || '').toLowerCase();
+
+        if (query === 'up' || query === 'down') {
+          card.style.display = status === query ? '' : 'none';
+          return;
+        }
+        if (query.startsWith('status:')) {
+          const val = query.split(':', 2)[1];
+          card.style.display = status === val ? '' : 'none';
+          return;
+        }
+        if (query.startsWith('code:')) {
+          const val = query.split(':', 2)[1];
+          card.style.display = code === val ? '' : 'none';
+          return;
+        }
+        const haystack = `${endpoint} ${status} ${code} ${error}`.toLowerCase();
         card.style.display = haystack.includes(query) ? '' : 'none';
       });
     });

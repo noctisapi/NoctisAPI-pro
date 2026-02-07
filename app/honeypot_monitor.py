@@ -351,6 +351,8 @@ class HoneypotAvailabilityMonitor:
             status_code = resp.status_code
             expected = check.get("expected") or {200}
             ok = status_code is not None and status_code in expected
+            if not ok and not error:
+                error = f"HTTP {status_code}" if status_code is not None else "No response"
         except Exception as exc:
             error = str(exc)
 
