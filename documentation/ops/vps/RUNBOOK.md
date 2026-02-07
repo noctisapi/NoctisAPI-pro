@@ -87,6 +87,19 @@ MaxMind GeoLite2 is not committed to git. Download it on the server:
 3. Ensure `.env.prod` uses:
    - `HP_GEOIP_DB=/app/data/GeoLite2-Country.mmdb`
 
+## Phase 5.2: Data Retention (TTL)
+1. Copy retention cron:
+   - `cp /opt/hp-app/ops/cron/yourapp-retention /etc/cron.d/yourapp-retention`
+2. Optional env overrides in `/etc/cron.d/yourapp-retention` or `/etc/environment`:
+   - `HP_RETENTION_EVENTS_DAYS=30`
+   - `HP_RETENTION_SESSIONS_DAYS=30`
+   - `HP_RETENTION_STEPS_DAYS=30`
+   - `HP_RETENTION_CHECKS_DAYS=14`
+   - `HP_RETENTION_TOKENS_DAYS=90`
+   - `HP_RETENTION_JOBS_DAYS=30`
+3. Dry-run manually:
+   - `python /opt/hp-app/scripts/prune_retention.py --db /data/honeypot.db --dry-run`
+
 ## Phase 6: Repeatable Deployment on New VPS
 Use the same steps with these minimal inputs:
 - Repo URL

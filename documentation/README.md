@@ -34,8 +34,34 @@ The dev stack mount-binds the repo into `/app`, exposes 8000/9001, reuses the `h
 
 - `backup_sqlite.sh` runs on the host (no container shell required). It uses a disposable `alpine:3` container to execute `sqlite3 .backup`, writes the snapshot to `./backups`, and prunes files older than `KEEP_DAYS` (default 14).
 - Copy `ops/cron/yourapp-backup` to `/etc/cron.d/yourapp-backup`, adjust the paths (e.g., `BACKUP_DIR=/var/backups/honey-app` and script path `/opt/hp-app/backup_sqlite.sh`), and cron will invoke the backup daily at 02:15 UTC.
+ - Set `VERIFY_INTEGRITY=1` to run `PRAGMA integrity_check` on each backup file.
 
 Both script and cron file accept overrides via `DATA_VOLUME`, `BACKUP_DIR`, `APP_DB_PATH`, and `KEEP_DAYS`.
+
+## Data Retention (TTL)
+
+Use `scripts/prune_retention.py` to delete old rows from high-volume tables.
+
+Defaults (days):
+
+- `HP_RETENTION_EVENTS_DAYS=30`
+- `HP_RETENTION_SESSIONS_DAYS=30`
+- `HP_RETENTION_STEPS_DAYS=30`
+- `HP_RETENTION_CHECKS_DAYS=14`
+- `HP_RETENTION_TOKENS_DAYS=90`
+- `HP_RETENTION_JOBS_DAYS=30`
+
+Dry-run:
+
+```
+python /opt/hp-app/scripts/prune_retention.py --db /data/honeypot.db --dry-run
+```
+
+Apply:
+
+```
+python /opt/hp-app/scripts/prune_retention.py --db /data/honeypot.db
+```
 
 ## Actor Merge (UA Family)
 
