@@ -110,30 +110,24 @@ def main():
             cur.execute(f"UPDATE {table} SET actor_id=? WHERE actor_id=?", (new_id, old_id))
             updated_rows[table] += cur.rowcount
 
-    # Handle actor_fingerprints separately (unique PK on actor_id)
+    # Handle actor_fingerprints separately (unique PK on actor_id) by rebuilding
+    fp_merged = {}
     if "actor_fingerprints" in {t for t, _ in tables}:
         cur.execute("SELECT actor_id, fp_json, updated_at FROM actor_fingerprints")
         fp_rows = [dict(r) for r in cur.fetchall()]
-        fp_by_actor = {r["actor_id"]: r for r in fp_rows}
-        for old_id, new_id in mapping.items():
-            if old_id == new_id:
+        for row in fp_rows:
+            old_id = row.get("actor_id")
+            new_id = mapping.get(old_id, old_id)
+            existing = fp_merged.get(new_id)
+            if not existing:
+                fp_merged[new_id] = row
+                fp_merged[new_id]["actor_id"] = new_id
                 continue
-            old_fp = fp_by_actor.get(old_id)
-            if not old_fp:
-                continue
-            new_fp = fp_by_actor.get(new_id)
-            if new_fp:
-                # Keep the newest updated_at if available
-                old_ts = old_fp.get("updated_at") or ""
-                new_ts = new_fp.get("updated_at") or ""
-                if old_ts and (not new_ts or old_ts > new_ts):
-                    cur.execute(
-                        "UPDATE actor_fingerprints SET fp_json=?, updated_at=? WHERE actor_id=?",
-                        (old_fp.get("fp_json"), old_fp.get("updated_at"), new_id),
-                    )
-                cur.execute("DELETE FROM actor_fingerprints WHERE actor_id=?", (old_id,))
-            else:
-                cur.execute("UPDATE actor_fingerprints SET actor_id=? WHERE actor_id=?", (new_id, old_id))
+            old_ts = row.get("updated_at") or ""
+            new_ts = existing.get("updated_at") or ""
+            if old_ts and (not new_ts or old_ts > new_ts):
+                fp_merged[new_id] = row
+                fp_merged[new_id]["actor_id"] = new_id
 
     # Rebuild actors table aggregated by new actor_id
     # Load all actors after updates to capture latest actor_id values
@@ -181,6 +175,8 @@ def main():
         for t, c in updated_rows.items():
             if c:
                 print(f"Would update {t}: {c}")
+        if fp_merged:
+            print(f"Would merge actor_fingerprints: {len(fp_rows)} -> {len(fp_merged)}")
         print(f"Would merge actors: {len(actor_rows)} -> {len(merged_rows)}")
         conn.rollback()
         return 0
@@ -194,6 +190,15 @@ def main():
             f"INSERT INTO actors({', '.join(cols)}) VALUES({placeholders})",
             tuple(row.get(c) for c in cols),
         )
+
+    # Rebuild actor_fingerprints after updates
+    if fp_merged:
+        cur.execute("DELETE FROM actor_fingerprints")
+        for row in fp_merged.values():
+            cur.execute(
+                "INSERT INTO actor_fingerprints(actor_id, fp_json, updated_at) VALUES(?,?,?)",
+                (row.get("actor_id"), row.get("fp_json"), row.get("updated_at")),
+            )
 
     # Deduplicate case_actors and campaign_actor_links after updates
     cur.execute("DELETE FROM case_actors WHERE rowid NOT IN (SELECT MIN(rowid) FROM case_actors GROUP BY case_id, actor_id)")
