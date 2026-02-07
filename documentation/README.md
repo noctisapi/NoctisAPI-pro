@@ -12,6 +12,13 @@ This repo packages both the public honeypot API (`app/honeypot_public.py`) and t
 - `.env.dev` / `.env.prod.example`  environment defaults (set both `HP_DB_PATH` and `DATABASE_URL`).
 - `Makefile`  common Docker/Alembic targets.
 
+## Licensing
+
+Feature availability is controlled by `HP_LICENSE_TIER`.
+
+- `core` (default): hides PRO UI sections and returns 404 for PRO API endpoints.
+- `pro`: enables cases, campaigns, replay/evidence linkage, advanced scoring, and the file upload + analysis pipeline.
+
 ## Local Development
 
 1. Install Docker Engine + Compose plugin.

@@ -20,6 +20,8 @@ from fastapi.responses import JSONResponse, PlainTextResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
+from app import licensing
+
 APP_TITLE = os.getenv("HP_API_TITLE", "Account Service API")
 APP_VERSION = os.getenv("HP_API_VERSION", "1.0.0")
 
@@ -194,6 +196,11 @@ def _normalize_ua(ua: str) -> str:
 
 def _is_monitor(req: Request) -> bool:
     return (req.headers.get("x-internal-monitor") or "").strip() == "1"
+
+
+def _require_feature(feature: licensing.Feature) -> None:
+    if not licensing.has_feature(feature):
+        raise HTTPException(status_code=404, detail="Not found")
 
 
 def _actor_id_from_request(req: Request) -> str:
@@ -2379,6 +2386,7 @@ async def root_shell(request: Request):
 
 @app.post("/files", tags=["Files"], response_class=JSONResponse)
 async def files_upload(request: Request):
+    _require_feature(licensing.Feature.FILE_PIPELINE)
     await _sleep_jitter()
     filename, raw = await _extract_upload(request)
     conn = _db()
@@ -2400,6 +2408,7 @@ async def files_upload(request: Request):
 
 @app.get("/files/lookup", tags=["Files"], response_class=JSONResponse)
 async def files_lookup(request: Request):
+    _require_feature(licensing.Feature.FILE_PIPELINE)
     await _sleep_jitter()
     sha256 = (request.query_params.get("sha256") or "").strip()
     if not sha256:
@@ -2425,6 +2434,7 @@ async def files_lookup(request: Request):
 
 @app.get("/files/samples", tags=["Files"], response_class=JSONResponse)
 async def files_samples(request: Request):
+    _require_feature(licensing.Feature.FILE_PIPELINE)
     await _sleep_jitter()
     conn = _db()
     try:
@@ -2447,6 +2457,7 @@ async def files_samples(request: Request):
 
 @app.get("/files/{file_id}", tags=["Files"], response_class=JSONResponse)
 async def files_meta(file_id: str, request: Request):
+    _require_feature(licensing.Feature.FILE_PIPELINE)
     await _sleep_jitter()
     conn = _db()
     try:
@@ -2483,6 +2494,7 @@ async def files_meta(file_id: str, request: Request):
 
 @app.get("/files/{file_id}/analysis", tags=["Files"], response_class=JSONResponse)
 async def files_analysis(file_id: str, request: Request):
+    _require_feature(licensing.Feature.FILE_PIPELINE)
     await _sleep_jitter()
     conn = _db()
     try:
@@ -2510,6 +2522,7 @@ async def files_analysis(file_id: str, request: Request):
 
 @app.get("/files/{file_id}/download", tags=["Files"], response_class=PlainTextResponse)
 async def files_download(file_id: str, request: Request):
+    _require_feature(licensing.Feature.FILE_PIPELINE)
     await _sleep_jitter()
     _set_hp_event(request, kind="files_download", points=3, trap_flags=["files"], extra={"file_id": file_id})
     payload = f"FILE:{file_id}\nDATA:{secrets.token_hex(32)}\n"
@@ -2535,6 +2548,7 @@ async def jobs_status(job_id: str, request: Request):
 
 @app.post("/import", tags=["Files"], response_class=JSONResponse)
 async def upload_import(request: Request):
+    _require_feature(licensing.Feature.FILE_PIPELINE)
     await _sleep_jitter()
     filename, raw = await _extract_upload(request)
     conn = _db()
@@ -2557,6 +2571,7 @@ async def upload_import(request: Request):
 
 @app.post("/admin/restore", tags=["Internal"], response_class=JSONResponse)
 async def upload_restore(request: Request):
+    _require_feature(licensing.Feature.FILE_PIPELINE)
     await _sleep_jitter()
     filename, raw = await _extract_upload(request)
     conn = _db()
@@ -2579,6 +2594,7 @@ async def upload_restore(request: Request):
 
 @app.post("/plugins/install", tags=["Internal"], response_class=JSONResponse)
 async def upload_plugin(request: Request):
+    _require_feature(licensing.Feature.FILE_PIPELINE)
     await _sleep_jitter()
     filename, raw = await _extract_upload(request)
     conn = _db()
@@ -2601,6 +2617,7 @@ async def upload_plugin(request: Request):
 
 @app.post("/themes/upload", tags=["Internal"], response_class=JSONResponse)
 async def upload_theme(request: Request):
+    _require_feature(licensing.Feature.FILE_PIPELINE)
     await _sleep_jitter()
     filename, raw = await _extract_upload(request)
     conn = _db()

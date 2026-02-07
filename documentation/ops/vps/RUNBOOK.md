@@ -53,11 +53,12 @@ This runbook covers:
      - `HP_PUBLIC_HOST=<SUBDOMAIN>.duckdns.org`
      - `ACME_EMAIL=<you@example.com>`
      - `HONEYPOT_PUBLIC_BASE_URL=https://<SUBDOMAIN>.duckdns.org` (public URL shown in admin)
-     - `HONEYPOT_MONITOR_BASE_URL=http://traefik:8081` (internal monitor URL, no dashboard noise)
-     - `HP_SEED=<long random secret>` (stable actor IDs + secrets)
-     - `HP_REQUIRE_SEED=1` (optional, fail startup if HP_SEED is missing/placeholder)
-     - `HP_ACTOR_UA_MODE=family` (recommended; `ip` or `full` also supported)
-     - `HP_PUBLIC_RATELIMIT_AVG=120` / `HP_PUBLIC_RATELIMIT_BURST=240` (optional; Traefik rate limit)
+    - `HONEYPOT_MONITOR_BASE_URL=http://traefik:8081` (internal monitor URL, no dashboard noise)
+    - `HP_SEED=<long random secret>` (stable actor IDs + secrets)
+    - `HP_REQUIRE_SEED=1` (optional, fail startup if HP_SEED is missing/placeholder)
+    - `HP_ACTOR_UA_MODE=family` (recommended; `ip` or `full` also supported)
+    - `HP_LICENSE_TIER=core` (use `pro` to enable cases, campaigns, replay/evidence, advanced scoring, and file pipeline)
+    - `HP_PUBLIC_RATELIMIT_AVG=120` / `HP_PUBLIC_RATELIMIT_BURST=240` (optional; Traefik rate limit)
 
 ## Phase 4: Certificates (Traefik + ACME)
 Traefik handles certificates automatically via ACME HTTP-01.

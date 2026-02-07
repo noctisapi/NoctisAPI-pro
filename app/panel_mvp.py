@@ -15,6 +15,7 @@ from fastapi.templating import Jinja2Templates
 from typing import Optional
 
 from app import status_checks
+from app import licensing
 from app.honeypot_monitor import HoneypotAvailabilityMonitor, get_history as hp_get_history, get_summary as hp_get_summary
 
 APP_NAME = "honeypot-panel-mvp"
@@ -24,6 +25,15 @@ HP_GEOIP_DB = os.getenv("HP_GEOIP_DB", "/data/GeoLite2-Country.mmdb")
 app = FastAPI(title=APP_NAME)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
+
+
+def _license_context() -> dict:
+    return licensing.feature_flags()
+
+
+def _require_feature(feature: licensing.Feature) -> None:
+    if not licensing.has_feature(feature):
+        raise HTTPException(status_code=403, detail="feature not available")
 
 CAMPAIGN_JOB_LOCK = threading.Lock()
 
@@ -158,7 +168,10 @@ def honeypot_availability_page(request: Request, limit: int = 20):
         snapshot = _honeypot_snapshot(conn, limit=max(1, min(limit, 200)))
     finally:
         conn.close()
-    return templates.TemplateResponse("honeypot_availability.html", {"request": request, "availability": snapshot})
+    return templates.TemplateResponse(
+        "honeypot_availability.html",
+        {"request": request, "availability": snapshot, **_license_context()},
+    )
 
 
 @app.get("/admin/health/honeypot")
@@ -747,7 +760,10 @@ def dashboard(request: Request):
             a["err_consecutive"] = err_consec
             a["err_badge"] = f"err×{err_total}" if err_total > 0 else ""
 
-        return templates.TemplateResponse("dashboard.html", {"request": request, "actors": actors, "max_stage": max_stage})
+        return templates.TemplateResponse(
+            "dashboard.html",
+            {"request": request, "actors": actors, "max_stage": max_stage, **_license_context()},
+        )
     finally:
         conn.close()
 
@@ -755,19 +771,23 @@ def dashboard(request: Request):
 # -------- Dashboard management endpoints: Cases / Sessions / Campaigns --------
 @app.get("/dashboard/cases", response_class=HTMLResponse)
 def dashboard_cases(request: Request):
+    _require_feature(licensing.Feature.CASES)
     conn = db()
     try:
         ensure_schema(conn)
         cur = conn.cursor()
         cur.execute("SELECT id, title, severity, status, created_at, updated_at FROM cases ORDER BY updated_at DESC LIMIT 200")
         cases = [dict(r) for r in cur.fetchall()]
-        return templates.TemplateResponse("cases.html", {"request": request, "cases": cases})
+        return templates.TemplateResponse(
+            "cases.html", {"request": request, "cases": cases, **_license_context()}
+        )
     finally:
         conn.close()
 
 
 @app.get("/dashboard/cases/{case_id}", response_class=HTMLResponse)
 def dashboard_case_detail(case_id: int, request: Request):
+    _require_feature(licensing.Feature.CASES)
     conn = db()
     try:
         cur = conn.cursor()
@@ -822,6 +842,7 @@ def dashboard_case_detail(case_id: int, request: Request):
             "replay_sessions": replay_sessions,
             "replay_steps": replay_steps,
         }
+        context.update(_license_context())
         return templates.TemplateResponse("case_detail.html", context)
     finally:
         conn.close()
@@ -829,6 +850,7 @@ def dashboard_case_detail(case_id: int, request: Request):
 
 @app.post("/dashboard/cases")
 def create_case(request: Request):
+    _require_feature(licensing.Feature.CASES)
     title = request.query_params.get("title") or "Untitled"
     description = request.query_params.get("description") or ""
     severity = request.query_params.get("severity") or "low"
@@ -847,6 +869,7 @@ def create_case(request: Request):
 
 @app.post("/dashboard/cases/{case_id}/rename")
 def rename_case(case_id: int, request: Request):
+    _require_feature(licensing.Feature.CASES)
     title = (request.query_params.get("title") or "").strip()
     if not title:
         raise HTTPException(status_code=400, detail="title required")
@@ -865,6 +888,7 @@ def rename_case(case_id: int, request: Request):
 
 @app.post("/dashboard/cases/{case_id}/actors")
 def add_actor_to_case(case_id: int, request: Request):
+    _require_feature(licensing.Feature.CASES)
     actor_id = request.query_params.get("actor_id")
     role = request.query_params.get("role") or "related"
     if not actor_id:
@@ -882,6 +906,7 @@ def add_actor_to_case(case_id: int, request: Request):
 
 @app.post("/dashboard/cases/{case_id}/actors/remove")
 def remove_actor_from_case(case_id: int, request: Request):
+    _require_feature(licensing.Feature.CASES)
     actor_id = (request.query_params.get("actor_id") or "").strip()
     if not actor_id:
         raise HTTPException(status_code=400, detail="actor_id required")
@@ -899,6 +924,7 @@ def remove_actor_from_case(case_id: int, request: Request):
 
 @app.post("/dashboard/cases/{case_id}/evidence")
 def add_case_evidence_entry(case_id: int, request: Request):
+    _require_feature(licensing.Feature.CASES)
     ref_type = (request.query_params.get("ref_type") or "").strip().lower()
     ref_id = (request.query_params.get("ref_id") or "").strip()
     note = request.query_params.get("note") or ""
@@ -936,6 +962,7 @@ def add_case_evidence_entry(case_id: int, request: Request):
 
 @app.post("/dashboard/cases/{case_id}/evidence/remove")
 def remove_case_evidence_entry(case_id: int, request: Request):
+    _require_feature(licensing.Feature.CASES)
     evidence_id = (request.query_params.get("evidence_id") or "").strip()
     if not evidence_id:
         raise HTTPException(status_code=400, detail="evidence_id required")
@@ -953,18 +980,23 @@ def remove_case_evidence_entry(case_id: int, request: Request):
 
 @app.get("/dashboard/actor_add_case/{actor_id}")
 def actor_add_case_ui(actor_id: str, request: Request):
+    _require_feature(licensing.Feature.CASES)
     conn = db()
     try:
         cur = conn.cursor()
         cur.execute("SELECT id, title, status, severity, updated_at FROM cases WHERE status='open' ORDER BY updated_at DESC")
         cases = [dict(r) for r in cur.fetchall()]
-        return templates.TemplateResponse("actor_add_case_modal.html", {"request": request, "actor_id": actor_id, "cases": cases})
+        return templates.TemplateResponse(
+            "actor_add_case_modal.html",
+            {"request": request, "actor_id": actor_id, "cases": cases, **_license_context()},
+        )
     finally:
         conn.close()
 
 
 @app.post("/dashboard/cases/quick")
 def quick_create_case_and_add_actor(request: Request):
+    _require_feature(licensing.Feature.CASES)
     title = request.query_params.get("title") or "Auto Case"
     actor_id = request.query_params.get("actor_id")
     if not actor_id:
@@ -987,6 +1019,7 @@ def quick_create_case_and_add_actor(request: Request):
 
 @app.delete("/dashboard/cases/{case_id}")
 def delete_case(case_id: int):
+    _require_feature(licensing.Feature.CASES)
     conn = db()
     try:
         cur = conn.cursor()
@@ -1155,7 +1188,9 @@ def deleted_actors(request: Request):
             a["stage"] = stage_from_score(int(a.get("score") or 0))
             a["last_seen_fmt"] = fmt_ts(a["last_seen"])
             a["first_seen_fmt"] = fmt_ts(a["first_seen"])
-        return templates.TemplateResponse("actors_deleted.html", {"request": request, "actors": rows})
+        return templates.TemplateResponse(
+            "actors_deleted.html", {"request": request, "actors": rows, **_license_context()}
+        )
     finally:
         conn.close()
 
@@ -1191,6 +1226,8 @@ def actor_sessions(actor_id: str, request: Request):
             "sessions": rows,
             "debug": {"event_count": event_count, "sessions_count": len(rows)},
         }
+        context.update(_license_context())
+        context.update(_license_context())
         return templates.TemplateResponse("actor_sessions.html", context)
     finally:
         conn.close()
@@ -1219,15 +1256,21 @@ def session_detail(session_id: str, request: Request):
             sess["duration_seconds"] = None
         cur.execute("SELECT * FROM session_steps WHERE session_id=? ORDER BY seq ASC", (session_id,))
         steps = [dict(r) for r in cur.fetchall()]
-        cur.execute("SELECT id, title, severity, status FROM cases WHERE status='open' ORDER BY updated_at DESC LIMIT 200")
-        open_cases = [dict(r) for r in cur.fetchall()]
-        return templates.TemplateResponse("session_detail.html", {"request": request, "session": sess, "steps": steps, "cases": open_cases})
+        open_cases = []
+        if licensing.has_feature(licensing.Feature.CASES):
+            cur.execute("SELECT id, title, severity, status FROM cases WHERE status='open' ORDER BY updated_at DESC LIMIT 200")
+            open_cases = [dict(r) for r in cur.fetchall()]
+        return templates.TemplateResponse(
+            "session_detail.html",
+            {"request": request, "session": sess, "steps": steps, "cases": open_cases, **_license_context()},
+        )
     finally:
         conn.close()
 
 
 @app.post("/dashboard/campaigns/recompute")
 def recompute_campaigns():
+    _require_feature(licensing.Feature.CAMPAIGNS)
     """
     Agrupa actores con alto overlap en paths recientes usando un Jaccard robusto.
     Evita falsos positivos exigiendo suficientes caminos compartidos y limpia campa??as previas.
@@ -1272,6 +1315,8 @@ def recompute_campaigns():
 
 @app.get("/dashboard/campaigns/recompute/status")
 def recompute_campaigns_status():
+    if not licensing.has_feature(licensing.Feature.CAMPAIGNS):
+        return {"status": "disabled"}
     conn = db()
     try:
         if not _campaign_jobs_table_exists(conn):
@@ -1286,6 +1331,7 @@ def recompute_campaigns_status():
 
 @app.get("/dashboard/campaigns", response_class=HTMLResponse)
 def list_campaigns(request: Request):
+    _require_feature(licensing.Feature.CAMPAIGNS)
     conn = db()
     try:
         cur = conn.cursor()
@@ -1304,7 +1350,9 @@ def list_campaigns(request: Request):
             """
         )
         rows = [dict(r) for r in cur.fetchall()]
-        return templates.TemplateResponse("campaigns.html", {"request": request, "campaigns": rows})
+        return templates.TemplateResponse(
+            "campaigns.html", {"request": request, "campaigns": rows, **_license_context()}
+        )
     finally:
         conn.close()
 
@@ -1353,6 +1401,7 @@ def debug_db():
 
 @app.get("/dashboard/campaigns/{campaign_id}", response_class=HTMLResponse)
 def campaign_detail(campaign_id: str, request: Request):
+    _require_feature(licensing.Feature.CAMPAIGNS)
     conn = db()
     try:
         cur = conn.cursor()
@@ -1436,13 +1485,18 @@ def campaign_detail(campaign_id: str, request: Request):
                 geo_reader.close()
             except Exception:
                 pass
-        return templates.TemplateResponse("campaign_detail.html", {"request": request, "campaign": camp, "links": links})
+        return templates.TemplateResponse(
+            "campaign_detail.html",
+            {"request": request, "campaign": camp, "links": links, **_license_context()},
+        )
     finally:
         conn.close()
 
 
 @app.get("/dashboard/actors/{actor_id}/campaign")
 def actor_campaign(actor_id: str):
+    if not licensing.has_feature(licensing.Feature.CAMPAIGNS):
+        return {"campaign": None}
     conn = db()
     try:
         cur = conn.cursor()
@@ -1564,24 +1618,25 @@ def actor(actor_id: str, request: Request):
             a["latest_session_stage"] = actor_replay["stage_max"]
 
         actor_campaign = None
-        cur.execute(
-            """
-            SELECT c.campaign_id, c.label, c.representative_session_id, l.confidence, l.reasons_json
-            FROM campaign_actor_links l
-            JOIN campaigns c ON c.campaign_id = l.campaign_id
-            WHERE l.actor_id=?
-            ORDER BY l.confidence DESC
-            LIMIT 1
-            """,
-            (actor_id,),
-        )
-        campaign_row = cur.fetchone()
-        if campaign_row:
-            actor_campaign = dict(campaign_row)
-            try:
-                actor_campaign["reasons"] = json.loads(actor_campaign.get("reasons_json") or "{}")
-            except Exception:
-                actor_campaign["reasons"] = {}
+        if licensing.has_feature(licensing.Feature.CAMPAIGNS):
+            cur.execute(
+                """
+                SELECT c.campaign_id, c.label, c.representative_session_id, l.confidence, l.reasons_json
+                FROM campaign_actor_links l
+                JOIN campaigns c ON c.campaign_id = l.campaign_id
+                WHERE l.actor_id=?
+                ORDER BY l.confidence DESC
+                LIMIT 1
+                """,
+                (actor_id,),
+            )
+            campaign_row = cur.fetchone()
+            if campaign_row:
+                actor_campaign = dict(campaign_row)
+                try:
+                    actor_campaign["reasons"] = json.loads(actor_campaign.get("reasons_json") or "{}")
+                except Exception:
+                    actor_campaign["reasons"] = {}
 
         return templates.TemplateResponse(
             "actor.html",
@@ -1592,6 +1647,7 @@ def actor(actor_id: str, request: Request):
                 "events": events,
                 "actor_replay": actor_replay,
                 "actor_campaign": actor_campaign,
+                **_license_context(),
             },
         )
     finally:
