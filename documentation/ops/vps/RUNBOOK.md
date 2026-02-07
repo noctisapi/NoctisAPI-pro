@@ -90,7 +90,9 @@ MaxMind GeoLite2 is not committed to git. Download it on the server:
 ## Phase 5.2: Data Retention (TTL)
 1. Copy retention cron:
    - `cp /opt/hp-app/ops/cron/yourapp-retention /etc/cron.d/yourapp-retention`
+   - The cron enables retention by default (`HP_RETENTION_ENABLE=1`), runs daily at 03:15 UTC.
 2. Optional env overrides in `/etc/cron.d/yourapp-retention` or `/etc/environment`:
+   - `HP_RETENTION_ENABLE=0` (disable retention)
    - `HP_RETENTION_EVENTS_DAYS=30`
    - `HP_RETENTION_SESSIONS_DAYS=30`
    - `HP_RETENTION_STEPS_DAYS=30`

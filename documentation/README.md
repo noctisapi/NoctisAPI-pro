@@ -51,6 +51,8 @@ Defaults (days):
 - `HP_RETENTION_TOKENS_DAYS=90`
 - `HP_RETENTION_JOBS_DAYS=30`
 
+Retention is enabled by default via cron (`HP_RETENTION_ENABLE=1`). Set `HP_RETENTION_ENABLE=0` to disable.
+
 Dry-run:
 
 ```

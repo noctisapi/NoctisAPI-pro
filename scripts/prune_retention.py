@@ -25,6 +25,10 @@ def parse_args():
 
 def main():
     args = parse_args()
+    enable = (os.getenv("HP_RETENTION_ENABLE", "1") or "1").strip().lower()
+    if enable in ("0", "false", "no"):
+        print("[skip] retention disabled via HP_RETENTION_ENABLE=0")
+        return 0
     conn = sqlite3.connect(args.db)
     cur = conn.cursor()
 
