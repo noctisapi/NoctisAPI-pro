@@ -37,6 +37,37 @@ The dev stack mount-binds the repo into `/app`, exposes 8000/9001, reuses the `h
 
 Both script and cron file accept overrides via `DATA_VOLUME`, `BACKUP_DIR`, `APP_DB_PATH`, and `KEEP_DAYS`.
 
+## Actor Merge (UA Family)
+
+When you switch actor identity to `IP + UA family`, you may want to retroactively merge existing actors.
+
+Script:
+
+- `scripts/merge_actors_by_ua_family.py`
+
+What it does:
+
+- Rewrites `actor_id` across `events`, `sessions`, `tokens`, `issued_secrets`, `case_actors`, and `campaign_actor_links`.
+- Rebuilds `actors` and `actor_fingerprints` with merged rows.
+- Deduplicates `case_actors` and `campaign_actor_links`.
+
+Usage (run inside the app container so it can access `/data/honeypot.db`):
+
+```
+# dry run
+docker exec compose-app-1 python /app/scripts/merge_actors_by_ua_family.py \
+  --db /data/honeypot.db --seed "<HP_SEED>" --dry-run
+
+# apply
+docker exec compose-app-1 python /app/scripts/merge_actors_by_ua_family.py \
+  --db /data/honeypot.db --seed "<HP_SEED>"
+```
+
+Notes:
+
+- Use the same `HP_SEED` that the app uses in production.
+- The merge is not reversible; take a backup before applying.
+
 ## Production Image Build & Push (GHCR)
 
 Authenticate once:
