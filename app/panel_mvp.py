@@ -695,6 +695,7 @@ def dashboard(request: Request):
             FROM actors a
             LEFT JOIN last_events le ON le.actor_id = a.actor_id
             WHERE COALESCE(a.lifecycle_state, 'active') != 'deleted'
+              AND EXISTS (SELECT 1 FROM events e WHERE e.actor_id = a.actor_id)
             ORDER BY a.last_seen DESC
             LIMIT 200
             """
