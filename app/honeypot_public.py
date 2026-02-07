@@ -1344,6 +1344,14 @@ async def issue_token(request: Request):
     summary="Get current account",
 )
 async def account_me(request: Request, token: str = Depends(require_bearer)):
+    if _is_monitor(request):
+        return {
+            "id": "acc_monitor",
+            "plan": "standard",
+            "status": "active",
+            "risk": {"score": 0, "tier": 0},
+        }
+
     conn = _db()
     try:
         _ensure_schema(conn)
@@ -1364,6 +1372,16 @@ async def account_me(request: Request, token: str = Depends(require_bearer)):
 
 @app.get("/v1/keys", tags=["Account"], response_class=JSONResponse, summary="List API keys")
 async def list_keys(request: Request, token: str = Depends(require_bearer)):
+    if _is_monitor(request):
+        api_key = "ak_live_" + secrets.token_hex(8)
+        return {
+            "api_key": api_key,
+            "scope": "internal",
+            "hint": "Use X-API-Key header for /internal/*",
+            "backup_token": None,
+            "backup_hint": "Backup token appears after more activity",
+        }
+
     conn = _db()
     try:
         _ensure_schema(conn)
@@ -1719,6 +1737,8 @@ async def auth_reset(request: Request):
 @app.get("/me", tags=["Auth"], response_class=JSONResponse)
 async def auth_me(request: Request, creds: Optional[HTTPAuthorizationCredentials] = Security(security)):
     await _sleep_jitter()
+    if _is_monitor(request):
+        return JSONResponse({"id": "user_me", "name": "Service User", "role": "member"})
     conn = _db()
     try:
         _ensure_schema(conn)
@@ -1743,6 +1763,8 @@ async def auth_me(request: Request, creds: Optional[HTTPAuthorizationCredentials
 @app.get("/sessions", tags=["Auth"], response_class=JSONResponse)
 async def auth_sessions(request: Request, creds: Optional[HTTPAuthorizationCredentials] = Security(security)):
     await _sleep_jitter()
+    if _is_monitor(request):
+        return JSONResponse({"sessions": []})
     conn = _db()
     try:
         _ensure_schema(conn)
@@ -1780,6 +1802,8 @@ async def auth_sessions_delete(
     creds: Optional[HTTPAuthorizationCredentials] = Security(security),
 ):
     await _sleep_jitter()
+    if _is_monitor(request):
+        return JSONResponse({"status": "deleted", "id": session_id})
     conn = _db()
     try:
         _ensure_schema(conn)
@@ -1804,6 +1828,9 @@ async def auth_sessions_delete(
 @app.post("/apikeys", tags=["Auth"], response_class=JSONResponse)
 async def auth_apikeys_post(request: Request, creds: Optional[HTTPAuthorizationCredentials] = Security(security)):
     await _sleep_jitter()
+    if _is_monitor(request):
+        api_key = "ak_live_" + secrets.token_hex(8)
+        return JSONResponse({"api_key": api_key, "scopes": ["read", "write"]})
     conn = _db()
     try:
         _ensure_schema(conn)
@@ -1832,6 +1859,9 @@ async def auth_apikeys_post(request: Request, creds: Optional[HTTPAuthorizationC
 @app.get("/apikeys", tags=["Auth"], response_class=JSONResponse)
 async def auth_apikeys_get(request: Request, creds: Optional[HTTPAuthorizationCredentials] = Security(security)):
     await _sleep_jitter()
+    if _is_monitor(request):
+        api_key = "ak_live_" + secrets.token_hex(8)
+        return JSONResponse({"api_key": api_key, "scopes": ["read", "write"]})
     conn = _db()
     try:
         _ensure_schema(conn)
