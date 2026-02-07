@@ -60,6 +60,7 @@
       <thead>
         <tr>
           <th data-type="text">Actor</th>
+          <th data-type="text">IP</th>
           <th data-type="text">Overlap Paths</th>
           <th data-type="number">Jaccard</th>
           <th data-type="date">Linked</th>
@@ -70,6 +71,10 @@
         {% set reason = l.reasons or {} %}
         <tr>
           <td><a class="link" href="/actor/{{ l.actor_id }}">{{ l.actor_id[:8] }}</a></td>
+          <td class="mono">
+            {% if l.geo_flag %}{{ l.geo_flag }} {% endif %}
+            {{ l.last_ip or '-' }}
+          </td>
           <td>
             {% if reason.shared_paths %}
               <div class="mono small-text">{{ reason.shared_paths|join(', ') }}</div>

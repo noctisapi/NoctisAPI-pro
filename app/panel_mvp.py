@@ -1368,13 +1368,74 @@ def campaign_detail(campaign_id: str, request: Request):
         camp["summary"]["stage_flow"] = _sanitize_stage_flow(camp["summary"].get("stage_flow") or "")
         cur.execute("SELECT actor_id, confidence, reasons_json, linked_at FROM campaign_actor_links WHERE campaign_id=?", (campaign_id,))
         links = [dict(r) for r in cur.fetchall()]
+        actor_ids = [l["actor_id"] for l in links]
+        actor_meta = {}
+        if actor_ids:
+            placeholders = ",".join(["?"] * len(actor_ids))
+            cur.execute(
+                f"""
+                WITH last_events AS (
+                  SELECT e.*
+                  FROM events e
+                  JOIN (
+                    SELECT actor_id, MAX(id) AS max_id
+                    FROM events
+                    GROUP BY actor_id
+                  ) m ON e.actor_id = m.actor_id AND e.id = m.max_id
+                )
+                SELECT
+                  a.actor_id,
+                  le.ip AS last_ip,
+                  le.ua AS last_ua,
+                  le.extra_json AS last_extra_json,
+                  (SELECT e.extra_json FROM events e WHERE e.actor_id = a.actor_id AND e.extra_json LIKE '%country_iso2%' ORDER BY e.id DESC LIMIT 1) AS last_geo_extra_json
+                FROM actors a
+                LEFT JOIN last_events le ON le.actor_id = a.actor_id
+                WHERE a.actor_id IN ({placeholders})
+                """,
+                actor_ids,
+            )
+            for row in cur.fetchall():
+                actor_meta[row["actor_id"]] = dict(row)
+
+        geo_reader = None
+        try:
+            import geoip2.database
+            if os.path.exists(HP_GEOIP_DB):
+                geo_reader = geoip2.database.Reader(HP_GEOIP_DB)
+        except Exception:
+            geo_reader = None
+
         for link in links:
             try:
                 link["reasons"] = json.loads(link.get("reasons_json") or "{}")
             except Exception:
                 link["reasons"] = {}
+            meta = actor_meta.get(link["actor_id"], {})
+            link["last_ip"] = meta.get("last_ip")
+            geo = parse_geo_from_extra(meta.get("last_extra_json") or "")
+            if not geo.get("geo_iso2"):
+                geo = parse_geo_from_extra(meta.get("last_geo_extra_json") or "")
+            if not geo.get("geo_iso2") and link.get("last_ip") and geo_reader:
+                try:
+                    resp = geo_reader.country(link["last_ip"])
+                    iso = (resp.country.iso_code or "").strip().upper()
+                    name = (resp.country.name or "").strip()
+                    if iso:
+                        geo["geo_iso2"] = iso
+                        geo["geo_name"] = name
+                        geo["geo_flag"] = _flag_emoji_from_iso2(iso)
+                except Exception:
+                    pass
+            link.update(geo)
             shared_stage = link["reasons"].get("shared_stage_flow") or ""
             link["reasons"]["shared_stage_flow"] = _sanitize_stage_flow(shared_stage)
+
+        if geo_reader:
+            try:
+                geo_reader.close()
+            except Exception:
+                pass
         return templates.TemplateResponse("campaign_detail.html", {"request": request, "campaign": camp, "links": links})
     finally:
         conn.close()
@@ -1437,6 +1498,14 @@ def actor(actor_id: str, request: Request):
         )
         events = [dict(r) for r in cur.fetchall()]
 
+        geo_reader = None
+        try:
+            import geoip2.database
+            if os.path.exists(HP_GEOIP_DB):
+                geo_reader = geoip2.database.Reader(HP_GEOIP_DB)
+        except Exception:
+            geo_reader = None
+
         icons = {
             "probe": "\N{RIGHT-POINTING MAGNIFYING GLASS}",
             "health": "\N{GREEN HEART}",
@@ -1460,6 +1529,25 @@ def actor(actor_id: str, request: Request):
                 e["icon"] = recon_icon
             else:
                 e["icon"] = icons.get(kind, "\N{BULLET}")
+            geo = parse_geo_from_extra(e.get("extra_json") or "")
+            if not geo.get("geo_iso2") and e.get("ip") and geo_reader:
+                try:
+                    resp = geo_reader.country(e["ip"])
+                    iso = (resp.country.iso_code or "").strip().upper()
+                    name = (resp.country.name or "").strip()
+                    if iso:
+                        geo["geo_iso2"] = iso
+                        geo["geo_name"] = name
+                        geo["geo_flag"] = _flag_emoji_from_iso2(iso)
+                except Exception:
+                    pass
+            e.update(geo)
+
+        if geo_reader:
+            try:
+                geo_reader.close()
+            except Exception:
+                pass
 
         cur.execute(
             "SELECT session_id, started_at, stage_max FROM sessions WHERE actor_id=? ORDER BY started_at DESC LIMIT 1",
