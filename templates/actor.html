@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
+{% set cases_enabled = "cases" in license_features %}
 
 <div class="page-head">
   <div>
@@ -33,7 +34,7 @@
     <button class="btn btn-ghost" type="button" data-action="archive" data-busy-text="Actualizando..." onclick="archiveActor(this)">
       <span class="btn-label">{% if actor.is_archived %}Unarchive{% else %}Archive{% endif %}</span>
     </button>
-    <button class="btn btn-primary" type="button" data-action="open-case-modal" data-busy-text="Cargando..." onclick="openCaseModal(this)">
+    <button class="btn btn-primary{% if not cases_enabled %} is-disabled{% endif %}" type="button" data-action="open-case-modal" data-busy-text="Cargando..." onclick="openCaseModal(this)" {% if not cases_enabled %}disabled title="PRO feature"{% endif %}>
       <span class="btn-label">Add to Case</span>
     </button>
     {% if actor.latest_session_id %}
@@ -96,25 +97,35 @@
     <div class="modal-head">
       <div>
         <h3 id="caseModalTitle">Add to Case</h3>
-        <p class="modal-subtitle">Pick an existing case or crea uno nuevo en segundos.</p>
+        {% if cases_enabled %}
+        <p class="modal-subtitle">Pick an existing case or create a new one in seconds.</p>
+        {% else %}
+        <p class="modal-subtitle">Cases are available on the PRO plan.</p>
+        {% endif %}
       </div>
       <button type="button" class="btn btn-icon" onclick="closeCaseModal()" aria-label="Close case modal">&times;</button>
     </div>
     <div class="modal-body">
+      {% if cases_enabled %}
       <div id="caseMeta" class="modal-hint" aria-live="polite">Loading cases...</div>
       <div id="caseList" class="case-list">
         <div class="case-loader"><span class="spinner"></span> Loading cases...</div>
       </div>
+      {% else %}
+      <div class="modal-hint">Upgrade to PRO to add actors to cases.</div>
+      {% endif %}
     </div>
+    {% if cases_enabled %}
     <div class="modal-form">
-      <label for="newCaseTitle">Crear caso rápido</label>
+      <label for="newCaseTitle">Quick case</label>
       <div class="modal-form-row">
-        <input type="text" id="newCaseTitle" placeholder="Ej. Credential stuffing en tienda" class="input input-lg" autocomplete="off">
-        <button type="button" class="btn btn-primary" data-action="quick-case" data-busy-text="Creando..." onclick="quickCreateCase(this)">Crear y vincular</button>
+        <input type="text" id="newCaseTitle" placeholder="e.g. Credential stuffing" class="input input-lg" autocomplete="off">
+        <button type="button" class="btn btn-primary" data-action="quick-case" data-busy-text="Creating..." onclick="quickCreateCase(this)">Create and link</button>
       </div>
-      <p class="modal-help">Se creará un caso con severidad media y este actor quedará marcado como participante principal.</p>
-      <button type="button" class="btn btn-ghost" onclick="closeCaseModal()">Cerrar</button>
+      <p class="modal-help">Creates a medium severity case and links this actor as primary.</p>
+      <button type="button" class="btn btn-ghost" onclick="closeCaseModal()">Close</button>
     </div>
+    {% endif %}
   </div>
 </div>
 
@@ -220,6 +231,7 @@
   let quickCreateBusy = false;
   let toastTimer = null;
   const toastEl = document.getElementById('actionToast');
+  const casesEnabled = {{ 'true' if cases_enabled else 'false' }};
   const caseModal = document.getElementById('caseModal');
   const caseListHost = document.getElementById('caseList');
   const caseMeta = document.getElementById('caseMeta');
@@ -286,6 +298,10 @@
   }
 
   async function openCaseModal(btn){
+    if(!casesEnabled){
+      showToast('Cases are a PRO feature', 'info');
+      return;
+    }
     if(!caseModal || !caseListHost){
       showToast('Case modal not available', 'error');
       return;
