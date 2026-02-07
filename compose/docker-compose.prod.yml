@@ -3,7 +3,8 @@ version: "3.9"
 services:
   migrate:
     image: ${HP_IMAGE:-ghcr.io/<ORG>/hp-app}:${APP_VERSION}
-    command: ["alembic", "upgrade", "head"]
+    user: "0:0"
+    command: ["sh", "-c", "chown -R 10001:0 /data && alembic upgrade head"]
     env_file:
       - ../.env.prod
     volumes:
@@ -12,6 +13,7 @@ services:
 
   app:
     image: ${HP_IMAGE:-ghcr.io/<ORG>/hp-app}:${APP_VERSION}
+    user: "10001:0"
     env_file:
       - ../.env.prod
     environment:
@@ -59,6 +61,7 @@ services:
 
   admin:
     image: ${HP_IMAGE:-ghcr.io/<ORG>/hp-app}:${APP_VERSION}
+    user: "10001:0"
     env_file:
       - ../.env.prod
     environment:

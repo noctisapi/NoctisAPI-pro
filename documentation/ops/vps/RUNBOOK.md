@@ -73,6 +73,9 @@ Traefik handles certificates automatically via ACME HTTP-01.
    - `curl -i https://<SUBDOMAIN>.duckdns.org/health`
    - `curl -i https://<SUBDOMAIN>.duckdns.org/docs`
    - Admin panel is available via SSH tunnel on `127.0.0.1:9001`
+4. If you see `attempt to write a readonly database`, fix volume ownership once:
+   - `docker compose -f compose/docker-compose.prod.yml --env-file .env.prod run --rm --user 0:0 app sh -c "chown -R 10001:0 /data"`
+   - then re-run `bash /opt/hp-app/ops/vps/deploy.sh`
 
 ## Phase 5.1: GeoIP database (flags)
 MaxMind GeoLite2 is not committed to git. Download it on the server:
