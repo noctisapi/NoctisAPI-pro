@@ -26,6 +26,7 @@ DB_PATH = os.getenv("HP_DB_PATH", "/data/honeypot.db")
 HP_SEED = os.getenv("HP_SEED", "CHANGE_ME_LONG_RANDOM_SEED")
 HONEYPOT_MONITOR_UA = os.getenv("HONEYPOT_MONITOR_UA", "HealthCheck/1.0")
 HP_PUBLIC_BASE_URL = os.getenv("HP_PUBLIC_BASE_URL", "http://127.0.0.1:8080").rstrip("/")
+HP_ACTOR_UA_MODE = os.getenv("HP_ACTOR_UA_MODE", "family").strip().lower()
 
 SAMPLE_FILE_ID = "sample"
 SAMPLE_FILE_NAME = "sample.bin"
@@ -142,6 +143,39 @@ def _client_ip(req: Request) -> str:
 def _user_agent(req: Request) -> str:
     return (req.headers.get("user-agent") or "")[:400]
 
+def _normalize_ua(ua: str) -> str:
+    raw = (ua or "").strip().lower()
+    if not raw:
+        return "unknown"
+    if "curl/" in raw:
+        return "curl"
+    if "python-httpx" in raw:
+        return "python-httpx"
+    if "python-requests" in raw:
+        return "python-requests"
+    if "okhttp" in raw:
+        return "okhttp"
+    if "go-http-client" in raw:
+        return "go-http-client"
+    if "java/" in raw or "jdk" in raw:
+        return "java"
+    if "postmanruntime" in raw:
+        return "postman"
+    if "wget/" in raw:
+        return "wget"
+    if "httpie" in raw:
+        return "httpie"
+    if "edge/" in raw or "edg/" in raw:
+        return "edge"
+    if "firefox/" in raw:
+        return "firefox"
+    if "chrome/" in raw and "safari/" in raw:
+        return "chrome"
+    if "safari/" in raw and "chrome/" not in raw:
+        return "safari"
+    if "mozilla/" in raw:
+        return "mozilla"
+    return "other"
 
 def _is_monitor(req: Request) -> bool:
     return (req.headers.get("x-internal-monitor") or "").strip() == "1"
@@ -150,6 +184,10 @@ def _is_monitor(req: Request) -> bool:
 def _actor_id_from_request(req: Request) -> str:
     ip = _client_ip(req)
     ua = _user_agent(req)
+    if HP_ACTOR_UA_MODE == "ip":
+        ua = ""
+    elif HP_ACTOR_UA_MODE == "family":
+        ua = _normalize_ua(ua)
     raw = f"{ip}|{ua}|{HP_SEED}".encode("utf-8", errors="ignore")
     return hashlib.sha256(raw).hexdigest()
 
@@ -1885,6 +1923,8 @@ async def auth_apikeys_get(request: Request, creds: Optional[HTTPAuthorizationCr
 @app.get("/admin", tags=["Internal"], response_class=JSONResponse)
 async def admin_home(request: Request, creds: Optional[HTTPAuthorizationCredentials] = Security(security)):
     await _sleep_jitter()
+    if _is_monitor(request):
+        return JSONResponse({"admin": "ok", "version": "2.8.1", "features": ["audit", "users", "flags"]})
     conn = _db()
     try:
         _ensure_schema(conn)
@@ -1901,6 +1941,8 @@ async def admin_home(request: Request, creds: Optional[HTTPAuthorizationCredenti
 @app.get("/admin/users", tags=["Internal"], response_class=JSONResponse)
 async def admin_users(request: Request, creds: Optional[HTTPAuthorizationCredentials] = Security(security)):
     await _sleep_jitter()
+    if _is_monitor(request):
+        return JSONResponse({"users": _fake_users("monitor", 5, 0)})
     conn = _db()
     try:
         _ensure_schema(conn)
@@ -1918,6 +1960,8 @@ async def admin_users(request: Request, creds: Optional[HTTPAuthorizationCredent
 async def admin_users_post(request: Request, creds: Optional[HTTPAuthorizationCredentials] = Security(security)):
     await _sleep_jitter()
     data = await _read_json_or_form(request)
+    if _is_monitor(request):
+        return JSONResponse({"status": "created", "id": "user_" + secrets.token_hex(4)})
     conn = _db()
     try:
         _ensure_schema(conn)
@@ -1940,6 +1984,15 @@ async def admin_users_post(request: Request, creds: Optional[HTTPAuthorizationCr
 @app.get("/admin/audit", tags=["Internal"], response_class=JSONResponse)
 async def admin_audit(request: Request, creds: Optional[HTTPAuthorizationCredentials] = Security(security)):
     await _sleep_jitter()
+    if _is_monitor(request):
+        return JSONResponse(
+            {
+                "events": [
+                    {"ts": _utc_now_iso(), "actor": "system", "action": "policy_update"},
+                    {"ts": _utc_now_iso(), "actor": "svc-backup", "action": "snapshot"},
+                ]
+            }
+        )
     conn = _db()
     try:
         _ensure_schema(conn)
@@ -1963,6 +2016,8 @@ async def admin_audit(request: Request, creds: Optional[HTTPAuthorizationCredent
 @app.get("/internal/feature-flags", tags=["Internal"], response_class=JSONResponse)
 async def internal_flags(request: Request, creds: Optional[HTTPAuthorizationCredentials] = Security(security)):
     await _sleep_jitter()
+    if _is_monitor(request):
+        return JSONResponse({"flags": {"enable_shadow": True, "enable_migration": True}})
     conn = _db()
     try:
         _ensure_schema(conn)
@@ -1989,6 +2044,8 @@ async def internal_flags(request: Request, creds: Optional[HTTPAuthorizationCred
 async def internal_reload(request: Request, creds: Optional[HTTPAuthorizationCredentials] = Security(security)):
     await _sleep_jitter()
     data = await _read_json_or_form(request)
+    if _is_monitor(request):
+        return JSONResponse({"job_id": "job_" + secrets.token_hex(6), "status": "queued"})
     conn = _db()
     try:
         _ensure_schema(conn)
@@ -2016,6 +2073,8 @@ async def internal_reload(request: Request, creds: Optional[HTTPAuthorizationCre
 async def internal_migrate(request: Request, creds: Optional[HTTPAuthorizationCredentials] = Security(security)):
     await _sleep_jitter()
     data = await _read_json_or_form(request)
+    if _is_monitor(request):
+        return JSONResponse({"job_id": "job_" + secrets.token_hex(6), "status": "queued"})
     conn = _db()
     try:
         _ensure_schema(conn)
@@ -2282,6 +2341,8 @@ async def console_history(request: Request):
 @app.post("/root/shell", tags=["Console"], response_class=JSONResponse)
 async def root_shell(request: Request):
     await _sleep_jitter()
+    if _is_monitor(request):
+        return JSONResponse({"shell": "ready", "prompt": "root@prod:/#"})
     conn = _db()
     try:
         _ensure_schema(conn)
@@ -2547,6 +2608,13 @@ async def upload_theme(request: Request):
 
 @app.get("/backup/list", include_in_schema=False, response_class=JSONResponse)
 async def backup_list(request: Request, bkp: str = Depends(require_backup_token)):
+    if _is_monitor(request):
+        items = [
+            {"id": "snap_2025_11_02", "size": "184MB", "type": "sqlite"},
+            {"id": "env_prod", "size": "4KB", "type": "dotenv"},
+            {"id": "audit_legacy", "size": "12MB", "type": "jsonl"},
+        ]
+        return {"items": items}
     conn = _db()
     try:
         _ensure_schema(conn)
@@ -2568,6 +2636,12 @@ async def backup_list(request: Request, bkp: str = Depends(require_backup_token)
 
 @app.get("/backup/download/{item_id}", include_in_schema=False, response_class=PlainTextResponse)
 async def backup_download(item_id: str, request: Request, bkp: str = Depends(require_backup_token)):
+    if _is_monitor(request):
+        if item_id == "env_prod":
+            return "APP_ENV=production\nADMIN_SECRET=adm_monitor\nLOG_LEVEL=debug\nREGION=eu\n"
+        if item_id == "audit_legacy":
+            return "[]\n"
+        return "binary blob not available\n"
     conn = _db()
     try:
         _ensure_schema(conn)
@@ -2596,6 +2670,13 @@ async def backup_download(item_id: str, request: Request, bkp: str = Depends(req
 
 @app.get("/admin/secrets", include_in_schema=False, response_class=JSONResponse)
 async def admin_secrets(request: Request, adm: str = Depends(require_admin_secret)):
+    if _is_monitor(request):
+        return {
+            "jwt_signing_key_id": "kid_monitor",
+            "root_password": "root_monitor",
+            "vault_token": "vault_monitor",
+            "vault_hint": "Use X-Vault-Token for /infra/*",
+        }
     conn = _db()
     try:
         _ensure_schema(conn)
@@ -2620,6 +2701,13 @@ async def admin_secrets(request: Request, adm: str = Depends(require_admin_secre
 
 @app.get("/infra/vault", include_in_schema=False, response_class=JSONResponse)
 async def infra_vault(request: Request, v: str = Depends(require_vault_token)):
+    if _is_monitor(request):
+        return {
+            "k8s_cluster": "prod-eu-1",
+            "namespace": "accounts",
+            "cloud_token": "cloud_monitor",
+            "cloud_hint": "Use X-Cloud-Token for /cloud/*",
+        }
     conn = _db()
     try:
         _ensure_schema(conn)
@@ -2644,6 +2732,13 @@ async def infra_vault(request: Request, v: str = Depends(require_vault_token)):
 
 @app.get("/cloud/metadata", include_in_schema=False, response_class=JSONResponse)
 async def cloud_metadata(request: Request, c: str = Depends(require_cloud_token)):
+    if _is_monitor(request):
+        return {
+            "project": "acct-prod",
+            "iam": {"role": "Owner", "principal": "svc-accounts@acct-prod"},
+            "root_token": "root_monitor",
+            "root_hint": "Use X-Root-Token for /root/*",
+        }
     conn = _db()
     try:
         _ensure_schema(conn)
@@ -2668,6 +2763,12 @@ async def cloud_metadata(request: Request, c: str = Depends(require_cloud_token)
 
 @app.get("/root/console", include_in_schema=False, response_class=JSONResponse)
 async def root_console(request: Request, r: str = Depends(require_root_token)):
+    if _is_monitor(request):
+        return {
+            "console": "enabled",
+            "session_id": "sess_" + secrets.token_hex(12),
+            "actions": ["export_all", "rotate_keys", "impersonate_user"],
+        }
     conn = _db()
     try:
         _ensure_schema(conn)
