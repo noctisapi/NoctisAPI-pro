@@ -1819,6 +1819,10 @@ def session_detail(session_id: str, request: Request):
         sess = dict(s)
         sess["started_fmt"] = fmt_ts(sess.get("started_at") or "")
         sess["ended_fmt"] = fmt_ts(sess.get("ended_at")) if sess.get("ended_at") else "-"
+        cur.execute("SELECT * FROM session_steps WHERE session_id=? ORDER BY seq ASC", (session_id,))
+        steps = [dict(r) for r in cur.fetchall()]
+        sess["duration_seconds"] = None
+        sess["duration_ms"] = None
         if sess.get("started_at") and sess.get("ended_at"):
             try:
                 start_dt = datetime.fromisoformat(sess["started_at"].replace("Z", "+00:00"))
@@ -1827,9 +1831,19 @@ def session_detail(session_id: str, request: Request):
             except Exception:
                 sess["duration_seconds"] = None
         else:
-            sess["duration_seconds"] = None
-        cur.execute("SELECT * FROM session_steps WHERE session_id=? ORDER BY seq ASC", (session_id,))
-        steps = [dict(r) for r in cur.fetchall()]
+            # Fallback: derive duration from step timestamps (ms)
+            try:
+                ts_values = []
+                for step in steps:
+                    ts = step.get("ts")
+                    if ts:
+                        ts_values.append(datetime.fromisoformat(ts.replace("Z", "+00:00")))
+                if len(ts_values) >= 2:
+                    ts_values.sort()
+                    delta = (ts_values[-1] - ts_values[0]).total_seconds()
+                    sess["duration_ms"] = max(0, int(delta * 1000))
+            except Exception:
+                sess["duration_ms"] = None
         open_cases = []
         if licensing.has_feature(licensing.Feature.CASES):
             cur.execute("SELECT id, title, severity, status FROM cases WHERE status='open' ORDER BY updated_at DESC LIMIT 200")

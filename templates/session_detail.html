@@ -18,7 +18,15 @@
     </div>
     <div class="kpi">
       <div class="kpi-label">Duration</div>
-      <div class="kpi-value">{{ session.duration_seconds or '-' }}s</div>
+      <div class="kpi-value">
+        {% if session.duration_seconds is not none %}
+          {{ session.duration_seconds }}s
+        {% elif session.duration_ms is not none %}
+          {{ session.duration_ms }}ms
+        {% else %}
+          -
+        {% endif %}
+      </div>
     </div>
   </div>
 </div>
