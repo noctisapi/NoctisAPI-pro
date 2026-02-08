@@ -19,6 +19,11 @@ Feature availability is controlled by `HP_LICENSE_TIER`.
 - `core` (default): hides PRO UI sections and returns 404 for PRO API endpoints.
 - `pro`: enables cases, campaigns, replay/evidence linkage, advanced scoring, and the file upload + analysis pipeline.
 
+JWT licensing (production):
+- `HP_LICENSE_KEY` contains a JWT (RS256).
+- `HP_LICENSE_PUBKEY` contains the public key PEM (or base64-encoded PEM).
+- If the token is missing or invalid, the app falls back to CORE.
+
 ## Local Development
 
 1. Install Docker Engine + Compose plugin.

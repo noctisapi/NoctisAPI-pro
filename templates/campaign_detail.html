@@ -12,6 +12,9 @@
     <div class="card-title">Summary</div>
   </div>
   <div class="kv">
+    <div class="k">Score</div><div>{{ campaign.score_det or campaign.summary.score_det or 0 }}</div>
+    <div class="k">First Seen</div><div class="mono">{{ campaign.first_seen_at or campaign.summary.first_seen or '-' }}</div>
+    <div class="k">Last Seen</div><div class="mono">{{ campaign.last_seen_at or campaign.summary.last_seen or '-' }}</div>
     <div class="k">Group Size</div><div>{{ campaign.summary.group_size or links|length }}</div>
     <div class="k">Seed Actor</div><div class="mono">{{ campaign.summary.seed_actor or '-' }}</div>
     <div class="k">Thresholds</div><div>Jaccard &ge; {{ campaign.summary.min_jaccard or '0.65' }}, overlap &ge; {{ campaign.summary.min_intersection or '4' }}</div>
@@ -50,6 +53,84 @@
     <div class="modal-actions" style="margin-top:10px;">
       <a class="btn btn-primary" href="/dashboard/sessions/{{ campaign.summary.representative_session_id or campaign.representative_session_id }}">Open Representative Replay</a>
     </div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <div class="card-head"><div class="card-title">Intelligence</div></div>
+  <div class="card-body">
+    <div class="summary-grid">
+      <div>
+        <div class="k">Techniques</div>
+        <div class="v">
+          {% if campaign.techniques %}
+            {% for t in campaign.techniques %}<span class="tag">{{ t }}</span>{% endfor %}
+          {% else %}
+            -
+          {% endif %}
+        </div>
+      </div>
+      <div>
+        <div class="k">Stage Flow</div>
+        <div class="v">{{ campaign.stage_detail.flow or '-' }}</div>
+      </div>
+      <div>
+        <div class="k">Top Endpoints</div>
+        <div class="v mono">{{ campaign.endpoints|join(', ') if campaign.endpoints else '-' }}</div>
+      </div>
+      <div>
+        <div class="k">Duration</div>
+        <div class="v">{{ campaign.timeline.duration_days or '-' }} days</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-head"><div class="card-title">Activity Timeline</div></div>
+  <div class="card-body">
+    {% if campaign.activity.by_day %}
+      <div class="mono small-text">
+        {% for item in campaign.activity.by_day %}
+          {{ item.day }}={{ item.count }}{% if not loop.last %}, {% endif %}
+        {% endfor %}
+      </div>
+      <div class="muted tiny-text">Peaks: {{ campaign.timeline.peaks|join(', ') if campaign.timeline.peaks else '-' }} · Max pause: {{ campaign.timeline.max_pause_days or 0 }} days</div>
+    {% else %}
+      <div class="muted">No activity data.</div>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-head"><div class="card-title">Cases</div></div>
+  {% if cases %}
+    <div class="table-wrap">
+      <table class="table table-sortable">
+        <thead>
+          <tr>
+            <th data-type="num">ID</th>
+            <th data-type="text">Title</th>
+            <th data-type="text">Status</th>
+            <th data-type="text">Severity</th>
+            <th data-type="date">Updated</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for c in cases %}
+          <tr>
+            <td><a class="link" href="/dashboard/cases/{{ c.id }}">#{{ c.id }}</a></td>
+            <td>{{ c.title }}</td>
+            <td>{{ c.status }}</td>
+            <td>{{ c.severity or '-' }}</td>
+            <td class="mono">{{ c.updated_at }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="case-empty" style="margin:14px;">No cases linked to this campaign.</div>
   {% endif %}
 </div>
 

@@ -6,10 +6,15 @@ ShadowAPI is a compact deception platform that exposes a realistic public API su
 - Core (always on): public ShadowAPI honeypot API, internal/admin decoys, GeoIP flags, availability monitoring, basic admin (actors, sessions, API health), basic scoring + stages, bulk actor management, retention pruning, backup script, Docker + Traefik deploy
 - Pro (paid): cases workflow, campaigns explorer + recompute, replay/evidence linkage, advanced scoring, file upload + analysis simulation pipeline
 
-## Licensing
-Set `HP_LICENSE_TIER` to control feature availability.
-- `core` (default) disables PRO features in the admin panel and API.
-- `pro` enables cases, campaigns, replay/evidence, advanced scoring, and the file pipeline.
+## Licensing
+Set `HP_LICENSE_TIER` to control feature availability.
+- `core` (default) disables PRO features in the admin panel and API.
+- `pro` enables cases, campaigns, replay/evidence, advanced scoring, and the file pipeline.
+
+JWT licensing (recommended for production):
+- `HP_LICENSE_KEY` contains a JWT (RS256).
+- `HP_LICENSE_PUBKEY` contains the public key PEM (or base64-encoded PEM).
+- If the token is missing or invalid, the app falls back to CORE.
 
 ## Repository Layout
 - `app/` — core services (public API, admin panel, monitor, health)
@@ -25,9 +30,10 @@ cp .env.dev .env.dev
 docker compose -f compose/docker-compose.dev.yml up --build
 ```
 
-Open:
-- Public API: `http://127.0.0.1:8000/docs`
-- Admin panel: `http://127.0.0.1:9001`
+Open (default dev ports):
+- Public API: `http://127.0.0.1:8000/docs`
+- Admin panel: `http://127.0.0.1:9001`
+If you override ports in Compose, use your configured values.
 
 Notes:
 - The dev stack runs a one-shot migrator before starting services.

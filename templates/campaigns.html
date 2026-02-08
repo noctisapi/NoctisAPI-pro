@@ -23,7 +23,9 @@
           <tr>
             <th data-type="text">ID</th>
             <th data-type="text">Label</th>
+            <th data-type="number">Score</th>
             <th data-type="date">Created</th>
+            <th data-type="date">First Seen</th>
             <th data-type="date">Last Seen</th>
             <th data-type="number">Members</th>
           </tr>
@@ -33,7 +35,9 @@
           <tr>
             <td><a class="link" href="/dashboard/campaigns/{{ c.campaign_id }}">{{ c.campaign_id }}</a></td>
             <td>{{ c.label or 'Unnamed' }}</td>
+            <td>{{ c.score_det or 0 }}</td>
             <td class="mono">{{ c.created_at }}</td>
+            <td class="mono">{{ c.first_seen_at or '-' }}</td>
             <td class="mono">{{ c.last_seen_at or '-' }}</td>
             <td>{{ c.member_count }}</td>
           </tr>

@@ -4,23 +4,26 @@
 
 Three new features added to the ShadowAPI dashboard for advanced attack investigation and actor correlation:
 
-### 1) **Cases** (Incident Management)
+### 1) **Cases** (Investigation Dossiers)
 
-- Create incidents/cases to group related actors
-- Archive actors to prevent purge
+- Cases are investigation dossiers: actors, timeline, endpoints, stages, and evidence
+- Lifecycle: `open`, `monitoring`, `closed`, `false_positive`
+- Intelligence: techniques observed, deterministic risk score, similarity to other cases
 - UI: `/dashboard/cases` list, `/dashboard/cases/{id}` detail
+- Exports: `/dashboard/cases/{id}/export.json` and `/export.md`
 
 #### DB Schema:
-- `cases`: id, title, description, severity, tags, created_at, updated_at, status
+- `cases`: id, title, description, severity, tags, created_at, updated_at, status, campaign_id, risk_score, techniques_json, endpoints_json, stage_flow_json
 - `case_actors`: case_id, actor_id, added_at, role
-- `actors.is_archived`, `actors.lifecycle_state`
+- `case_evidence`: case_id, ref_type, ref_id, note, added_at, evidence_json, source_path, source_method, source_stage, source_status, actor_id
 
 #### API:
-- `POST /dashboard/cases?title=...&description=...&severity=...` -> create
+- `POST /dashboard/cases?title=...&description=...&severity=...&status=...` -> create
+- `POST /dashboard/cases/{id}/status?status=...` -> lifecycle update
+- `POST /dashboard/cases/{id}/campaign?campaign_id=...` -> link to campaign
 - `GET /dashboard/cases` -> list
-- `GET /dashboard/cases/{id}` -> detail + actors + replay evidence
+- `GET /dashboard/cases/{id}` -> detail + actors + replay evidence + intelligence
 - `POST /dashboard/cases/{id}/actors?actor_id=...&role=...` -> associate
-- `POST /dashboard/actors/{id}/archive` / `/unarchive` -> archive/unarchive
 
 ---
 
@@ -44,14 +47,16 @@ Three new features added to the ShadowAPI dashboard for advanced attack investig
 
 ---
 
-### 3) **Campaign** (Actor Correlation)
+### 3) **Campaign** (Persistent Attack Correlation)
 
-- Detect when multiple actors represent the same attacker/campaign
-- Simple ML-free clustering: Jaccard similarity on path/flow features (UA only metadata)
-- Thresholds: min_features=4, min_intersection=3, min_jaccard=0.4 -> group into campaign
+- Persistent attack clusters correlated over time
+- Deterministic grouping by endpoint patterns, sequence, timing, and errors
+- Timeline: first/last seen, activity by day/week, peaks/pauses
+- Scoring: deterministic based on duration, actors, stages, and sensitive endpoints
+- Relationship: a campaign can generate multiple cases; cases can link to a campaign
 
 #### DB Schema:
-- `campaigns`: campaign_id, label, created_at, last_seen_at, score_avg, features_summary_json
+- `campaigns`: campaign_id, label, created_at, first_seen_at, last_seen_at, score_det, features_summary_json
 - `campaign_actor_links`: campaign_id, actor_id, confidence, reasons_json, linked_at
 - `actor_fingerprints`: actor_id, fp_json, updated_at
 

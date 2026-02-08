@@ -9,6 +9,69 @@
     </div>
     <div class="sub">Status: {{ case.status }} - Severity: {{ case.severity or 'n/a' }}</div>
   </div>
+  <div class="page-head-actions">
+    <a class="btn btn-outline btn-small" href="/dashboard/cases/{{ case.id }}/export.json">Export JSON</a>
+    <a class="btn btn-outline btn-small" href="/dashboard/cases/{{ case.id }}/export.md">Export Markdown</a>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-head"><div class="card-title">Case Status & Campaign</div></div>
+  <div class="card-body">
+    <div class="form-row">
+      <div>
+        <label class="muted">Status</label>
+        <select id="caseStatusSelect" class="input input-lg">
+          {% set st = case.status or 'open' %}
+          <option value="open" {% if st == 'open' %}selected{% endif %}>open</option>
+          <option value="monitoring" {% if st == 'monitoring' %}selected{% endif %}>monitoring</option>
+          <option value="closed" {% if st == 'closed' %}selected{% endif %}>closed</option>
+          <option value="false_positive" {% if st == 'false_positive' %}selected{% endif %}>false_positive</option>
+        </select>
+        <button class="btn btn-primary btn-small" type="button" onclick="updateCaseStatus()">Save status</button>
+      </div>
+      <div>
+        <label class="muted">Campaign</label>
+        <select id="caseCampaignSelect" class="input input-lg">
+          <option value="">No campaign</option>
+          {% for c in campaigns %}
+            <option value="{{ c.campaign_id }}" {% if case.campaign_id == c.campaign_id %}selected{% endif %}>{{ c.campaign_id }}{% if c.label %} — {{ c.label }}{% endif %}</option>
+          {% endfor %}
+        </select>
+        <button class="btn btn-outline btn-small" type="button" onclick="updateCaseCampaign()">Link campaign</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-head"><div class="card-title">Investigation Summary</div></div>
+  <div class="card-body">
+    <div class="summary-grid">
+      <div>
+        <div class="k">Risk score</div>
+        <div class="v">{{ case_risk_score }}</div>
+      </div>
+      <div>
+        <div class="k">Stage flow</div>
+        <div class="v">{{ case_stage.flow or '-' }}</div>
+      </div>
+      <div>
+        <div class="k">Top endpoints</div>
+        <div class="v mono">{{ case_endpoints|join(', ') if case_endpoints else '-' }}</div>
+      </div>
+      <div>
+        <div class="k">Techniques</div>
+        <div class="v">
+          {% if case_techniques %}
+            {% for t in case_techniques %}<span class="tag">{{ t }}</span>{% endfor %}
+          {% else %}
+            -
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
 </div>
 
 <div class="card">
@@ -35,6 +98,66 @@
       </tbody>
     </table>
   </div>
+</div>
+
+<div class="card">
+  <div class="card-head"><div class="card-title">Timeline (latest)</div></div>
+  <div class="table-wrap">
+    <table class="table table-sortable">
+      <thead>
+        <tr>
+          <th data-type="date">Timestamp</th>
+          <th data-type="text">Type</th>
+          <th data-type="text">Actor</th>
+          <th data-type="text">Request</th>
+          <th data-type="num">Stage</th>
+          <th data-type="num">Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for ev in case_timeline %}
+        <tr>
+          <td class="mono">{{ ev.ts }}</td>
+          <td>{{ ev.type }}</td>
+          <td class="mono">{{ ev.actor_id[:8] }}</td>
+          <td class="mono">{% if ev.method %}{{ ev.method }}{% endif %} {{ ev.path }}</td>
+          <td>{{ ev.stage if ev.stage is not none else '-' }}</td>
+          <td>{{ ev.status if ev.status is not none else '-' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-head"><div class="card-title">Similar Cases</div></div>
+  {% if case_similarity %}
+    <div class="table-wrap">
+      <table class="table table-sortable">
+        <thead>
+          <tr>
+            <th data-type="num">Case</th>
+            <th data-type="num">Score</th>
+            <th data-type="num">Shared Actors</th>
+            <th data-type="text">Shared Paths</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for sc in case_similarity %}
+          <tr>
+            <td><a class="link" href="/dashboard/cases/{{ sc.case_id }}">#{{ sc.case_id }}</a></td>
+            <td>{{ sc.score }}</td>
+            <td>{{ sc.shared_actors }}</td>
+            <td class="mono">{{ sc.shared_paths|join(', ') }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="case-empty">No similar cases detected yet.</div>
+  {% endif %}
 </div>
 
 <div class="card">
@@ -81,13 +204,25 @@
         <div class="evidence-body">
           <div class="mono small-text">{{ st.ts_fmt }}</div>
           {% if st.note %}<div class="evidence-note">{{ st.note }}</div>{% endif %}
+          {% if st.headers_json %}
+            <div class="mono small-text">Headers:</div>
+            <pre class="code-block">{{ st.headers_json }}</pre>
+          {% endif %}
+          {% if st.body_json %}
+            <div class="mono small-text">Body:</div>
+            <pre class="code-block">{{ st.body_json }}</pre>
+          {% endif %}
+          {% if st.response_json %}
+            <div class="mono small-text">Response:</div>
+            <pre class="code-block">{{ st.response_json }}</pre>
+          {% endif %}
         </div>
       </div>
       {% endfor %}
     </div>
     {% endif %}
   {% else %}
-    <div class="case-empty">No replay evidence linked to este caso.</div>
+    <div class="case-empty">No replay evidence linked to this case.</div>
   {% endif %}
 </div>
 
@@ -128,6 +263,36 @@
       alert('Error: ' + e.message);
     }finally{
       if(btn){ btn.disabled = false; }
+    }
+  }
+
+  async function updateCaseStatus(){
+    const select = document.getElementById('caseStatusSelect');
+    if(!select) return;
+    const status = select.value;
+    try{
+      const res = await fetch(`/dashboard/cases/{{ case.id }}/status?status=${encodeURIComponent(status)}`, {method:'POST'});
+      if(!res.ok){
+        const text = await res.text();
+        alert('Error: ' + text);
+      }
+    }catch(e){
+      alert('Error: ' + e.message);
+    }
+  }
+
+  async function updateCaseCampaign(){
+    const select = document.getElementById('caseCampaignSelect');
+    if(!select) return;
+    const campaignId = select.value || '';
+    try{
+      const res = await fetch(`/dashboard/cases/{{ case.id }}/campaign?campaign_id=${encodeURIComponent(campaignId)}`, {method:'POST'});
+      if(!res.ok){
+        const text = await res.text();
+        alert('Error: ' + text);
+      }
+    }catch(e){
+      alert('Error: ' + e.message);
     }
   }
 </script>

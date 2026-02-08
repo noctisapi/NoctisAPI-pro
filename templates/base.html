@@ -13,16 +13,6 @@
       <div class="topbar-nav">
         <div class="brand">ShadowAPI</div>
         <a class="link" href="/">Dashboard</a>
-        {% if "cases" in license_features %}
-        <a class="link" href="/dashboard/cases">Cases</a>
-        {% else %}
-        <span class="link muted">Cases (PRO)</span>
-        {% endif %}
-        {% if "campaigns" in license_features %}
-        <a class="link" href="/dashboard/campaigns">Campaigns</a>
-        {% else %}
-        <span class="link muted">Campaigns (PRO)</span>
-        {% endif %}
         <a class="link" href="/dashboard/actors/deleted">Deleted</a>
         <a class="link" href="/dashboard/honeypot">API Health</a>
       </div>

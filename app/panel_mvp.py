@@ -12,7 +12,7 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from typing import Optional
+from typing import Optional, List
 
 from app import status_checks
 from app import licensing
@@ -330,6 +330,278 @@ def _sanitize_stage_flow(value: str) -> str:
     return ""
 
 
+def _normalize_case_status(value: str) -> str:
+    val = (value or "").strip().lower()
+    if val in {"open", "monitoring", "closed", "false_positive"}:
+        return val
+    return "open"
+
+
+def _safe_json_loads(raw: str, default):
+    try:
+        data = json.loads(raw or "")
+        return data if data is not None else default
+    except Exception:
+        return default
+
+
+def _case_actor_ids(cur: sqlite3.Cursor, case_id: int) -> list[str]:
+    cur.execute("SELECT actor_id FROM case_actors WHERE case_id=?", (case_id,))
+    return [r[0] for r in cur.fetchall()]
+
+
+def _case_session_steps(cur: sqlite3.Cursor, actor_ids: list[str], limit: int = 300) -> list[dict]:
+    if not actor_ids:
+        return []
+    placeholders = ",".join("?" for _ in actor_ids)
+    cur.execute(
+        f"""
+        SELECT ss.id, ss.session_id, ss.seq, ss.ts, ss.method, ss.path, ss.headers_json,
+               ss.body_json, ss.response_status, ss.stage_before, ss.stage_after,
+               s.actor_id
+        FROM session_steps ss
+        JOIN sessions s ON s.session_id = ss.session_id
+        WHERE s.actor_id IN ({placeholders})
+        ORDER BY ss.ts DESC
+        LIMIT ?
+        """,
+        (*actor_ids, limit),
+    )
+    return [dict(r) for r in cur.fetchall()]
+
+
+def _case_events(cur: sqlite3.Cursor, actor_ids: list[str], limit: int = 300) -> list[dict]:
+    if not actor_ids:
+        return []
+    placeholders = ",".join("?" for _ in actor_ids)
+    cur.execute(
+        f"""
+        SELECT id, ts, actor_id, kind, path, method, ip, ua, status, extra_json
+        FROM events
+        WHERE actor_id IN ({placeholders})
+        ORDER BY ts DESC
+        LIMIT ?
+        """,
+        (*actor_ids, limit),
+    )
+    return [dict(r) for r in cur.fetchall()]
+
+
+def _case_endpoints_summary(steps: list[dict], events: list[dict], top_k: int = 10) -> dict:
+    counter = Counter()
+    for row in steps:
+        path = _normalize_path(row.get("path") or "/")
+        counter[path] += 1
+    for row in events:
+        path = _normalize_path(row.get("path") or "/")
+        counter[path] += 1
+    return {"top_paths": [p for p, _ in counter.most_common(top_k)], "counts": counter}
+
+
+def _case_stage_progression(steps: list[dict]) -> dict:
+    seq = []
+    counts = Counter()
+    for row in steps:
+        stage = row.get("stage_after")
+        if stage is None:
+            stage = row.get("stage_before")
+        if stage is None:
+            continue
+        try:
+            val = int(stage)
+        except Exception:
+            continue
+        seq.append(val)
+        counts[val] += 1
+    flow = _stage_flow(seq)
+    return {
+        "flow": flow,
+        "counts": [{"stage": f"S{k}", "count": int(v)} for k, v in sorted(counts.items())],
+        "max_stage": max(counts.keys()) if counts else 0,
+    }
+
+
+def _case_timeline(steps: list[dict], events: list[dict], limit: int = 200) -> list[dict]:
+    items = []
+    for row in steps:
+        items.append(
+            {
+                "ts": row.get("ts"),
+                "type": "step",
+                "actor_id": row.get("actor_id"),
+                "method": row.get("method"),
+                "path": row.get("path"),
+                "status": row.get("response_status"),
+                "stage": row.get("stage_after") if row.get("stage_after") is not None else row.get("stage_before"),
+                "session_id": row.get("session_id"),
+                "seq": row.get("seq"),
+            }
+        )
+    for row in events:
+        items.append(
+            {
+                "ts": row.get("ts"),
+                "type": "event",
+                "actor_id": row.get("actor_id"),
+                "method": row.get("method"),
+                "path": row.get("path"),
+                "status": row.get("status"),
+                "kind": row.get("kind"),
+            }
+        )
+    items = [i for i in items if i.get("ts")]
+    items.sort(key=lambda x: x.get("ts") or "", reverse=True)
+    return items[:limit]
+
+
+def _case_techniques(steps: list[dict], events: list[dict]) -> list[str]:
+    paths = []
+    statuses = []
+    kinds = []
+    for row in steps:
+        paths.append(_normalize_path(row.get("path") or "/"))
+        status = row.get("response_status")
+        if status is not None:
+            statuses.append(int(status))
+    for row in events:
+        paths.append(_normalize_path(row.get("path") or "/"))
+        if row.get("status") is not None:
+            statuses.append(int(row.get("status")))
+        if row.get("kind"):
+            kinds.append(str(row.get("kind")))
+
+    techniques = set()
+    if any(p in {"/docs", "/openapi.json", "/swagger", "/redoc", "/.env", "/config.json", "/.well-known/security.txt"} for p in paths):
+        techniques.add("enumeration")
+    if sum(1 for p in paths if "auth/login" in p or p.endswith("/v1/auth/token")) >= 3:
+        if any(s >= 401 for s in statuses):
+            techniques.add("brute_force")
+    if any(p.startswith("/apikeys") or p.startswith("/v1/keys") or p.startswith("/internal/config") for p in paths):
+        techniques.add("token_abuse")
+    if any(p.startswith("/admin") or p.startswith("/internal") for p in paths):
+        techniques.add("privilege_escalation")
+    if any(p.startswith("/root") or p.startswith("/console/exec") for p in paths):
+        techniques.add("privileged_access")
+    if any(p.startswith("/backup") or p.startswith("/api/v1/reports") or p.startswith("/api/v1/transactions") for p in paths):
+        techniques.add("data_exfiltration")
+    if any(p.startswith("/files") or p in {"/import", "/plugins/install", "/themes/upload"} for p in paths):
+        techniques.add("malware_upload")
+    if any("token_used" in k or "unknown_token" in k for k in kinds):
+        techniques.add("token_probe")
+    return sorted(techniques)
+
+
+def _case_risk_score(stage_max: int, techniques: list[str], endpoint_count: int) -> int:
+    score = 0
+    score += int(stage_max) * 8
+    score += min(30, endpoint_count * 2)
+    score += len(techniques) * 6
+    return min(100, score)
+
+
+def _case_similarity(cur: sqlite3.Cursor, case_id: int, endpoints_set: set[str], actor_ids: list[str], limit: int = 3) -> list[dict]:
+    cur.execute("SELECT id FROM cases WHERE id != ? ORDER BY updated_at DESC LIMIT 50", (case_id,))
+    other_ids = [r[0] for r in cur.fetchall()]
+    if not other_ids or not endpoints_set:
+        return []
+    results = []
+    for other_id in other_ids:
+        other_actor_ids = _case_actor_ids(cur, other_id)
+        shared_actors = set(actor_ids) & set(other_actor_ids)
+        other_events = _case_events(cur, other_actor_ids, limit=150)
+        other_steps = _case_session_steps(cur, other_actor_ids, limit=150)
+        other_endpoints = set(_case_endpoints_summary(other_steps, other_events, top_k=50)["top_paths"])
+        if not other_endpoints:
+            continue
+        inter = endpoints_set & other_endpoints
+        union = endpoints_set | other_endpoints
+        jaccard = len(inter) / len(union) if union else 0.0
+        score = (0.7 * jaccard) + (0.3 if shared_actors else 0.0)
+        if score < 0.2:
+            continue
+        results.append(
+            {
+                "case_id": other_id,
+                "score": round(score, 3),
+                "shared_actors": len(shared_actors),
+                "shared_paths": sorted(list(inter))[:5],
+            }
+        )
+    results.sort(key=lambda x: x["score"], reverse=True)
+    return results[:limit]
+
+
+def _campaign_metrics(cur: sqlite3.Cursor, actor_ids: list[str]) -> dict:
+    steps = _case_session_steps(cur, actor_ids, limit=800)
+    events = _case_events(cur, actor_ids, limit=800)
+    endpoints_summary = _case_endpoints_summary(steps, events, top_k=12)
+    stage_info = _case_stage_progression(steps)
+    techniques = _case_techniques(steps, events)
+
+    ts_values = []
+    for row in events:
+        ts = _parse_iso(row.get("ts") or "")
+        if ts:
+            ts_values.append(ts)
+    for row in steps:
+        ts = _parse_iso(row.get("ts") or "")
+        if ts:
+            ts_values.append(ts)
+    ts_values.sort()
+    first_seen = ts_values[0].isoformat(timespec="seconds").replace("+00:00", "Z") if ts_values else None
+    last_seen = ts_values[-1].isoformat(timespec="seconds").replace("+00:00", "Z") if ts_values else None
+
+    # Activity by day/week
+    day_counts = Counter()
+    week_counts = Counter()
+    for ts in ts_values:
+        day = ts.strftime("%Y-%m-%d")
+        week = ts.strftime("%Y-W%U")
+        day_counts[day] += 1
+        week_counts[week] += 1
+
+    # Peaks and pauses
+    counts = list(day_counts.values())
+    peak_days = []
+    pause_days = 0
+    if counts:
+        med = median(counts)
+        peak_days = [d for d, c in day_counts.items() if c >= max(3, med * 2)]
+        day_list = sorted(day_counts.keys())
+        if len(day_list) >= 2:
+            gaps = []
+            for i in range(1, len(day_list)):
+                prev = datetime.fromisoformat(day_list[i - 1])
+                curr = datetime.fromisoformat(day_list[i])
+                gaps.append((curr - prev).days)
+            pause_days = max(gaps) if gaps else 0
+
+    duration_days = 0
+    if ts_values:
+        duration_days = max(1, (ts_values[-1] - ts_values[0]).days + 1)
+
+    score_det = _case_risk_score(stage_info.get("max_stage") or 0, techniques, len(endpoints_summary.get("top_paths") or []))
+    score_det = min(100, score_det + min(20, duration_days * 2) + min(20, len(actor_ids) * 3))
+
+    return {
+        "first_seen": first_seen,
+        "last_seen": last_seen,
+        "activity": {
+            "by_day": [{"day": d, "count": c} for d, c in sorted(day_counts.items())],
+            "by_week": [{"week": w, "count": c} for w, c in sorted(week_counts.items())],
+        },
+        "timeline": {
+            "peaks": peak_days[:10],
+            "max_pause_days": pause_days,
+            "duration_days": duration_days,
+        },
+        "stage": stage_info,
+        "techniques": techniques,
+        "endpoints": endpoints_summary.get("top_paths") or [],
+        "score_det": score_det,
+    }
+
+
 def _campaign_jobs_table_exists(conn: sqlite3.Connection) -> bool:
     try:
         conn.execute("SELECT 1 FROM campaign_jobs LIMIT 1")
@@ -579,9 +851,43 @@ def _compute_campaigns(conn: sqlite3.Connection, config: dict) -> dict:
                 "representative_session_id": rep_session_id,
                 "params": config,
             }
+            metrics = _campaign_metrics(cur, group)
+            summary.update(
+                {
+                    "first_seen": metrics.get("first_seen"),
+                    "last_seen": metrics.get("last_seen"),
+                    "activity": metrics.get("activity"),
+                    "timeline": metrics.get("timeline"),
+                    "stage": metrics.get("stage"),
+                    "techniques": metrics.get("techniques"),
+                    "endpoints": metrics.get("endpoints"),
+                    "score_det": metrics.get("score_det"),
+                }
+            )
             cur.execute(
-                "INSERT OR REPLACE INTO campaigns(campaign_id, label, created_at, last_seen_at, score_avg, features_summary_json, representative_session_id) VALUES(?,?,?,?,?,?,?)",
-                (cid, label, now, now, 0.0, json.dumps(summary, ensure_ascii=False), rep_session_id),
+                """
+                INSERT OR REPLACE INTO campaigns(
+                    campaign_id, label, created_at, last_seen_at, score_avg, features_summary_json,
+                    representative_session_id, first_seen_at, score_det, activity_json, timeline_json,
+                    stage_flow_json, techniques_json, endpoints_json
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    cid,
+                    label,
+                    now,
+                    metrics.get("last_seen") or now,
+                    0.0,
+                    json.dumps(summary, ensure_ascii=False),
+                    rep_session_id,
+                    metrics.get("first_seen"),
+                    int(metrics.get("score_det") or 0),
+                    json.dumps(metrics.get("activity") or {}, ensure_ascii=False),
+                    json.dumps(metrics.get("timeline") or {}, ensure_ascii=False),
+                    json.dumps(metrics.get("stage") or {}, ensure_ascii=False),
+                    json.dumps(metrics.get("techniques") or [], ensure_ascii=False),
+                    json.dumps(metrics.get("endpoints") or [], ensure_ascii=False),
+                ),
             )
             for a in group:
                 conf = link_scores.get(a, 0.0)
@@ -796,10 +1102,56 @@ def dashboard_case_detail(case_id: int, request: Request):
         if not row:
             raise HTTPException(status_code=404)
         case = dict(row)
+        case["status"] = _normalize_case_status(case.get("status"))
         cur.execute("SELECT actor_id, role, added_at FROM case_actors WHERE case_id=?", (case_id,))
         actors = [dict(r) for r in cur.fetchall()]
         cur.execute("SELECT id, ref_type, ref_id, note, added_at FROM case_evidence WHERE case_id=? ORDER BY added_at DESC", (case_id,))
         evidence_rows = [dict(r) for r in cur.fetchall()]
+
+        # Campaigns list for linking
+        cur.execute("SELECT campaign_id, label FROM campaigns ORDER BY last_seen_at DESC LIMIT 200")
+        campaigns = [dict(r) for r in cur.fetchall()]
+
+        # Build case intelligence snapshot
+        actor_ids = [a["actor_id"] for a in actors]
+        steps = _case_session_steps(cur, actor_ids, limit=400)
+        events = _case_events(cur, actor_ids, limit=400)
+        endpoints_summary = _case_endpoints_summary(steps, events, top_k=12)
+        stage_info = _case_stage_progression(steps)
+        techniques = _case_techniques(steps, events)
+        risk_score = _case_risk_score(stage_info.get("max_stage") or 0, techniques, len(endpoints_summary.get("top_paths") or []))
+        timeline = _case_timeline(steps, events, limit=200)
+        endpoints_set = set(endpoints_summary.get("top_paths") or [])
+        similarity = _case_similarity(cur, case_id, endpoints_set, actor_ids)
+
+        timeline_start = timeline[-1]["ts"] if timeline else None
+        timeline_end = timeline[0]["ts"] if timeline else None
+
+        # Persist a light cache on the case row (best-effort)
+        now = _utc_now_iso()
+        try:
+            cur.execute(
+                """
+                UPDATE cases
+                SET risk_score=?, techniques_json=?, endpoints_json=?, stage_flow_json=?,
+                    timeline_start=?, timeline_end=?, similarity_json=?, last_intel_ts=?
+                WHERE id=?
+                """,
+                (
+                    int(risk_score),
+                    json.dumps(techniques, ensure_ascii=False),
+                    json.dumps({"top_paths": endpoints_summary.get("top_paths") or []}, ensure_ascii=False),
+                    json.dumps(stage_info, ensure_ascii=False),
+                    timeline_start,
+                    timeline_end,
+                    json.dumps(similarity, ensure_ascii=False),
+                    now,
+                    case_id,
+                ),
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
 
         replay_sessions = []
         replay_steps = []
@@ -825,7 +1177,7 @@ def dashboard_case_detail(case_id: int, request: Request):
                     step_lookup_id = None
                 if step_lookup_id is not None:
                     step_row = cur.execute(
-                        "SELECT id, session_id, seq, ts, method, path, stage_after, response_status FROM session_steps WHERE id=?",
+                        "SELECT id, session_id, seq, ts, method, path, stage_after, response_status, headers_json, body_json, response_json FROM session_steps WHERE id=?",
                         (step_lookup_id,),
                     ).fetchone()
                     if step_row:
@@ -834,6 +1186,9 @@ def dashboard_case_detail(case_id: int, request: Request):
                         step["note"] = ev["note"]
                         step["added_at"] = ev["added_at"]
                         step["ts_fmt"] = fmt_ts(step.get("ts") or "")
+                        step["headers_json"] = step.get("headers_json") or ""
+                        step["body_json"] = step.get("body_json") or ""
+                        step["response_json"] = step.get("response_json") or ""
                         replay_steps.append(step)
         context = {
             "request": request,
@@ -841,6 +1196,13 @@ def dashboard_case_detail(case_id: int, request: Request):
             "actors": actors,
             "replay_sessions": replay_sessions,
             "replay_steps": replay_steps,
+            "campaigns": campaigns,
+            "case_timeline": timeline,
+            "case_endpoints": endpoints_summary.get("top_paths") or [],
+            "case_stage": stage_info,
+            "case_techniques": techniques,
+            "case_risk_score": risk_score,
+            "case_similarity": similarity,
         }
         context.update(_license_context())
         return templates.TemplateResponse("case_detail.html", context)
@@ -855,11 +1217,12 @@ def create_case(request: Request):
     description = request.query_params.get("description") or ""
     severity = request.query_params.get("severity") or "low"
     tags = request.query_params.get("tags") or ""
+    status = _normalize_case_status(request.query_params.get("status") or "open")
     now = _utc_now_iso()
     conn = db()
     try:
         cur = conn.cursor()
-        cur.execute("INSERT INTO cases(title, description, severity, tags, created_at, updated_at) VALUES(?,?,?,?,?,?)", (title, description, severity, tags, now, now))
+        cur.execute("INSERT INTO cases(title, description, severity, tags, created_at, updated_at, status) VALUES(?,?,?,?,?,?,?)", (title, description, severity, tags, now, now, status))
         conn.commit()
         new_id = cur.lastrowid
         return {"id": new_id}
@@ -882,6 +1245,46 @@ def rename_case(case_id: int, request: Request):
             raise HTTPException(status_code=404, detail="case not found")
         conn.commit()
         return {"ok": True, "title": title}
+    finally:
+        conn.close()
+
+
+@app.post("/dashboard/cases/{case_id}/status")
+def update_case_status(case_id: int, request: Request):
+    _require_feature(licensing.Feature.CASES)
+    status = _normalize_case_status(request.query_params.get("status") or "")
+    now = _utc_now_iso()
+    conn = db()
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE cases SET status=?, updated_at=? WHERE id=?", (status, now, case_id))
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail="case not found")
+        conn.commit()
+        return {"ok": True, "status": status}
+    finally:
+        conn.close()
+
+
+@app.post("/dashboard/cases/{case_id}/campaign")
+def link_case_campaign(case_id: int, request: Request):
+    _require_feature(licensing.Feature.CASES)
+    campaign_id = (request.query_params.get("campaign_id") or "").strip()
+    now = _utc_now_iso()
+    conn = db()
+    try:
+        cur = conn.cursor()
+        if campaign_id:
+            cur.execute("SELECT campaign_id FROM campaigns WHERE campaign_id=?", (campaign_id,))
+            if not cur.fetchone():
+                raise HTTPException(status_code=404, detail="campaign not found")
+            cur.execute("UPDATE cases SET campaign_id=?, updated_at=? WHERE id=?", (campaign_id, now, case_id))
+        else:
+            cur.execute("UPDATE cases SET campaign_id=NULL, updated_at=? WHERE id=?", (now, case_id))
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail="case not found")
+        conn.commit()
+        return {"ok": True, "campaign_id": campaign_id or None}
     finally:
         conn.close()
 
@@ -940,18 +1343,81 @@ def add_case_evidence_entry(case_id: int, request: Request):
         if not cur.fetchone():
             raise HTTPException(status_code=404, detail="case not found")
 
+        evidence_json = {}
+        source_path = None
+        source_method = None
+        source_stage = None
+        source_status = None
+        actor_id = None
+
         if ref_type == "session":
-            cur.execute("SELECT session_id FROM sessions WHERE session_id=?", (ref_id,))
-            if not cur.fetchone():
+            sess_row = cur.execute(
+                "SELECT session_id, actor_id, started_at, ended_at, stage_max, summary FROM sessions WHERE session_id=?",
+                (ref_id,),
+            ).fetchone()
+            if not sess_row:
                 raise HTTPException(status_code=404, detail="session not found")
+            actor_id = sess_row["actor_id"]
+            evidence_json = {
+                "session_id": sess_row["session_id"],
+                "actor_id": sess_row["actor_id"],
+                "started_at": sess_row["started_at"],
+                "ended_at": sess_row["ended_at"],
+                "stage_max": sess_row["stage_max"],
+                "summary": sess_row["summary"],
+            }
         else:
-            cur.execute("SELECT id FROM session_steps WHERE id=?", (ref_id,))
-            if not cur.fetchone():
+            step_row = cur.execute(
+                """
+                SELECT ss.id, ss.session_id, ss.seq, ss.ts, ss.method, ss.path, ss.headers_json, ss.body_json,
+                       ss.response_status, ss.response_json, ss.stage_before, ss.stage_after, s.actor_id
+                FROM session_steps ss
+                JOIN sessions s ON s.session_id = ss.session_id
+                WHERE ss.id=?
+                """,
+                (ref_id,),
+            ).fetchone()
+            if not step_row:
                 raise HTTPException(status_code=404, detail="step not found")
+            actor_id = step_row["actor_id"]
+            source_path = step_row["path"]
+            source_method = step_row["method"]
+            source_stage = step_row["stage_after"] if step_row["stage_after"] is not None else step_row["stage_before"]
+            source_status = step_row["response_status"]
+            evidence_json = {
+                "step_id": step_row["id"],
+                "session_id": step_row["session_id"],
+                "seq": step_row["seq"],
+                "ts": step_row["ts"],
+                "method": step_row["method"],
+                "path": step_row["path"],
+                "headers": _safe_json_loads(step_row["headers_json"], step_row["headers_json"]),
+                "body": _safe_json_loads(step_row["body_json"], step_row["body_json"]),
+                "response_status": step_row["response_status"],
+                "response_json": _safe_json_loads(step_row["response_json"], step_row["response_json"]),
+                "stage_before": step_row["stage_before"],
+                "stage_after": step_row["stage_after"],
+                "actor_id": step_row["actor_id"],
+            }
 
         cur.execute(
-            "INSERT INTO case_evidence(case_id, ref_type, ref_id, note, added_at) VALUES(?,?,?,?,?)",
-            (case_id, ref_type, str(ref_id), note, now),
+            """
+            INSERT INTO case_evidence(case_id, ref_type, ref_id, note, added_at, evidence_json, source_path, source_method, source_stage, source_status, actor_id)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                case_id,
+                ref_type,
+                str(ref_id),
+                note,
+                now,
+                json.dumps(evidence_json, ensure_ascii=False),
+                source_path,
+                source_method,
+                source_stage,
+                source_status,
+                actor_id,
+            ),
         )
         cur.execute("UPDATE cases SET updated_at=? WHERE id=?", (now, case_id))
         conn.commit()
@@ -1031,6 +1497,113 @@ def delete_case(case_id: int):
             raise HTTPException(status_code=404, detail="case not found")
         conn.commit()
         return {"ok": True}
+    finally:
+        conn.close()
+
+
+def _case_export_payload(cur: sqlite3.Cursor, case_id: int) -> dict:
+    cur.execute("SELECT * FROM cases WHERE id=?", (case_id,))
+    case_row = cur.fetchone()
+    if not case_row:
+        raise HTTPException(status_code=404, detail="case not found")
+    case = dict(case_row)
+    case["status"] = _normalize_case_status(case.get("status"))
+    cur.execute("SELECT actor_id, role, added_at FROM case_actors WHERE case_id=?", (case_id,))
+    actors = [dict(r) for r in cur.fetchall()]
+    actor_ids = [a["actor_id"] for a in actors]
+    steps = _case_session_steps(cur, actor_ids, limit=500)
+    events = _case_events(cur, actor_ids, limit=500)
+    endpoints_summary = _case_endpoints_summary(steps, events, top_k=20)
+    stage_info = _case_stage_progression(steps)
+    techniques = _case_techniques(steps, events)
+    risk_score = _case_risk_score(stage_info.get("max_stage") or 0, techniques, len(endpoints_summary.get("top_paths") or []))
+    timeline = _case_timeline(steps, events, limit=300)
+    similarity = _case_similarity(cur, case_id, set(endpoints_summary.get("top_paths") or []), actor_ids, limit=5)
+
+    cur.execute(
+        "SELECT id, ref_type, ref_id, note, added_at, evidence_json, source_path, source_method, source_stage, source_status, actor_id FROM case_evidence WHERE case_id=? ORDER BY added_at DESC",
+        (case_id,),
+    )
+    evidences = [dict(r) for r in cur.fetchall()]
+    for ev in evidences:
+        ev["evidence_json"] = _safe_json_loads(ev.get("evidence_json"), ev.get("evidence_json"))
+
+    payload = {
+        "case": case,
+        "actors": actors,
+        "campaign_id": case.get("campaign_id"),
+        "timeline": timeline,
+        "endpoints": endpoints_summary.get("top_paths") or [],
+        "stage_progression": stage_info,
+        "techniques": techniques,
+        "risk_score": risk_score,
+        "similar_cases": similarity,
+        "evidence": evidences,
+    }
+    return payload
+
+
+def _case_export_markdown(payload: dict) -> str:
+    case = payload.get("case") or {}
+    lines = [
+        f"# Case #{case.get('id')} — {case.get('title')}",
+        "",
+        f"Status: **{case.get('status')}**",
+        f"Severity: **{case.get('severity') or 'n/a'}**",
+        f"Campaign: `{payload.get('campaign_id') or '-'}`",
+        f"Created: {case.get('created_at')}",
+        f"Updated: {case.get('updated_at')}",
+        "",
+        "## Summary",
+        f"- Risk score: **{payload.get('risk_score')}**",
+        f"- Techniques: {', '.join(payload.get('techniques') or []) or '-'}",
+        f"- Top endpoints: {', '.join(payload.get('endpoints') or []) or '-'}",
+        "",
+        "## Actors",
+    ]
+    for a in payload.get("actors") or []:
+        lines.append(f"- `{a.get('actor_id')}` ({a.get('role') or 'related'})")
+
+    lines += ["", "## Timeline (recent)"]
+    for item in payload.get("timeline") or []:
+        ts = item.get("ts")
+        if item.get("type") == "step":
+            lines.append(f"- {ts} {item.get('method') or ''} {item.get('path') or ''} stage={item.get('stage')} status={item.get('status')}")
+        else:
+            lines.append(f"- {ts} {item.get('kind') or 'event'} {item.get('path') or ''} status={item.get('status')}")
+
+    lines += ["", "## Evidence"]
+    for ev in payload.get("evidence") or []:
+        lines.append(f"- [{ev.get('ref_type')}] {ev.get('ref_id')} — {ev.get('note') or ''}")
+
+    if payload.get("similar_cases"):
+        lines += ["", "## Similar Cases"]
+        for sc in payload.get("similar_cases"):
+            lines.append(f"- Case #{sc.get('case_id')} (score {sc.get('score')}, shared actors {sc.get('shared_actors')})")
+
+    return "\n".join(lines).strip() + "\n"
+
+
+@app.get("/dashboard/cases/{case_id}/export.json")
+def export_case_json(case_id: int):
+    _require_feature(licensing.Feature.CASES)
+    conn = db()
+    try:
+        cur = conn.cursor()
+        payload = _case_export_payload(cur, case_id)
+        return JSONResponse(payload)
+    finally:
+        conn.close()
+
+
+@app.get("/dashboard/cases/{case_id}/export.md", response_class=PlainTextResponse)
+def export_case_markdown(case_id: int):
+    _require_feature(licensing.Feature.CASES)
+    conn = db()
+    try:
+        cur = conn.cursor()
+        payload = _case_export_payload(cur, case_id)
+        return PlainTextResponse(_case_export_markdown(payload))
     finally:
         conn.close()
 
@@ -1131,6 +1704,7 @@ async def purge_actors_bulk(request: Request):
 def _purge_actor_data(cur: sqlite3.Cursor, actor_id: str) -> None:
     # remove case evidence tied to this actor's sessions/steps or direct actor evidence
     cur.execute("DELETE FROM case_evidence WHERE ref_type='actor' AND ref_id=?", (actor_id,))
+    cur.execute("DELETE FROM case_evidence WHERE actor_id=?", (actor_id,))
     cur.execute("SELECT session_id FROM sessions WHERE actor_id=?", (actor_id,))
     session_ids = [r[0] for r in cur.fetchall()]
     if session_ids:
@@ -1342,6 +1916,8 @@ def list_campaigns(request: Request):
               c.label,
               c.created_at,
               c.last_seen_at,
+              c.first_seen_at,
+              c.score_det,
               COUNT(l.actor_id) AS member_count
             FROM campaigns c
             LEFT JOIN campaign_actor_links l ON l.campaign_id = c.campaign_id
@@ -1415,6 +1991,11 @@ def campaign_detail(campaign_id: str, request: Request):
         except Exception:
             camp["summary"] = {}
         camp["summary"]["stage_flow"] = _sanitize_stage_flow(camp["summary"].get("stage_flow") or "")
+        camp["activity"] = _safe_json_loads(camp.get("activity_json"), {})
+        camp["timeline"] = _safe_json_loads(camp.get("timeline_json"), {})
+        camp["stage_detail"] = _safe_json_loads(camp.get("stage_flow_json"), {})
+        camp["techniques"] = _safe_json_loads(camp.get("techniques_json"), [])
+        camp["endpoints"] = _safe_json_loads(camp.get("endpoints_json"), [])
         cur.execute("SELECT actor_id, confidence, reasons_json, linked_at FROM campaign_actor_links WHERE campaign_id=?", (campaign_id,))
         links = [dict(r) for r in cur.fetchall()]
         actor_ids = [l["actor_id"] for l in links]
@@ -1485,9 +2066,14 @@ def campaign_detail(campaign_id: str, request: Request):
                 geo_reader.close()
             except Exception:
                 pass
+        cur.execute(
+            "SELECT id, title, status, severity, updated_at FROM cases WHERE campaign_id=? ORDER BY updated_at DESC",
+            (campaign_id,),
+        )
+        cases = [dict(r) for r in cur.fetchall()]
         return templates.TemplateResponse(
             "campaign_detail.html",
-            {"request": request, "campaign": camp, "links": links, **_license_context()},
+            {"request": request, "campaign": camp, "links": links, "cases": cases, **_license_context()},
         )
     finally:
         conn.close()

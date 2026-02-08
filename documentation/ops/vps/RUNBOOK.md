@@ -58,6 +58,8 @@ This runbook covers:
     - `HP_REQUIRE_SEED=1` (optional, fail startup if HP_SEED is missing/placeholder)
     - `HP_ACTOR_UA_MODE=family` (recommended; `ip` or `full` also supported)
     - `HP_LICENSE_TIER=core` (use `pro` to enable cases, campaigns, replay/evidence, advanced scoring, and file pipeline)
+    - `HP_LICENSE_KEY=<jwt>` (RS256 signed license token)
+    - `HP_LICENSE_PUBKEY=<pem or base64 pem>` (public key used to verify the token)
     - `HP_PUBLIC_RATELIMIT_AVG=120` / `HP_PUBLIC_RATELIMIT_BURST=240` (optional; Traefik rate limit)
 
 ## Phase 4: Certificates (Traefik + ACME)
