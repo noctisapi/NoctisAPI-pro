@@ -14,6 +14,12 @@
         <div class="brand">ShadowAPI</div>
         <a class="link" href="/">Dashboard</a>
         <a class="link" href="/dashboard/actors/deleted">Deleted</a>
+        {% if "cases" in license_features %}
+        <a class="link" href="/dashboard/cases">Cases</a>
+        {% endif %}
+        {% if "campaigns" in license_features %}
+        <a class="link" href="/dashboard/campaigns">Campaigns</a>
+        {% endif %}
         <a class="link" href="/dashboard/honeypot">API Health</a>
       </div>
       <div class="muted">private &middot; localhost only &middot; SSH tunnel</div>
