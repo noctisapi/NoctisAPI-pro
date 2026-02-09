@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   migrate:
     image: ${HP_IMAGE:-ghcr.io/<ORG>/shadowapi-pro}:${APP_VERSION}
