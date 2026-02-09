@@ -29,6 +29,7 @@ data/
 # Secrets / certs
 compose/nginx/certs/
 *.pem
+!app/licensing_server_public_key.pem
 *.key
 *.crt
 
