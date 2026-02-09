@@ -473,42 +473,23 @@ class LicensingManager:
             "timestamp": ts,
         }
 
-        try:
-            data = _request_or_raise(
-                url=_endpoint(self._licensing_url, "/v1/licenses/validate"),
-                payload=req_payload,
-                timeout=self._http_timeout_seconds,
-                post_json_func=self._post_json,
-            )
-        except LicensingClientError as exc:
-            detail = ""
-            try:
-                detail = str(exc.data.get("_error") or exc.data.get("detail") or "").strip()
-            except Exception:
-                detail = ""
-            detail = detail.replace("\r", " ").replace("\n", " ").strip()
-            if len(detail) > 180:
-                detail = detail[:180]
+        status, data = self._post_json(
+            _endpoint(self._licensing_url, "/v1/licenses/validate"),
+            req_payload,
+            self._http_timeout_seconds,
+        )
+        data = data or {}
+        if int(status or 0) == 0:
+            # post_json encodes network/timeout failures as status=0 with an _error marker.
+            err = str(data.get("_error") or "network_error")
+            err = err.replace("\r", " ").replace("\n", " ").strip()
+            if len(err) > 200:
+                err = err[:200]
             return LicensingState(
                 decision=None,
                 valid=False,
                 last_ok_at=self.get_state().last_ok_at,
-                last_error=(
-                    (f"http_{exc.status_code}:{detail}" if detail else f"http_{exc.status_code}")
-                    if exc.status_code
-                    else "network_error"
-                ),
-                reason_code=None,
-                expires_at=None,
-                entitlements={},
-                recheck_after_seconds=None,
-            )
-        except Exception as exc:
-            return LicensingState(
-                decision=None,
-                valid=False,
-                last_ok_at=self.get_state().last_ok_at,
-                last_error=exc.__class__.__name__,
+                last_error=err or "network_error",
                 reason_code=None,
                 expires_at=None,
                 entitlements={},
@@ -517,11 +498,19 @@ class LicensingManager:
 
         sig = str((data or {}).get("server_signature") or "").strip()
         if not sig:
+            detail = str(data.get("_error") or data.get("detail") or "").strip()
+            detail = detail.replace("\r", " ").replace("\n", " ").strip()
+            if len(detail) > 180:
+                detail = detail[:180]
             return LicensingState(
                 decision=None,
                 valid=False,
                 last_ok_at=self.get_state().last_ok_at,
-                last_error="missing_server_signature",
+                last_error=(
+                    (f"http_{int(status or 0)}:{detail}" if detail else f"http_{int(status or 0)}")
+                    if int(status or 0)
+                    else "missing_server_signature"
+                ),
                 reason_code=None,
                 expires_at=None,
                 entitlements={},
@@ -570,11 +559,14 @@ class LicensingManager:
             )
 
         decision = str(payload.get("decision") or "").strip().upper()
-        valid = bool(payload.get("valid")) and decision in (
+        decision_known = decision in (
             LicenseDecision.ALLOW.value,
             LicenseDecision.DENY.value,
             LicenseDecision.LIMITED.value,
         )
+        # "valid" is a license validity flag coming from the server; denial can still be a
+        # fully verified response (e.g. expired/revoked). We still require a known decision.
+        valid = bool(payload.get("valid")) and decision_known
         reason_code = str(payload.get("reason_code") or "").strip() or None
 
         expires_at = payload.get("expires_at")
@@ -595,7 +587,9 @@ class LicensingManager:
             decision=decision or None,
             valid=bool(valid),
             last_ok_at=self._utc_now() if valid else self.get_state().last_ok_at,
-            last_error=None if valid else "invalid_payload",
+            # Signature + request binding verified: treat as a successful check even if
+            # the license itself is not valid (DENY).
+            last_error=None if decision_known else "invalid_payload",
             reason_code=reason_code,
             expires_at=expires_at_int,
             entitlements=entitlements,

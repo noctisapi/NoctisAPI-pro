@@ -233,6 +233,63 @@ class TestLicensingManager(unittest.TestCase):
             else:
                 os.environ["HP_ALLOW_LICENSING_PUBKEY_OVERRIDE"] = old_allow
 
+    def test_403_with_signature_is_processed(self):
+        priv, pub_pem = self._with_keypair()
+        old_pem = os.environ.get("LICENSING_PINNED_PUBLIC_KEY_PEM")
+        old_allow = os.environ.get("HP_ALLOW_LICENSING_PUBKEY_OVERRIDE")
+        try:
+            os.environ["LICENSING_PINNED_PUBLIC_KEY_PEM"] = pub_pem.decode("utf-8")
+            os.environ["HP_ALLOW_LICENSING_PUBKEY_OVERRIDE"] = "1"
+            with tempfile.TemporaryDirectory() as td:
+                licensing_url = "https://licensing.example.com"
+                validate_url = licensing_url + "/v1/licenses/validate"
+
+                def mock(url: str, payload: dict, timeout: float):
+                    _ = timeout
+                    if url != validate_url:
+                        return 404, {"detail": "not found"}
+                    signed = {
+                        "request_nonce": payload["nonce"],
+                        "request_timestamp": payload["timestamp"],
+                        "valid": False,
+                        "decision": "DENY",
+                        "reason_code": "revoked",
+                        "expires_at": int(time.time()) + 3600,
+                        "entitlements": {},
+                        "recheck_after_seconds": 1,
+                    }
+                    return 403, {"server_signature": _make_jws_rs256(signed, priv)}
+
+                mgr = LicensingManager(
+                    licensing_url=licensing_url,
+                    license_key="sk_live_test",
+                    app_id="shadowapi-pro",
+                    app_version="1.2.3",
+                    instance_id_path=td + "/instance_id",
+                    http_timeout_seconds=0.1,
+                    min_recheck_seconds=1,
+                    enforce_on_startup=False,
+                    post_json_func=mock,
+                )
+                mgr.start()
+                try:
+                    st = mgr.get_state()
+                    self.assertEqual(st.decision, "DENY")
+                    self.assertEqual(st.reason_code, "revoked")
+                    self.assertIsNone(st.last_error)
+                    self.assertFalse(mgr.is_pro_enabled())
+                finally:
+                    mgr.stop()
+        finally:
+            if old_pem is None:
+                os.environ.pop("LICENSING_PINNED_PUBLIC_KEY_PEM", None)
+            else:
+                os.environ["LICENSING_PINNED_PUBLIC_KEY_PEM"] = old_pem
+            if old_allow is None:
+                os.environ.pop("HP_ALLOW_LICENSING_PUBKEY_OVERRIDE", None)
+            else:
+                os.environ["HP_ALLOW_LICENSING_PUBKEY_OVERRIDE"] = old_allow
+
 
 if __name__ == "__main__":
     unittest.main()
