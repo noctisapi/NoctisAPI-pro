@@ -119,6 +119,7 @@ def _stop_background_tasks():
     mgr = get_default_manager()
     mgr.stop()
     licensing.set_pro_enabled_provider(None)
+    licensing.set_pro_enabled_provider(None)
 
 
 @app.get("/health", tags=["Health"], response_class=PlainTextResponse)

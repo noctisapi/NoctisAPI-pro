@@ -2,7 +2,7 @@ version: "3.9"
 
 services:
   migrate:
-    image: ${HP_IMAGE:-ghcr.io/<ORG>/hp-app}:${APP_VERSION}
+    image: ${HP_IMAGE:-ghcr.io/<ORG>/shadowapi-pro}:${APP_VERSION}
     user: "0:0"
     command: ["sh", "-c", "chown -R 10001:0 /data /var/lib/myapp && alembic upgrade head"]
     env_file:
@@ -13,7 +13,7 @@ services:
     restart: "no"
 
   app:
-    image: ${HP_IMAGE:-ghcr.io/<ORG>/hp-app}:${APP_VERSION}
+    image: ${HP_IMAGE:-ghcr.io/<ORG>/shadowapi-pro}:${APP_VERSION}
     user: "10001:0"
     env_file:
       - ../.env.prod
@@ -24,6 +24,7 @@ services:
       - hp_prod_data:/data
       - hp_prod_myapp:/var/lib/myapp
       - ../data/GeoLite2-Country.mmdb:/app/data/GeoLite2-Country.mmdb:ro
+      - /etc/machine-id:/etc/host-machine-id:ro
     expose:
       - "8000"
     depends_on:
@@ -62,7 +63,7 @@ services:
       - "traefik.http.routers.hp-internal.middlewares=hp-monitor-headers,hp-monitor-ratelimit"
 
   admin:
-    image: ${HP_IMAGE:-ghcr.io/<ORG>/hp-app}:${APP_VERSION}
+    image: ${HP_IMAGE:-ghcr.io/<ORG>/shadowapi-pro}:${APP_VERSION}
     user: "10001:0"
     env_file:
       - ../.env.prod
@@ -73,6 +74,7 @@ services:
       - hp_prod_data:/data
       - hp_prod_myapp:/var/lib/myapp
       - ../data/GeoLite2-Country.mmdb:/app/data/GeoLite2-Country.mmdb:ro
+      - /etc/machine-id:/etc/host-machine-id:ro
     expose:
       - "9001"
     ports:

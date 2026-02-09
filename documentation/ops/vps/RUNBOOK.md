@@ -9,7 +9,7 @@ This runbook covers:
 ## Prerequisites
 - VPS with public IP and SSH access
 - DuckDNS subdomain + token
-- Docker image published (e.g. `ghcr.io/<ORG>/hp-app`)
+- Docker image published (e.g. `ghcr.io/<ORG>/shadowapi-pro`)
 - `.env.prod` prepared with real values (kept on the server, not inside the image)
 
 ## Phase 1: VPS Baseline
@@ -49,7 +49,7 @@ This runbook covers:
    - `cp /opt/hp-app/.env.prod /opt/hp-app/.env.prod`
    - Fill real values (tokens, URLs, passwords).
    - Add:
-     - `HP_IMAGE=ghcr.io/<ORG>/hp-app`
+     - `HP_IMAGE=ghcr.io/<ORG>/shadowapi-pro`
      - `HP_PUBLIC_HOST=<SUBDOMAIN>.duckdns.org`
      - `ACME_EMAIL=<you@example.com>`
      - `HONEYPOT_PUBLIC_BASE_URL=https://<SUBDOMAIN>.duckdns.org` (public URL shown in admin)
@@ -59,9 +59,10 @@ This runbook covers:
     - `HP_ACTOR_UA_MODE=family` (recommended; `ip` or `full` also supported)
     - `LICENSING_URL=https://licensing.example.com` (LicensingApp base URL)
     - `LICENSE_KEY=sk_live_...` (end-user input)
-    - `FINGERPRINT_PATH=/var/lib/myapp/device_fingerprint` (default)
+    - `LICENSING_PINNED_PUBLIC_KEY_PATH=/app/app/licensing_server_public_key.pem` (pinned RSA public key PEM)
+    - `INSTANCE_ID_PATH=/var/lib/myapp/instance_id` (default)
     - `LICENSING_HTTP_TIMEOUT_SECONDS=10` (default)
-    - `LICENSING_MIN_RENEW_SECONDS=30` (default)
+    - `LICENSING_MIN_RECHECK_SECONDS=30` (default)
     - `HP_LICENSE_TIER=core` (legacy/manual override; ignored when LicensingApp is enabled)
     - `HP_PUBLIC_RATELIMIT_AVG=120` / `HP_PUBLIC_RATELIMIT_BURST=240` (optional; Traefik rate limit)
 
@@ -127,13 +128,13 @@ Use an SSH deploy action that:
 ## GitHub Actions + GHCR (automatic image build)
 This repo includes `.github/workflows/ghcr.yml` which:
 - Builds the Docker image on every push to `main`
-- Pushes it to `ghcr.io/<OWNER>/hp-app` with tags `latest` and commit SHA
+- Pushes it to `ghcr.io/<OWNER>/shadowapi-pro` with tags `latest` and commit SHA
 
 Steps:
 1. Push to GitHub (`main` branch).
 2. GHCR will publish the image automatically.
 3. On the VPS, set:
-   - `HP_IMAGE=ghcr.io/<OWNER>/hp-app`
+   - `HP_IMAGE=ghcr.io/<OWNER>/shadowapi-pro`
    - `APP_VERSION=latest` (or use the SHA tag)
 4. Run:
    - `bash ops/vps/deploy.sh`

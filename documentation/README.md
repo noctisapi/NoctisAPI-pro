@@ -19,11 +19,14 @@ Feature availability is controlled by the runtime licensing manager (LicensingAp
 Recommended configuration:
 - `LICENSE_KEY=sk_live_...`
 - `LICENSING_URL=https://licensing.example.com`
-- `FINGERPRINT_PATH=/var/lib/myapp/device_fingerprint` (default)
+- Pin the licensing server RSA public key (PEM):
+  - `LICENSING_PINNED_PUBLIC_KEY_PATH=/app/app/licensing_server_public_key.pem` (default in image), or
+  - `LICENSING_PINNED_PUBLIC_KEY_PEM="-----BEGIN PUBLIC KEY----- ..."`
+- `INSTANCE_ID_PATH=/var/lib/myapp/instance_id` (default)
 - `LICENSING_HTTP_TIMEOUT_SECONDS=10` (default)
-- `LICENSING_MIN_RENEW_SECONDS=30` (default)
+- `LICENSING_MIN_RECHECK_SECONDS=30` (default)
 
-The app generates a device fingerprint once and persists it at `FINGERPRINT_PATH`. Mount a persistent Docker volume at `/var/lib/myapp` so the fingerprint survives container recreation.
+The app computes a host fingerprint and sends its SHA-256 hex. Mount a persistent Docker volume at `/var/lib/myapp` so `INSTANCE_ID_PATH` survives container recreation.
 
 Legacy/manual override:
 - `HP_LICENSE_TIER=core|pro` (ignored when the runtime licensing manager is enabled).
@@ -125,10 +128,10 @@ Build and publish:
 ```
 VERSION=0.1.0
 ORG=<ORG>
-docker build -t ghcr.io/$ORG/hp-app:$VERSION .
-docker tag ghcr.io/$ORG/hp-app:$VERSION ghcr.io/$ORG/hp-app:latest
-docker push ghcr.io/$ORG/hp-app:$VERSION
-docker push ghcr.io/$ORG/hp-app:latest
+docker build -t ghcr.io/$ORG/shadowapi-pro:$VERSION .
+docker tag ghcr.io/$ORG/shadowapi-pro:$VERSION ghcr.io/$ORG/shadowapi-pro:latest
+docker push ghcr.io/$ORG/shadowapi-pro:$VERSION
+docker push ghcr.io/$ORG/shadowapi-pro:latest
 ```
 
 ## VPS Deployment

@@ -7,17 +7,24 @@ ShadowAPI is a compact deception platform that exposes a realistic public API su
 - Pro (paid): cases workflow, campaigns explorer + recompute, replay/evidence linkage, advanced scoring, file upload + analysis simulation pipeline
 
 ## Licensing
-The app supports automatic PRO licensing via an external Licensing server.
+The app supports automatic PRO licensing via an external licensing server.
 
-LicensingApp integration (recommended):
-- Set `LICENSE_KEY=sk_live_...` (end-user input).
-- Set `LICENSING_URL=https://licensing.example.com`.
-- Optional:
-  - `FINGERPRINT_PATH=/var/lib/myapp/device_fingerprint` (default)
+Recommended configuration:
+- `LICENSE_KEY=sk_live_...` (end-user input)
+- `LICENSING_URL=https://licensing.example.com`
+- Pin the licensing server RSA public key (PEM):
+  - `LICENSING_PINNED_PUBLIC_KEY_PATH=/app/app/licensing_server_public_key.pem` (default in image), or
+  - `LICENSING_PINNED_PUBLIC_KEY_PEM="-----BEGIN PUBLIC KEY----- ..."`
+- Persist a stable installation identifier:
+  - `INSTANCE_ID_PATH=/var/lib/myapp/instance_id` (default; mount a persistent volume at `/var/lib/myapp`)
+- Optional tuning:
   - `LICENSING_HTTP_TIMEOUT_SECONDS=10` (default)
-  - `LICENSING_MIN_RENEW_SECONDS=30` (default)
+  - `LICENSING_MIN_RECHECK_SECONDS=30` (default)
+  - `HP_ENFORCE_LICENSE=1` to fail startup if licensing is invalid or the decision is `DENY` (default `0` = degrade to CORE)
+  - `HP_LICENSE_LIMITED_BEHAVIOR=core|exit` (default `core`)
+  - `HP_LICENSE_DENY_BEHAVIOR=exit|disable` (default `disable`)
 
-The app generates a UUID fingerprint once and persists it at `FINGERPRINT_PATH`. For Docker, mount a persistent volume at `/var/lib/myapp` so the fingerprint survives container recreation.
+The client computes a best-effort host fingerprint and sends its SHA-256 hex (64 chars). If you want a fully stable host-locked fingerprint across container rebuilds, set `INSTANCE_FINGERPRINT_SHA256` (64 hex) or mount the host machine-id into the container (for example mount `/etc/machine-id` to `/etc/host-machine-id` and set `HP_HOST_MACHINE_ID_PATH=/etc/host-machine-id`).
 
 Legacy/manual override:
 - `HP_LICENSE_TIER=core|pro` is still supported, but is ignored when the runtime licensing manager is enabled.
