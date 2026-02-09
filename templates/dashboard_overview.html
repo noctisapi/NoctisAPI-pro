@@ -41,19 +41,19 @@
       <div class="chart-block">
         <div class="chart-title">Events per day (14d)</div>
         <div class="chart-frame">
-          <div class="chart-canvas" data-chart="events"></div>
+          <canvas id="chart-events" class="chart-canvas"></canvas>
         </div>
       </div>
       <div class="chart-block">
         <div class="chart-title">New vs recurrent actors</div>
         <div class="chart-frame">
-          <div class="chart-canvas" data-chart="actors"></div>
+          <canvas id="chart-actors" class="chart-canvas"></canvas>
         </div>
       </div>
       <div class="chart-block">
         <div class="chart-title">Stage progression</div>
         <div class="chart-frame">
-          <div class="chart-canvas" data-chart="stages"></div>
+          <canvas id="chart-stages" class="chart-canvas"></canvas>
         </div>
       </div>
     </div>
@@ -126,54 +126,16 @@
     return map;
   };
 
-  const buildLine = (values) => {
-    const safeVals = values.length ? values : [0];
-    const points = safeVals.map((v, i) => [i, v]);
-    const max = Math.max(1, ...safeVals);
-    const w = 520, h = 160, pad = 20;
-    const scaleX = (w - pad * 2) / Math.max(1, safeVals.length - 1);
-    const scaleY = (h - pad * 2) / max;
-    const d = points.map(([x, y], idx) => {
-      const px = pad + x * scaleX;
-      const py = h - pad - y * scaleY;
-      return `${idx === 0 ? 'M' : 'L'}${px},${py}`;
-    }).join(' ');
-    const last = points[points.length - 1] || [0, 0];
-    const lx = pad + last[0] * scaleX;
-    const ly = h - pad - last[1] * scaleY;
-    return `<svg viewBox="0 0 ${w} ${h}" class="mini-chart" preserveAspectRatio="none">
-      <line x1="${pad}" y1="${pad}" x2="${pad}" y2="${h - pad}" class="axis"/>
-      <line x1="${pad}" y1="${h - pad}" x2="${w - pad}" y2="${h - pad}" class="axis"/>
-      <path d="${d}" fill="none" stroke="currentColor" stroke-width="3.5" />
-      <circle cx="${lx}" cy="${ly}" r="4.5" class="last-point" />
-    </svg>`;
-  };
-
-  const buildBars = (valuesA, valuesB) => {
-    const max = Math.max(1, ...valuesA.map((v,i)=>v+(valuesB[i]||0)));
-    return valuesA.map((v, i) => {
-      const total = v + (valuesB[i] || 0);
-      const hA = Math.round((v / max) * 48);
-      const hB = Math.round(((valuesB[i] || 0) / max) * 48);
-      return `<div class="bar" title="${total}">
-        <span class="bar-a" style="height:${hA}px"></span>
-        <span class="bar-b" style="height:${hB}px"></span>
-      </div>`;
-    }).join('');
-  };
-
   const renderCharts = () => {
     const eventsMap = byDay(eventsByDay);
     const days = Object.keys(eventsMap).sort();
     const events = days.map(d => eventsMap[d] || 0);
-    document.querySelector('[data-chart=\"events\"]').innerHTML = buildLine(events);
 
     const newMap = byDay(actorsNew);
     const recMap = byDay(actorsRecurrent);
     const actorDays = Array.from(new Set([...Object.keys(newMap), ...Object.keys(recMap)])).sort();
     const newVals = actorDays.map(d => newMap[d] || 0);
     const recVals = actorDays.map(d => recMap[d] || 0);
-    document.querySelector('[data-chart=\"actors\"]').innerHTML = `<div class="bars">${buildBars(newVals, recVals)}</div>`;
 
     const stageMap = {};
     stageProgress.forEach(r => {
@@ -181,7 +143,100 @@
     });
     const stageDays = Object.keys(stageMap).sort();
     const stageVals = stageDays.map(d => stageMap[d] || 0);
-    document.querySelector('[data-chart=\"stages\"]').innerHTML = buildLine(stageVals);
+
+    const commonOptions = {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: {
+          display: true,
+          labels: { color: "#cfcfcf", boxWidth: 12, boxHeight: 12 }
+        },
+        tooltip: {
+          backgroundColor: "rgba(18,18,18,0.92)",
+          borderColor: "rgba(255,255,255,0.1)",
+          borderWidth: 1,
+          titleColor: "#fff",
+          bodyColor: "#e6e6e6",
+          displayColors: true,
+          padding: 10
+        }
+      },
+      scales: {
+        x: {
+          grid: { color: "rgba(255,255,255,0.06)" },
+          ticks: { color: "#9a9a9a", maxTicksLimit: 7 }
+        },
+        y: {
+          grid: { color: "rgba(255,255,255,0.08)" },
+          ticks: { color: "#9a9a9a" }
+        }
+      }
+    };
+
+    new Chart(document.getElementById("chart-events"), {
+      type: "line",
+      data: {
+        labels: days,
+        datasets: [{
+          label: "Events",
+          data: events,
+          borderColor: "#7dd3fc",
+          backgroundColor: "rgba(125,211,252,0.15)",
+          fill: true,
+          tension: 0.3,
+          pointRadius: 3,
+          pointHoverRadius: 5
+        }]
+      },
+      options: commonOptions
+    });
+
+    new Chart(document.getElementById("chart-actors"), {
+      type: "bar",
+      data: {
+        labels: actorDays,
+        datasets: [
+          {
+            label: "New",
+            data: newVals,
+            backgroundColor: "rgba(79,209,197,0.8)"
+          },
+          {
+            label: "Recurrent",
+            data: recVals,
+            backgroundColor: "rgba(102,126,234,0.8)"
+          }
+        ]
+      },
+      options: {
+        ...commonOptions,
+        scales: {
+          ...commonOptions.scales,
+          x: { ...commonOptions.scales.x, stacked: true },
+          y: { ...commonOptions.scales.y, stacked: true }
+        }
+      }
+    });
+
+    new Chart(document.getElementById("chart-stages"), {
+      type: "line",
+      data: {
+        labels: stageDays,
+        datasets: [{
+          label: "Max stage",
+          data: stageVals,
+          borderColor: "#fca5a5",
+          backgroundColor: "rgba(252,165,165,0.12)",
+          fill: true,
+          stepped: true,
+          pointRadius: 3,
+          pointHoverRadius: 5
+        }]
+      },
+      options: commonOptions
+    });
   };
 
   const relTime = (iso) => {
