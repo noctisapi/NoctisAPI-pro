@@ -481,11 +481,23 @@ class LicensingManager:
                 post_json_func=self._post_json,
             )
         except LicensingClientError as exc:
+            detail = ""
+            try:
+                detail = str(exc.data.get("_error") or exc.data.get("detail") or "").strip()
+            except Exception:
+                detail = ""
+            detail = detail.replace("\r", " ").replace("\n", " ").strip()
+            if len(detail) > 180:
+                detail = detail[:180]
             return LicensingState(
                 decision=None,
                 valid=False,
                 last_ok_at=self.get_state().last_ok_at,
-                last_error=f"http_{exc.status_code}" if exc.status_code else "network_error",
+                last_error=(
+                    (f"http_{exc.status_code}:{detail}" if detail else f"http_{exc.status_code}")
+                    if exc.status_code
+                    else "network_error"
+                ),
                 reason_code=None,
                 expires_at=None,
                 entitlements={},
