@@ -119,7 +119,6 @@ def _stop_background_tasks():
     mgr = get_default_manager()
     mgr.stop()
     licensing.set_pro_enabled_provider(None)
-    licensing.set_pro_enabled_provider(None)
 
 
 @app.get("/health", tags=["Health"], response_class=PlainTextResponse)
@@ -138,6 +137,31 @@ def internal_ready():
     except Exception as exc:
         raise HTTPException(status_code=503, detail={"status": "error", "reason": str(exc)})
     return JSONResponse(state)
+
+
+@app.get("/admin/license", include_in_schema=False, response_class=JSONResponse)
+def admin_license_status():
+    """
+    Internal licensing debug endpoint.
+
+    Intended for the admin service (typically bound to 127.0.0.1 in production).
+    """
+    mgr = get_default_manager()
+    st = mgr.get_state()
+    return {
+        "pro_enabled": bool(mgr.is_pro_enabled()),
+        "feature_flags": licensing.feature_flags(),
+        "licensing": {
+            "valid": bool(st.valid),
+            "decision": st.decision,
+            "reason_code": st.reason_code,
+            "last_error": st.last_error,
+            "last_ok_at": st.last_ok_at.isoformat().replace("+00:00", "Z") if st.last_ok_at else None,
+            "expires_at": st.expires_at,
+            "recheck_after_seconds": st.recheck_after_seconds,
+            "entitlements": st.entitlements or {},
+        },
+    }
 
 
 def _honeypot_snapshot(conn: sqlite3.Connection, limit: int = 20) -> dict:
