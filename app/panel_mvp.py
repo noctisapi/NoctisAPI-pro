@@ -1136,7 +1136,14 @@ def dashboard(request: Request):
               le.extra_json AS last_extra_json,
               (SELECT e.extra_json FROM events e WHERE e.actor_id = a.actor_id AND e.extra_json LIKE '%country_iso2%' ORDER BY e.id DESC LIMIT 1) AS last_geo_extra_json,
               (SELECT COUNT(*) FROM events e WHERE e.actor_id = a.actor_id AND e.kind = 'token_used') AS token_used_count,
-              (SELECT COUNT(*) FROM events e WHERE e.actor_id = a.actor_id AND e.kind = 'unknown_token') AS unknown_token_count
+              (SELECT COUNT(*) FROM events e WHERE e.actor_id = a.actor_id AND e.kind = 'unknown_token') AS unknown_token_count,
+              (SELECT COUNT(*) FROM events e WHERE e.actor_id = a.actor_id AND e.kind LIKE 'recon_%') AS recon_count,
+              (SELECT COUNT(*) FROM events e WHERE e.actor_id = a.actor_id AND e.kind LIKE 'auth_%') AS auth_count,
+              (SELECT COUNT(*) FROM events e WHERE e.actor_id = a.actor_id AND (e.kind LIKE 'admin_%' OR e.kind LIKE 'internal_%')) AS internal_count,
+              (SELECT COUNT(*) FROM events e WHERE e.actor_id = a.actor_id AND (e.kind LIKE 'devops_%' OR e.kind = 'pipeline_job')) AS devops_count,
+              (SELECT COUNT(*) FROM events e WHERE e.actor_id = a.actor_id AND (e.kind LIKE 'files_%' OR e.kind = 'upload_trap')) AS files_count,
+              (SELECT COUNT(*) FROM events e WHERE e.actor_id = a.actor_id AND (e.kind LIKE 'console_%' OR e.kind LIKE 'root_%')) AS console_count,
+              (SELECT COUNT(*) FROM events e WHERE e.actor_id = a.actor_id AND e.kind LIKE 'business_%') AS business_count
             FROM actors a
             LEFT JOIN last_events le ON le.actor_id = a.actor_id
             WHERE COALESCE(a.lifecycle_state, 'active') != 'deleted'
@@ -1180,10 +1187,24 @@ def dashboard(request: Request):
                     pass
 
             a["badges"] = []
+            if int(a.get("recon_count") or 0) > 0:
+                a["badges"].append("recon")
+            if int(a.get("auth_count") or 0) > 0:
+                a["badges"].append("auth")
+            if int(a.get("internal_count") or 0) > 0:
+                a["badges"].append("internal")
+            if int(a.get("devops_count") or 0) > 0:
+                a["badges"].append("devops")
+            if int(a.get("files_count") or 0) > 0:
+                a["badges"].append("files")
+            if int(a.get("console_count") or 0) > 0:
+                a["badges"].append("console")
+            if int(a.get("business_count") or 0) > 0:
+                a["badges"].append("business")
             if int(a.get("token_used_count") or 0) > 0:
-                a["badges"].append(f"token_used×{a['token_used_count']}")
+                a["badges"].append(f"token_used?{a['token_used_count']}")
             if int(a.get("unknown_token_count") or 0) > 0:
-                a["badges"].append(f"unknown_token×{a['unknown_token_count']}")
+                a["badges"].append(f"unknown_token?{a['unknown_token_count']}")
 
             # errores (desde tabla actors)
             err_total = int(a.get("err_total") or 0)
