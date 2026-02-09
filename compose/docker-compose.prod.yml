@@ -4,11 +4,12 @@ services:
   migrate:
     image: ${HP_IMAGE:-ghcr.io/<ORG>/hp-app}:${APP_VERSION}
     user: "0:0"
-    command: ["sh", "-c", "chown -R 10001:0 /data && alembic upgrade head"]
+    command: ["sh", "-c", "chown -R 10001:0 /data /var/lib/myapp && alembic upgrade head"]
     env_file:
       - ../.env.prod
     volumes:
       - hp_prod_data:/data
+      - hp_prod_myapp:/var/lib/myapp
     restart: "no"
 
   app:
@@ -21,6 +22,7 @@ services:
     command: ["uvicorn", "app.honeypot_public:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips=127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"]
     volumes:
       - hp_prod_data:/data
+      - hp_prod_myapp:/var/lib/myapp
       - ../data/GeoLite2-Country.mmdb:/app/data/GeoLite2-Country.mmdb:ro
     expose:
       - "8000"
@@ -69,6 +71,7 @@ services:
     command: ["uvicorn", "app.panel_mvp:app", "--host", "0.0.0.0", "--port", "9001", "--proxy-headers", "--forwarded-allow-ips=127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"]
     volumes:
       - hp_prod_data:/data
+      - hp_prod_myapp:/var/lib/myapp
       - ../data/GeoLite2-Country.mmdb:/app/data/GeoLite2-Country.mmdb:ro
     expose:
       - "9001"
@@ -108,4 +111,5 @@ services:
 
 volumes:
   hp_prod_data:
+  hp_prod_myapp:
   traefik_letsencrypt:

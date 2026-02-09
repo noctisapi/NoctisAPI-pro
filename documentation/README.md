@@ -14,15 +14,19 @@ This repo packages both the public ShadowAPI honeypot API (`app/honeypot_public.
 
 ## Licensing
 
-Feature availability is controlled by `HP_LICENSE_TIER`.
+Feature availability is controlled by the runtime licensing manager (LicensingApp).
 
-- `core` (default): hides PRO UI sections and returns 404 for PRO API endpoints.
-- `pro`: enables cases, campaigns, replay/evidence linkage, advanced scoring, and the file upload + analysis pipeline.
+Recommended configuration:
+- `LICENSE_KEY=sk_live_...`
+- `LICENSING_URL=https://licensing.example.com`
+- `FINGERPRINT_PATH=/var/lib/myapp/device_fingerprint` (default)
+- `LICENSING_HTTP_TIMEOUT_SECONDS=10` (default)
+- `LICENSING_MIN_RENEW_SECONDS=30` (default)
 
-JWT licensing (production):
-- `HP_LICENSE_KEY` contains a JWT (RS256).
-- `HP_LICENSE_PUBKEY` contains the public key PEM (or base64-encoded PEM).
-- If the token is missing or invalid, the app falls back to CORE.
+The app generates a device fingerprint once and persists it at `FINGERPRINT_PATH`. Mount a persistent Docker volume at `/var/lib/myapp` so the fingerprint survives container recreation.
+
+Legacy/manual override:
+- `HP_LICENSE_TIER=core|pro` (ignored when the runtime licensing manager is enabled).
 
 ## Local Development
 

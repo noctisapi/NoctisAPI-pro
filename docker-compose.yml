@@ -16,3 +16,4 @@ services:
 
 volumes:
   hp_dev_data: {}
+  hp_dev_myapp: {}

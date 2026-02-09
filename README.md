@@ -7,14 +7,20 @@ ShadowAPI is a compact deception platform that exposes a realistic public API su
 - Pro (paid): cases workflow, campaigns explorer + recompute, replay/evidence linkage, advanced scoring, file upload + analysis simulation pipeline
 
 ## Licensing
-Set `HP_LICENSE_TIER` to control feature availability.
-- `core` (default) disables PRO features in the admin panel and API.
-- `pro` enables cases, campaigns, replay/evidence, advanced scoring, and the file pipeline.
+The app supports automatic PRO licensing via an external Licensing server.
 
-JWT licensing (recommended for production):
-- `HP_LICENSE_KEY` contains a JWT (RS256).
-- `HP_LICENSE_PUBKEY` contains the public key PEM (or base64-encoded PEM).
-- If the token is missing or invalid, the app falls back to CORE.
+LicensingApp integration (recommended):
+- Set `LICENSE_KEY=sk_live_...` (end-user input).
+- Set `LICENSING_URL=https://licensing.example.com`.
+- Optional:
+  - `FINGERPRINT_PATH=/var/lib/myapp/device_fingerprint` (default)
+  - `LICENSING_HTTP_TIMEOUT_SECONDS=10` (default)
+  - `LICENSING_MIN_RENEW_SECONDS=30` (default)
+
+The app generates a UUID fingerprint once and persists it at `FINGERPRINT_PATH`. For Docker, mount a persistent volume at `/var/lib/myapp` so the fingerprint survives container recreation.
+
+Legacy/manual override:
+- `HP_LICENSE_TIER=core|pro` is still supported, but is ignored when the runtime licensing manager is enabled.
 
 ## Repository Layout
 - `app/` — core services (public API, admin panel, monitor, health)

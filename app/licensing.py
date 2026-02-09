@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from enum import Enum
-from typing import Set
+from typing import Callable, Optional, Set
 
 
 class LicenseTier(str, Enum):
@@ -27,8 +27,29 @@ _PRO_FEATURES: Set[str] = {
     Feature.FILE_PIPELINE.value,
 }
 
+_PRO_ENABLED_PROVIDER: Optional[Callable[[], bool]] = None
+
+
+def set_pro_enabled_provider(fn: Optional[Callable[[], bool]]) -> None:
+    global _PRO_ENABLED_PROVIDER
+    _PRO_ENABLED_PROVIDER = fn
+
+
+def is_pro_enabled() -> bool:
+    if _PRO_ENABLED_PROVIDER is not None:
+        try:
+            return bool(_PRO_ENABLED_PROVIDER())
+        except Exception:
+            return False
+    return False
+
 
 def get_license_tier() -> LicenseTier:
+    # Preferred: runtime licensing provider (LICENSE_KEY -> /activate, /validate).
+    if _PRO_ENABLED_PROVIDER is not None:
+        return LicenseTier.PRO if is_pro_enabled() else LicenseTier.CORE
+
+    # Backward-compatible fallback (manual override).
     raw = (os.getenv("HP_LICENSE_TIER") or "core").strip().lower()
     if raw == LicenseTier.PRO.value:
         return LicenseTier.PRO
@@ -51,4 +72,5 @@ def feature_flags() -> dict:
     return {
         "license_tier": get_license_tier().value,
         "license_features": sorted(enabled_features()),
+        "pro_enabled": bool(get_license_tier() == LicenseTier.PRO),
     }

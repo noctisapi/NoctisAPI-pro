@@ -21,6 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from app import licensing
+from app.licensing_client import get_default_manager
 
 APP_TITLE = os.getenv("HP_API_TITLE", "Account Service API")
 APP_VERSION = os.getenv("HP_API_VERSION", "1.0.0")
@@ -124,6 +125,16 @@ def _warn_if_default_seed() -> None:
 @app.on_event("startup")
 async def _startup_checks() -> None:
     _warn_if_default_seed()
+    mgr = get_default_manager()
+    licensing.set_pro_enabled_provider(mgr.is_pro_enabled)
+    mgr.start()
+
+
+@app.on_event("shutdown")
+async def _shutdown_tasks() -> None:
+    mgr = get_default_manager()
+    mgr.stop()
+    licensing.set_pro_enabled_provider(None)
 
 
 def _utc_now_iso() -> str:

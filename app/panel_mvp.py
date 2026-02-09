@@ -17,6 +17,7 @@ from typing import Optional, List
 from app import status_checks
 from app import licensing
 from app.honeypot_monitor import HoneypotAvailabilityMonitor, get_history as hp_get_history, get_summary as hp_get_summary
+from app.licensing_client import get_default_manager
 
 APP_NAME = "shadowapi-panel"
 DB_PATH = os.getenv("HP_DB_PATH", "/data/honeypot.db")
@@ -107,11 +108,17 @@ honeypot_monitor = HoneypotAvailabilityMonitor(db)
 @app.on_event("startup")
 def _start_background_tasks():
     honeypot_monitor.start()
+    mgr = get_default_manager()
+    licensing.set_pro_enabled_provider(mgr.is_pro_enabled)
+    mgr.start()
 
 
 @app.on_event("shutdown")
 def _stop_background_tasks():
     honeypot_monitor.stop()
+    mgr = get_default_manager()
+    mgr.stop()
+    licensing.set_pro_enabled_provider(None)
 
 
 @app.get("/health", tags=["Health"], response_class=PlainTextResponse)

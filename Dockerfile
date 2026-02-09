@@ -9,7 +9,7 @@ WORKDIR /app
 RUN apt-get update \
     && apt-get install -y --no-install-recommends build-essential \
     && rm -rf /var/lib/apt/lists/* \
-    && mkdir -p /data
+    && mkdir -p /data /var/lib/myapp
 
 COPY requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
@@ -17,7 +17,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . /app
 
 RUN useradd -r -u 10001 -g root appuser \
-    && chown -R appuser:root /data /app
+    && chown -R appuser:root /data /var/lib/myapp /app
 
 EXPOSE 8000
 USER appuser

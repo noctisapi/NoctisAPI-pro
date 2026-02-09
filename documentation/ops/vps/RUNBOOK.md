@@ -57,9 +57,12 @@ This runbook covers:
     - `HP_SEED=<long random secret>` (stable actor IDs + secrets)
     - `HP_REQUIRE_SEED=1` (optional, fail startup if HP_SEED is missing/placeholder)
     - `HP_ACTOR_UA_MODE=family` (recommended; `ip` or `full` also supported)
-    - `HP_LICENSE_TIER=core` (use `pro` to enable cases, campaigns, replay/evidence, advanced scoring, and file pipeline)
-    - `HP_LICENSE_KEY=<jwt>` (RS256 signed license token)
-    - `HP_LICENSE_PUBKEY=<pem or base64 pem>` (public key used to verify the token)
+    - `LICENSING_URL=https://licensing.example.com` (LicensingApp base URL)
+    - `LICENSE_KEY=sk_live_...` (end-user input)
+    - `FINGERPRINT_PATH=/var/lib/myapp/device_fingerprint` (default)
+    - `LICENSING_HTTP_TIMEOUT_SECONDS=10` (default)
+    - `LICENSING_MIN_RENEW_SECONDS=30` (default)
+    - `HP_LICENSE_TIER=core` (legacy/manual override; ignored when LicensingApp is enabled)
     - `HP_PUBLIC_RATELIMIT_AVG=120` / `HP_PUBLIC_RATELIMIT_BURST=240` (optional; Traefik rate limit)
 
 ## Phase 4: Certificates (Traefik + ACME)
@@ -77,7 +80,7 @@ Traefik handles certificates automatically via ACME HTTP-01.
    - `curl -i https://<SUBDOMAIN>.duckdns.org/docs`
    - Admin panel is available via SSH tunnel on `127.0.0.1:9001`
 4. If you see `attempt to write a readonly database`, fix volume ownership once:
-   - `docker compose -f compose/docker-compose.prod.yml --env-file .env.prod run --rm --user 0:0 app sh -c "chown -R 10001:0 /data"`
+   - `docker compose -f compose/docker-compose.prod.yml --env-file .env.prod run --rm --user 0:0 app sh -c "chown -R 10001:0 /data /var/lib/myapp"`
    - then re-run `bash /opt/hp-app/ops/vps/deploy.sh`
 
 ## Phase 5.1: GeoIP database (flags)
