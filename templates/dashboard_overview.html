@@ -40,15 +40,21 @@
     <div class="card-body">
       <div class="chart-block">
         <div class="chart-title">Events per day (14d)</div>
-        <div class="chart-canvas" data-chart="events"></div>
+        <div class="chart-frame">
+          <div class="chart-canvas" data-chart="events"></div>
+        </div>
       </div>
       <div class="chart-block">
         <div class="chart-title">New vs recurrent actors</div>
-        <div class="chart-canvas" data-chart="actors"></div>
+        <div class="chart-frame">
+          <div class="chart-canvas" data-chart="actors"></div>
+        </div>
       </div>
       <div class="chart-block">
         <div class="chart-title">Stage progression</div>
-        <div class="chart-canvas" data-chart="stages"></div>
+        <div class="chart-frame">
+          <div class="chart-canvas" data-chart="stages"></div>
+        </div>
       </div>
     </div>
   </div>
@@ -121,17 +127,26 @@
   };
 
   const buildLine = (values) => {
-    const points = values.map((v, i) => [i, v]);
-    const max = Math.max(1, ...values);
-    const w = 260, h = 80, pad = 6;
-    const scaleX = (w - pad * 2) / Math.max(1, values.length - 1);
+    const safeVals = values.length ? values : [0];
+    const points = safeVals.map((v, i) => [i, v]);
+    const max = Math.max(1, ...safeVals);
+    const w = 520, h = 160, pad = 20;
+    const scaleX = (w - pad * 2) / Math.max(1, safeVals.length - 1);
     const scaleY = (h - pad * 2) / max;
     const d = points.map(([x, y], idx) => {
       const px = pad + x * scaleX;
       const py = h - pad - y * scaleY;
       return `${idx === 0 ? 'M' : 'L'}${px},${py}`;
     }).join(' ');
-    return `<svg viewBox="0 0 ${w} ${h}" class="mini-chart"><path d="${d}" fill="none" stroke="currentColor" stroke-width="2"/></svg>`;
+    const last = points[points.length - 1] || [0, 0];
+    const lx = pad + last[0] * scaleX;
+    const ly = h - pad - last[1] * scaleY;
+    return `<svg viewBox="0 0 ${w} ${h}" class="mini-chart" preserveAspectRatio="none">
+      <line x1="${pad}" y1="${pad}" x2="${pad}" y2="${h - pad}" class="axis"/>
+      <line x1="${pad}" y1="${h - pad}" x2="${w - pad}" y2="${h - pad}" class="axis"/>
+      <path d="${d}" fill="none" stroke="currentColor" stroke-width="3.5" />
+      <circle cx="${lx}" cy="${ly}" r="4.5" class="last-point" />
+    </svg>`;
   };
 
   const buildBars = (valuesA, valuesB) => {
@@ -140,7 +155,10 @@
       const total = v + (valuesB[i] || 0);
       const hA = Math.round((v / max) * 48);
       const hB = Math.round(((valuesB[i] || 0) / max) * 48);
-      return `<div class="bar"><span class="bar-a" style="height:${hA}px"></span><span class="bar-b" style="height:${hB}px"></span><span class="bar-total" title="${total}"></span></div>`;
+      return `<div class="bar" title="${total}">
+        <span class="bar-a" style="height:${hA}px"></span>
+        <span class="bar-b" style="height:${hB}px"></span>
+      </div>`;
     }).join('');
   };
 
