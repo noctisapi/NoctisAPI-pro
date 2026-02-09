@@ -9,7 +9,7 @@ from statistics import median
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from typing import Optional, List
@@ -987,6 +987,132 @@ def _parse_step_ts(ts: str):
 
 
 @app.get("/", response_class=HTMLResponse)
+def dashboard_root():
+    return RedirectResponse(url="/dashboard", status_code=302)
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+def dashboard_overview(request: Request):
+    conn = db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) AS cnt FROM actors WHERE last_seen >= datetime('now','-1 day')")
+        active_24h = int(cur.fetchone()["cnt"] or 0)
+        cur.execute("SELECT COUNT(*) AS cnt FROM actors WHERE last_seen >= datetime('now','-7 day')")
+        active_7d = int(cur.fetchone()["cnt"] or 0)
+        cur.execute("SELECT COUNT(*) AS cnt FROM events")
+        events_total = int(cur.fetchone()["cnt"] or 0)
+        cur.execute("SELECT COUNT(*) AS cnt FROM cases WHERE status='open'")
+        cases_open = int(cur.fetchone()["cnt"] or 0)
+        cur.execute("SELECT COUNT(*) AS cnt FROM campaigns WHERE COALESCE(last_seen_at, created_at) >= datetime('now','-7 day')")
+        campaigns_active = int(cur.fetchone()["cnt"] or 0)
+        cur.execute("SELECT COALESCE(MAX(stage_max), 0) AS max_stage FROM sessions")
+        stage_max = int(cur.fetchone()["max_stage"] or 0)
+
+        cur.execute(
+            """
+            SELECT substr(ts,1,10) AS day, COUNT(*) AS cnt
+            FROM events
+            WHERE ts >= datetime('now','-14 day')
+            GROUP BY day
+            ORDER BY day
+            """
+        )
+        events_by_day = [dict(r) for r in cur.fetchall()]
+
+        cur.execute(
+            """
+            SELECT substr(first_seen,1,10) AS day, COUNT(*) AS cnt
+            FROM actors
+            WHERE first_seen >= datetime('now','-14 day')
+            GROUP BY day
+            ORDER BY day
+            """
+        )
+        actors_new = [dict(r) for r in cur.fetchall()]
+
+        cur.execute(
+            """
+            SELECT substr(last_seen,1,10) AS day, COUNT(*) AS cnt
+            FROM actors
+            WHERE last_seen >= datetime('now','-14 day')
+              AND substr(first_seen,1,10) < substr(last_seen,1,10)
+            GROUP BY day
+            ORDER BY day
+            """
+        )
+        actors_recurrent = [dict(r) for r in cur.fetchall()]
+
+        cur.execute(
+            """
+            SELECT substr(started_at,1,10) AS day, stage_max AS stage, COUNT(*) AS cnt
+            FROM sessions
+            WHERE started_at >= datetime('now','-14 day')
+            GROUP BY day, stage
+            ORDER BY day, stage
+            """
+        )
+        stage_progress = [dict(r) for r in cur.fetchall()]
+
+        cur.execute(
+            "SELECT id, title, status, severity, created_at FROM cases ORDER BY created_at DESC LIMIT 5"
+        )
+        cases_recent = [dict(r) for r in cur.fetchall()]
+
+        cur.execute(
+            """
+            SELECT campaign_id, label, last_seen_at, COALESCE(first_seen_at, created_at) AS first_seen
+            FROM campaigns
+            WHERE last_seen_at IS NOT NULL
+              AND last_seen_at >= datetime('now','-1 day')
+              AND COALESCE(first_seen_at, created_at) < datetime(last_seen_at,'-1 day')
+            ORDER BY last_seen_at DESC
+            LIMIT 5
+            """
+        )
+        campaigns_reactivated = [dict(r) for r in cur.fetchall()]
+
+        cur.execute(
+            """
+            SELECT actor_id, session_id, stage_max, started_at, ended_at,
+                   CAST((julianday(ended_at) - julianday(started_at)) * 86400 AS INTEGER) AS duration_s
+            FROM sessions
+            WHERE stage_max >= 6
+              AND ended_at IS NOT NULL
+              AND (julianday(ended_at) - julianday(started_at)) * 86400 <= 900
+            ORDER BY ended_at DESC
+            LIMIT 5
+            """
+        )
+        fast_escalations = [dict(r) for r in cur.fetchall()]
+
+        return templates.TemplateResponse(
+            "dashboard_overview.html",
+            {
+                "request": request,
+                "kpi": {
+                    "active_24h": active_24h,
+                    "active_7d": active_7d,
+                    "events_total": events_total,
+                    "cases_open": cases_open,
+                    "campaigns_active": campaigns_active,
+                    "stage_max": stage_max,
+                },
+                "events_by_day": events_by_day,
+                "actors_new": actors_new,
+                "actors_recurrent": actors_recurrent,
+                "stage_progress": stage_progress,
+                "cases_recent": cases_recent,
+                "campaigns_reactivated": campaigns_reactivated,
+                "fast_escalations": fast_escalations,
+                **_license_context(),
+            },
+        )
+    finally:
+        conn.close()
+
+
+@app.get("/dashboard/actors", response_class=HTMLResponse)
 def dashboard(request: Request):
     conn = db()
     try:

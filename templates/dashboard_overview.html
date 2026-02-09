@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Dashboard</h1>
+    <div class="sub">Operational overview of activity and investigations</div>
+  </div>
+</div>
+
+<div class="kpis">
+  <div class="kpi">
+    <div class="kpi-label">Active actors (24h)</div>
+    <div class="kpi-value">{{ kpi.active_24h }}</div>
+  </div>
+  <div class="kpi">
+    <div class="kpi-label">Active actors (7d)</div>
+    <div class="kpi-value">{{ kpi.active_7d }}</div>
+  </div>
+  <div class="kpi">
+    <div class="kpi-label">Total events</div>
+    <div class="kpi-value">{{ kpi.events_total }}</div>
+  </div>
+  <div class="kpi">
+    <div class="kpi-label">Open cases</div>
+    <div class="kpi-value">{{ kpi.cases_open }}</div>
+  </div>
+  <div class="kpi">
+    <div class="kpi-label">Active campaigns</div>
+    <div class="kpi-value">{{ kpi.campaigns_active }}</div>
+  </div>
+  <div class="kpi">
+    <div class="kpi-label">Max stage</div>
+    <div class="kpi-value">S{{ kpi.stage_max }}</div>
+  </div>
+</div>
+
+<div class="grid-2">
+  <div class="card">
+    <div class="card-head"><div class="card-title">Trends</div></div>
+    <div class="card-body">
+      <div class="muted tiny-text">Events by day (last 14d)</div>
+      <div class="mono small-text">
+        {% for r in events_by_day %}
+          {{ r.day }}={{ r.cnt }}{% if not loop.last %}, {% endif %}
+        {% endfor %}
+      </div>
+      <div class="muted tiny-text" style="margin-top:10px;">New vs recurrent actors (last 14d)</div>
+      <div class="mono small-text">
+        {% for r in actors_new %}
+          +{{ r.day }}={{ r.cnt }}{% if not loop.last %}, {% endif %}
+        {% endfor %}
+      </div>
+      <div class="mono small-text">
+        {% for r in actors_recurrent %}
+          ~{{ r.day }}={{ r.cnt }}{% if not loop.last %}, {% endif %}
+        {% endfor %}
+      </div>
+      <div class="muted tiny-text" style="margin-top:10px;">Stage progression (sessions by day)</div>
+      <div class="mono small-text">
+        {% for r in stage_progress %}
+          {{ r.day }} S{{ r.stage }}={{ r.cnt }}{% if not loop.last %}, {% endif %}
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><div class="card-title">Recent Activity</div></div>
+    <div class="card-body">
+      <div class="muted tiny-text">Latest cases</div>
+      {% if cases_recent %}
+        <ul class="list">
+          {% for c in cases_recent %}
+            <li><a class="link" href="/dashboard/cases/{{ c.id }}">#{{ c.id }} {{ c.title }}</a> · {{ c.status }} · {{ c.created_at }}</li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <div class="muted">No cases yet.</div>
+      {% endif %}
+      <div class="muted tiny-text" style="margin-top:10px;">Reactivated campaigns (24h)</div>
+      {% if campaigns_reactivated %}
+        <ul class="list">
+          {% for c in campaigns_reactivated %}
+            <li><a class="link" href="/dashboard/campaigns/{{ c.campaign_id }}">{{ c.campaign_id }}</a> · {{ c.last_seen_at }}</li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <div class="muted">No reactivations detected.</div>
+      {% endif %}
+      <div class="muted tiny-text" style="margin-top:10px;">Fast escalations</div>
+      {% if fast_escalations %}
+        <ul class="list">
+          {% for a in fast_escalations %}
+            <li><a class="link" href="/actor/{{ a.actor_id }}">{{ a.actor_id[:8] }}</a> · S{{ a.stage_max }} · {{ a.duration_s }}s</li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <div class="muted">No rapid escalations.</div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}
