@@ -3,63 +3,52 @@
 <div class="page-head">
   <div>
     <h1>Dashboard</h1>
-    <div class="sub">Operational overview of activity and investigations</div>
+    <div class="sub">Operational overview of threat activity</div>
   </div>
 </div>
 
-<div class="kpis">
-  <div class="kpi">
+<section class="kpi-grid">
+  <div class="kpi-card">
     <div class="kpi-label">Active actors (24h)</div>
     <div class="kpi-value">{{ kpi.active_24h }}</div>
   </div>
-  <div class="kpi">
+  <div class="kpi-card">
     <div class="kpi-label">Active actors (7d)</div>
     <div class="kpi-value">{{ kpi.active_7d }}</div>
   </div>
-  <div class="kpi">
+  <div class="kpi-card">
     <div class="kpi-label">Total events</div>
     <div class="kpi-value">{{ kpi.events_total }}</div>
   </div>
-  <div class="kpi">
+  <div class="kpi-card">
     <div class="kpi-label">Open cases</div>
     <div class="kpi-value">{{ kpi.cases_open }}</div>
   </div>
-  <div class="kpi">
+  <div class="kpi-card">
     <div class="kpi-label">Active campaigns</div>
     <div class="kpi-value">{{ kpi.campaigns_active }}</div>
   </div>
-  <div class="kpi">
-    <div class="kpi-label">Max stage</div>
+  <div class="kpi-card">
+    <div class="kpi-label">Max stage reached</div>
     <div class="kpi-value">S{{ kpi.stage_max }}</div>
   </div>
-</div>
+</section>
 
-<div class="grid-2">
+<section class="section-grid">
   <div class="card">
     <div class="card-head"><div class="card-title">Trends</div></div>
     <div class="card-body">
-      <div class="muted tiny-text">Events by day (last 14d)</div>
-      <div class="mono small-text">
-        {% for r in events_by_day %}
-          {{ r.day }}={{ r.cnt }}{% if not loop.last %}, {% endif %}
-        {% endfor %}
+      <div class="chart-block">
+        <div class="chart-title">Events per day (14d)</div>
+        <div class="chart-canvas" data-chart="events"></div>
       </div>
-      <div class="muted tiny-text" style="margin-top:10px;">New vs recurrent actors (last 14d)</div>
-      <div class="mono small-text">
-        {% for r in actors_new %}
-          +{{ r.day }}={{ r.cnt }}{% if not loop.last %}, {% endif %}
-        {% endfor %}
+      <div class="chart-block">
+        <div class="chart-title">New vs recurrent actors</div>
+        <div class="chart-canvas" data-chart="actors"></div>
       </div>
-      <div class="mono small-text">
-        {% for r in actors_recurrent %}
-          ~{{ r.day }}={{ r.cnt }}{% if not loop.last %}, {% endif %}
-        {% endfor %}
-      </div>
-      <div class="muted tiny-text" style="margin-top:10px;">Stage progression (sessions by day)</div>
-      <div class="mono small-text">
-        {% for r in stage_progress %}
-          {{ r.day }} S{{ r.stage }}={{ r.cnt }}{% if not loop.last %}, {% endif %}
-        {% endfor %}
+      <div class="chart-block">
+        <div class="chart-title">Stage progression</div>
+        <div class="chart-canvas" data-chart="stages"></div>
       </div>
     </div>
   </div>
@@ -67,37 +56,129 @@
   <div class="card">
     <div class="card-head"><div class="card-title">Recent Activity</div></div>
     <div class="card-body">
-      <div class="muted tiny-text">Latest cases</div>
-      {% if cases_recent %}
-        <ul class="list">
-          {% for c in cases_recent %}
-            <li><a class="link" href="/dashboard/cases/{{ c.id }}">#{{ c.id }} {{ c.title }}</a> · {{ c.status }} · {{ c.created_at }}</li>
-          {% endfor %}
-        </ul>
-      {% else %}
-        <div class="muted">No cases yet.</div>
-      {% endif %}
-      <div class="muted tiny-text" style="margin-top:10px;">Reactivated campaigns (24h)</div>
-      {% if campaigns_reactivated %}
-        <ul class="list">
-          {% for c in campaigns_reactivated %}
-            <li><a class="link" href="/dashboard/campaigns/{{ c.campaign_id }}">{{ c.campaign_id }}</a> · {{ c.last_seen_at }}</li>
-          {% endfor %}
-        </ul>
-      {% else %}
-        <div class="muted">No reactivations detected.</div>
-      {% endif %}
-      <div class="muted tiny-text" style="margin-top:10px;">Fast escalations</div>
-      {% if fast_escalations %}
-        <ul class="list">
-          {% for a in fast_escalations %}
-            <li><a class="link" href="/actor/{{ a.actor_id }}">{{ a.actor_id[:8] }}</a> · S{{ a.stage_max }} · {{ a.duration_s }}s</li>
-          {% endfor %}
-        </ul>
-      {% else %}
-        <div class="muted">No rapid escalations.</div>
-      {% endif %}
+      <div class="activity-block">
+        <div class="activity-title">Latest cases</div>
+        {% if cases_recent %}
+          <ul class="activity-list">
+            {% for c in cases_recent %}
+              <li>
+                <a class="link" href="/dashboard/cases/{{ c.id }}">#{{ c.id }}</a>
+                <span class="badge status-{{ c.status }}">{{ c.status }}</span>
+                <span class="muted" data-rel="{{ c.created_at }}">{{ c.created_at }}</span>
+              </li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <div class="muted">No cases yet.</div>
+        {% endif %}
+      </div>
+      <div class="activity-block">
+        <div class="activity-title">Reactivated campaigns (24h)</div>
+        {% if campaigns_reactivated %}
+          <ul class="activity-list">
+            {% for c in campaigns_reactivated %}
+              <li>
+                <a class="link" href="/dashboard/campaigns/{{ c.campaign_id }}">{{ c.campaign_id[:8] }}</a>
+                <span class="badge badge-accent">reactivated</span>
+                <span class="muted" data-rel="{{ c.last_seen_at }}">{{ c.last_seen_at }}</span>
+              </li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <div class="muted">No reactivations detected.</div>
+        {% endif %}
+      </div>
+      <div class="activity-block">
+        <div class="activity-title">Fast escalations</div>
+        {% if fast_escalations %}
+          <ol class="activity-list ranked">
+            {% for a in fast_escalations %}
+              <li>
+                <a class="link" href="/actor/{{ a.actor_id }}">{{ a.actor_id[:8] }}</a>
+                <span class="badge">S{{ a.stage_max }}</span>
+                <span class="muted">{{ a.duration_s }}s</span>
+              </li>
+            {% endfor %}
+          </ol>
+        {% else %}
+          <div class="muted">No rapid escalations.</div>
+        {% endif %}
+      </div>
     </div>
   </div>
-</div>
+</section>
+
+<script>
+  const eventsByDay = {{ events_by_day|tojson }};
+  const actorsNew = {{ actors_new|tojson }};
+  const actorsRecurrent = {{ actors_recurrent|tojson }};
+  const stageProgress = {{ stage_progress|tojson }};
+
+  const byDay = (rows) => {
+    const map = {};
+    rows.forEach(r => { map[r.day] = (map[r.day] || 0) + r.cnt; });
+    return map;
+  };
+
+  const buildLine = (values) => {
+    const points = values.map((v, i) => [i, v]);
+    const max = Math.max(1, ...values);
+    const w = 260, h = 80, pad = 6;
+    const scaleX = (w - pad * 2) / Math.max(1, values.length - 1);
+    const scaleY = (h - pad * 2) / max;
+    const d = points.map(([x, y], idx) => {
+      const px = pad + x * scaleX;
+      const py = h - pad - y * scaleY;
+      return `${idx === 0 ? 'M' : 'L'}${px},${py}`;
+    }).join(' ');
+    return `<svg viewBox="0 0 ${w} ${h}" class="mini-chart"><path d="${d}" fill="none" stroke="currentColor" stroke-width="2"/></svg>`;
+  };
+
+  const buildBars = (valuesA, valuesB) => {
+    const max = Math.max(1, ...valuesA.map((v,i)=>v+(valuesB[i]||0)));
+    return valuesA.map((v, i) => {
+      const total = v + (valuesB[i] || 0);
+      const hA = Math.round((v / max) * 48);
+      const hB = Math.round(((valuesB[i] || 0) / max) * 48);
+      return `<div class="bar"><span class="bar-a" style="height:${hA}px"></span><span class="bar-b" style="height:${hB}px"></span><span class="bar-total" title="${total}"></span></div>`;
+    }).join('');
+  };
+
+  const renderCharts = () => {
+    const eventsMap = byDay(eventsByDay);
+    const days = Object.keys(eventsMap).sort();
+    const events = days.map(d => eventsMap[d] || 0);
+    document.querySelector('[data-chart=\"events\"]').innerHTML = buildLine(events);
+
+    const newMap = byDay(actorsNew);
+    const recMap = byDay(actorsRecurrent);
+    const actorDays = Array.from(new Set([...Object.keys(newMap), ...Object.keys(recMap)])).sort();
+    const newVals = actorDays.map(d => newMap[d] || 0);
+    const recVals = actorDays.map(d => recMap[d] || 0);
+    document.querySelector('[data-chart=\"actors\"]').innerHTML = `<div class="bars">${buildBars(newVals, recVals)}</div>`;
+
+    const stageMap = {};
+    stageProgress.forEach(r => {
+      stageMap[r.day] = Math.max(stageMap[r.day] || 0, r.stage || 0);
+    });
+    const stageDays = Object.keys(stageMap).sort();
+    const stageVals = stageDays.map(d => stageMap[d] || 0);
+    document.querySelector('[data-chart=\"stages\"]').innerHTML = buildLine(stageVals);
+  };
+
+  const relTime = (iso) => {
+    try{
+      const dt = new Date(iso.replace('Z',''));
+      const diff = (Date.now() - dt.getTime()) / 1000;
+      if(diff < 60) return `${Math.round(diff)}s ago`;
+      if(diff < 3600) return `${Math.round(diff/60)}m ago`;
+      if(diff < 86400) return `${Math.round(diff/3600)}h ago`;
+      return `${Math.round(diff/86400)}d ago`;
+    }catch(e){ return iso; }
+  };
+  document.querySelectorAll('[data-rel]').forEach(el => {
+    el.textContent = relTime(el.getAttribute('data-rel') || '');
+  });
+  renderCharts();
+</script>
 {% endblock %}
