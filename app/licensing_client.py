@@ -440,11 +440,17 @@ class LicensingManager:
         try:
             self._ensure_cached_identity()
         except Exception as exc:
+            detail = (str(exc) or "").replace("\r", " ").replace("\n", " ").strip()
+            detail = detail[:240] if detail else ""
             return LicensingState(
                 decision=None,
                 valid=False,
                 last_ok_at=self.get_state().last_ok_at,
-                last_error=f"bad_client_identity:{exc.__class__.__name__}",
+                last_error=(
+                    f"bad_client_identity:{exc.__class__.__name__}:{detail}"
+                    if detail
+                    else f"bad_client_identity:{exc.__class__.__name__}"
+                ),
                 reason_code=None,
                 expires_at=None,
                 entitlements={},
