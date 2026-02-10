@@ -26,6 +26,10 @@ Recommended configuration:
 
 The client computes a best-effort host fingerprint and sends its SHA-256 hex (64 chars). If you want a fully stable host-locked fingerprint across container rebuilds, set `INSTANCE_FINGERPRINT_SHA256` (64 hex) or mount the host machine-id into the container (for example mount `/etc/machine-id` to `/etc/host-machine-id` and set `HP_HOST_MACHINE_ID_PATH=/etc/host-machine-id`).
 
+Debugging:
+- `GET /admin/license` includes a `client_identity` object with `instance_id` and `instance_fingerprint_sha256` so you can reconcile what the app is sending with what the licensing server expects.
+- Or run `python /app/scripts/print_licensing_identity.py` inside the container.
+
 Legacy/manual override:
 - `HP_LICENSE_TIER=core|pro` is still supported, but is ignored when the runtime licensing manager is enabled.
 

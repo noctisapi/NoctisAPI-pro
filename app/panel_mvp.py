@@ -17,7 +17,7 @@ from typing import Optional, List
 from app import status_checks
 from app import licensing
 from app.honeypot_monitor import HoneypotAvailabilityMonitor, get_history as hp_get_history, get_summary as hp_get_summary
-from app.licensing_client import get_default_manager
+from app.licensing_client import compute_client_identity, get_default_manager
 
 APP_NAME = "shadowapi-panel"
 DB_PATH = os.getenv("HP_DB_PATH", "/data/honeypot.db")
@@ -148,9 +148,11 @@ def admin_license_status():
     """
     mgr = get_default_manager()
     st = mgr.get_state()
+    identity = compute_client_identity()
     return {
         "pro_enabled": bool(mgr.is_pro_enabled()),
         "feature_flags": licensing.feature_flags(),
+        "client_identity": identity,
         "licensing": {
             "valid": bool(st.valid),
             "decision": st.decision,

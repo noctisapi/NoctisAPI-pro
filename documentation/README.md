@@ -28,6 +28,10 @@ Recommended configuration:
 
 The app computes a host fingerprint and sends its SHA-256 hex. Mount a persistent Docker volume at `/var/lib/myapp` so `INSTANCE_ID_PATH` survives container recreation.
 
+Debugging:
+- The admin service exposes `GET /admin/license` (bound to `127.0.0.1` in production) which now includes `client_identity` (`instance_id` and `instance_fingerprint_sha256`) to help resolve `FINGERPRINT_MISMATCH`.
+- You can also run `python /app/scripts/print_licensing_identity.py` inside a container.
+
 Legacy/manual override:
 - `HP_LICENSE_TIER=core|pro` (ignored when the runtime licensing manager is enabled).
 

@@ -243,6 +243,24 @@ def compute_instance_fingerprint_sha256_hex() -> str:
     return hashlib.sha256(material.encode("utf-8", errors="ignore")).hexdigest()
 
 
+def compute_client_identity() -> Dict[str, str]:
+    """
+    Compute the identity tuple the licensing client presents to the licensing server.
+
+    This is intentionally exposed for operator debugging (e.g. via /admin/license)
+    so it's easy to resolve "FINGERPRINT_MISMATCH" issues by comparing what the app
+    sends vs. what the licensing server has on record.
+    """
+    instance_id_path = (os.getenv("INSTANCE_ID_PATH") or "/var/lib/myapp/instance_id").strip()
+    instance_id = get_or_create_uuid_file(instance_id_path)
+    fingerprint = compute_instance_fingerprint_sha256_hex()
+    return {
+        "instance_id": instance_id,
+        "instance_id_path": instance_id_path,
+        "instance_fingerprint_sha256": fingerprint,
+    }
+
+
 class LicenseDecision(str, Enum):
     ALLOW = "ALLOW"
     DENY = "DENY"

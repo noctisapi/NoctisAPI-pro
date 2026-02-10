@@ -10,6 +10,7 @@ from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from app.licensing_client import (
     LicensingManager,
     LicensingStartupDenied,
+    compute_client_identity,
     compute_instance_fingerprint_sha256_hex,
     get_or_create_uuid_file,
 )
@@ -60,6 +61,14 @@ class TestFingerprint(unittest.TestCase):
                 os.environ.pop("INSTANCE_FINGERPRINT_SHA256", None)
             else:
                 os.environ["INSTANCE_FINGERPRINT_SHA256"] = old
+
+    def test_compute_client_identity_returns_expected_shape(self):
+        ident = compute_client_identity()
+        self.assertIn("instance_id", ident)
+        self.assertIn("instance_id_path", ident)
+        self.assertIn("instance_fingerprint_sha256", ident)
+        self.assertEqual(len(ident["instance_fingerprint_sha256"]), 64)
+        int(ident["instance_fingerprint_sha256"], 16)
 
 
 class TestLicensingManager(unittest.TestCase):
