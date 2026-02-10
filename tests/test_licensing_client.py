@@ -7,7 +7,7 @@ from uuid import UUID
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
-from app.licensing_client import (
+from honey_licensing.client import (
     LicensingManager,
     LicensingStartupDenied,
     compute_client_identity,

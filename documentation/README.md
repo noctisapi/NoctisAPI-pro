@@ -24,7 +24,6 @@ Recommended configuration:
   - `LICENSING_PINNED_PUBLIC_KEY_PEM="-----BEGIN PUBLIC KEY----- ..."`
 - `INSTANCE_ID_PATH=/var/lib/myapp/instance_id` (default)
 - `LICENSING_HTTP_TIMEOUT_SECONDS=10` (default)
-- `LICENSING_MIN_RECHECK_SECONDS=30` (default)
 
 The app computes a host fingerprint and sends its SHA-256 hex. Mount a persistent Docker volume at `/var/lib/myapp` so `INSTANCE_ID_PATH` survives container recreation.
 

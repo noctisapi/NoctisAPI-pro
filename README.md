@@ -19,7 +19,6 @@ Recommended configuration:
   - `INSTANCE_ID_PATH=/var/lib/myapp/instance_id` (default; mount a persistent volume at `/var/lib/myapp`)
 - Optional tuning:
   - `LICENSING_HTTP_TIMEOUT_SECONDS=10` (default)
-  - `LICENSING_MIN_RECHECK_SECONDS=30` (default)
   - `HP_ENFORCE_LICENSE=1` to fail startup if licensing is invalid or the decision is `DENY` (default `0` = degrade to CORE)
   - `HP_LICENSE_LIMITED_BEHAVIOR=core|exit` (default `core`)
   - `HP_LICENSE_DENY_BEHAVIOR=exit|disable` (default `disable`)

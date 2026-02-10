@@ -17,7 +17,7 @@ _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from app.licensing_client import compute_client_identity
+from honey_licensing.client import compute_client_identity
 
 
 def main() -> int:

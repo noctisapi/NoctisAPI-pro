@@ -62,7 +62,6 @@ This runbook covers:
     - `LICENSING_PINNED_PUBLIC_KEY_PATH=/app/app/licensing_server_public_key.pem` (pinned RSA public key PEM)
     - `INSTANCE_ID_PATH=/var/lib/myapp/instance_id` (default)
     - `LICENSING_HTTP_TIMEOUT_SECONDS=10` (default)
-    - `LICENSING_MIN_RECHECK_SECONDS=30` (default)
     - `HP_LICENSE_TIER=core` (legacy/manual override; ignored when LicensingApp is enabled)
     - `HP_PUBLIC_RATELIMIT_AVG=120` / `HP_PUBLIC_RATELIMIT_BURST=240` (optional; Traefik rate limit)
 
