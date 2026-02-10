@@ -44,11 +44,20 @@ def _safe_json_loads(raw: bytes) -> Dict[str, Any]:
         obj = json.loads((raw or b"").decode("utf-8", errors="replace") or "{}")
         return obj if isinstance(obj, dict) else {"_json": obj}
     except Exception as exc:
-        return {"_error": f"invalid_json: {exc.__class__.__name__}"}
+        preview = (raw or b"")[:500].decode("utf-8", errors="replace").strip()
+        out: Dict[str, Any] = {"_error": f"invalid_json: {exc.__class__.__name__}"}
+        if preview:
+            out["_raw_preview"] = preview
+        return out
 
 
 def post_json(url: str, payload: Dict[str, Any], timeout: float) -> Tuple[int, Dict[str, Any]]:
     body = json.dumps(payload or {}).encode("utf-8")
+    ua = (os.getenv("HP_HTTP_USER_AGENT") or "").strip()
+    if not ua:
+        app_id = (os.getenv("HP_APP_ID") or os.getenv("APP_ID") or "shadowapi-pro").strip()
+        app_ver = (os.getenv("HP_APP_VERSION") or os.getenv("APP_VERSION") or "").strip()
+        ua = f"{app_id}/{app_ver}".rstrip("/") if app_ver else app_id
     req = Request(
         url=url,
         method="POST",
@@ -56,6 +65,7 @@ def post_json(url: str, payload: Dict[str, Any], timeout: float) -> Tuple[int, D
         headers={
             "content-type": "application/json",
             "accept": "application/json",
+            "user-agent": ua,
         },
     )
     try:
@@ -499,9 +509,15 @@ class LicensingManager:
         sig = str((data or {}).get("server_signature") or "").strip()
         if not sig:
             detail = str(data.get("_error") or data.get("detail") or "").strip()
+            preview = str(data.get("_raw_preview") or "").strip()
             detail = detail.replace("\r", " ").replace("\n", " ").strip()
             if len(detail) > 180:
                 detail = detail[:180]
+            preview = preview.replace("\r", " ").replace("\n", " ").strip()
+            if len(preview) > 220:
+                preview = preview[:220]
+            if preview and detail.startswith("invalid_json:"):
+                detail = f"{detail} | {preview}"
             return LicensingState(
                 decision=None,
                 valid=False,
