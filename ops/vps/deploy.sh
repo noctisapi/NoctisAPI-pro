@@ -77,17 +77,21 @@ _maybe_login_ghcr() {
 }
 
 echo "Pulling images..."
-pull_out=""
-if ! pull_out="$(docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" pull 2>&1)"; then
-  echo "${pull_out}" >&2
-  if echo "${pull_out}" | grep -qiE 'denied|unauthorized|authentication required'; then
+pull_log="$(mktemp -t hp-app-pull.XXXXXX)"
+set +e
+docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" pull 2>&1 | tee "${pull_log}"
+pull_rc="${PIPESTATUS[0]}"
+set -e
+if [ "${pull_rc}" -ne 0 ]; then
+  if grep -qiE 'denied|unauthorized|authentication required' "${pull_log}"; then
     echo "Registry auth failed; attempting GHCR login..." >&2
     _maybe_login_ghcr
     docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" pull
   else
-    exit 1
+    exit "${pull_rc}"
   fi
 fi
+rm -f "${pull_log}" || true
 
 echo "Starting services..."
 docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" up -d --remove-orphans
