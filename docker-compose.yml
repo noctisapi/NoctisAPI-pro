@@ -20,6 +20,8 @@ services:
 
 volumes:
   hp_dev_data:
-    name: hp-app_hp_dev_data
+    external: true
+    name: compose_hp_prod_data
   hp_dev_myapp:
-    name: hp-app_hp_dev_myapp
+    external: true
+    name: compose_hp_prod_myapp
