@@ -24,9 +24,14 @@
       const input = document.createElement('input');
       input.className = 'table-filter';
       input.dataset.col = String(idx);
+      const type = (th.dataset && th.dataset.type) ? th.dataset.type : 'text';
       const label = (th.textContent || '').trim();
       const placeholder = label ? `Filter ${label}` : 'Filter';
-      input.placeholder = placeholder;
+      if(type === 'date'){
+        input.type = 'date';
+      }else{
+        input.placeholder = placeholder;
+      }
       input.setAttribute('aria-label', placeholder);
       cell.appendChild(input);
       filterRow.appendChild(cell);
@@ -60,7 +65,8 @@
         raw: values,
         lower: values.map(v => v.toLowerCase()),
         num: Array(values.length).fill(undefined),
-        date: Array(values.length).fill(undefined)
+        date: Array(values.length).fill(undefined),
+        dateKey: Array(values.length).fill(undefined)
       });
     });
 
@@ -94,6 +100,26 @@
         cache.date[idx] = Number.isNaN(parsed) ? 0 : parsed;
       }
       return cache.date[idx];
+    }
+
+    function getDateKey(row, idx){
+      const cache = rowCache.get(row);
+      if(!cache) return '';
+      if(cache.dateKey[idx] === undefined){
+        const value = (cache.raw[idx] || '').trim();
+        const m = value.match(/^(\d{4}-\d{2}-\d{2})/);
+        if(m){
+          cache.dateKey[idx] = m[1];
+        }else{
+          const parsed = Date.parse(value);
+          if(Number.isNaN(parsed)){
+            cache.dateKey[idx] = '';
+          }else{
+            cache.dateKey[idx] = new Date(parsed).toISOString().slice(0, 10);
+          }
+        }
+      }
+      return cache.dateKey[idx];
     }
 
     function compareValues(rowA, rowB, idx, type){
@@ -133,7 +159,8 @@
         if(!filter) return;
         const idx = parseInt(input.dataset.col, 10);
         const type = headerCells[idx]?.dataset?.type || 'text';
-        activeFilters.push({ idx, type, value: filter.toLowerCase() });
+        const normalized = type === 'date' ? filter : filter.toLowerCase();
+        activeFilters.push({ idx, type, value: normalized });
       });
     }
 
@@ -152,6 +179,9 @@
           if(op === '>=') return val >= num;
           return val === num;
         }
+      }
+      if(type === 'date'){
+        return getDateKey(row, idx) === value;
       }
       return getLower(row, idx).includes(value);
     }
@@ -192,6 +222,7 @@
 
     filterInputs.forEach(input => {
       input.addEventListener('input', scheduleFilter);
+      input.addEventListener('change', scheduleFilter);
     });
 
     const helper = {

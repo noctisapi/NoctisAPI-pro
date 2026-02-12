@@ -14,25 +14,28 @@ This repo packages both the public ShadowAPI honeypot API (`app/honeypot_public.
 
 ## Licensing
 
-Feature availability is controlled by the runtime licensing manager (LicensingApp).
+Feature availability is controlled by backend-validated PRO licensing.
 
 Recommended configuration:
 - `LICENSE_KEY=sk_live_...`
-- `LICENSING_URL=https://licensing.example.com`
+- `PRO_BACKEND_URL=https://pro-backend.example.com`
 - Pin the licensing server RSA public key (PEM):
-  - `LICENSING_PINNED_PUBLIC_KEY_PATH=/app/app/licensing_server_public_key.pem` (default in image), or
-  - `LICENSING_PINNED_PUBLIC_KEY_PEM="-----BEGIN PUBLIC KEY----- ..."`
+  - `LICENSING_PINNED_PUBLIC_KEY_PATH=/app/app/licensing_server_public_key.pem` (default in image)
+- Pin the PRO results RSA public key (PEM):
+  - `PRO_RESULTS_PUBLIC_KEY_PATH=/app/app/pro_results_public_key.pem` (default in image)
 - `INSTANCE_ID_PATH=/var/lib/myapp/instance_id` (default)
-- `LICENSING_HTTP_TIMEOUT_SECONDS=10` (default)
 
 The app computes a host fingerprint and sends its SHA-256 hex. Mount a persistent Docker volume at `/var/lib/myapp` so `INSTANCE_ID_PATH` survives container recreation.
 
 Debugging:
-- The admin service exposes `GET /admin/license` (bound to `127.0.0.1` in production) which now includes `client_identity` (`instance_id` and `instance_fingerprint_sha256`) to help resolve `FINGERPRINT_MISMATCH`.
+- The admin service exposes `GET /admin/license` (bound to `127.0.0.1` in production) with backend license status plus `client_identity` (`instance_id`, `instance_fingerprint_sha256`).
 - You can also run `python /app/scripts/print_licensing_identity.py` inside a container.
 
-Legacy/manual override:
-- `HP_LICENSE_TIER=core|pro` (ignored when the runtime licensing manager is enabled).
+Hard requirement:
+- PRO operations are enabled only after backend signed authorization; on any backend/auth signature failure the app behaves as `core`.
+- Optional tune: `HP_PRO_OPS_AUTHZ_CACHE_SECONDS` (default `0`, backend authorization on every PRO operation).
+
+Manual tier override is disabled. Without backend-validated licensing, PRO remains disabled.
 
 ## Local Development
 

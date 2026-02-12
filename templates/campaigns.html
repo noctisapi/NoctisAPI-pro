@@ -1,15 +1,31 @@
-{% extends "base.html" %}
+﻿{% extends "base.html" %}
 {% block content %}
+{% set pro_state = campaigns_pro_state or {} %}
 <div class="page-head">
   <div>
     <h1>Campaigns</h1>
     <div class="sub">Detected lateral movement groups</div>
   </div>
   <div>
-    <button id="recomputeBtn" class="btn btn-primary" type="button" onclick="recomputeCampaigns(this)">Recompute groups</button>
+    <button
+      id="recomputeBtn"
+      class="btn btn-primary"
+      type="button"
+      onclick="recomputeCampaigns(this)"
+      {% if not pro_backend_enabled %}disabled title="Campaigns PRO requiere backend"{% endif %}
+    >
+      Recompute groups
+    </button>
     <div id="campaignJobStatus" class="muted tiny-text" style="margin-top:6px;"></div>
+    <div id="campaignVerifyStatus" class="muted tiny-text" style="margin-top:4px;">{{ pro_state.message or '' }}</div>
   </div>
 </div>
+
+{% if not pro_state.verified %}
+<div class="card" style="margin-bottom:12px;">
+  <div class="case-empty" style="margin:14px;">{{ pro_state.message or 'Resultado no disponible' }}</div>
+</div>
+{% endif %}
 
 <div class="card">
   <div class="card-head">
@@ -46,13 +62,16 @@
       </table>
     </div>
   {% else %}
-    <div class="case-empty" style="margin:14px;">No campaigns yet. Run a recompute to generate clusters.</div>
+    <div class="case-empty" style="margin:14px;">No campaigns available. Run recompute when backend and valid lease are ready.</div>
   {% endif %}
 </div>
 
 <script>
   const jobStatusEl = document.getElementById('campaignJobStatus');
+  const verifyStatusEl = document.getElementById('campaignVerifyStatus');
   const recomputeBtn = document.getElementById('recomputeBtn');
+  const backendEnabled = {{ (pro_backend_enabled|default(false))|tojson }};
+  const initialVerification = {{ (campaigns_pro_state|default({}))|tojson }};
   let jobPollTimer = null;
   let autoRefreshOnComplete = false;
   let lastJobStatus = '';
@@ -61,30 +80,42 @@
     if(!jobStatusEl) return;
     if(!job || !job.status || job.status === 'none' || job.status === 'disabled'){
       jobStatusEl.textContent = '';
-      if(recomputeBtn){ recomputeBtn.disabled = false; recomputeBtn.textContent = 'Recompute groups'; }
+      if(recomputeBtn && backendEnabled){
+        recomputeBtn.disabled = false;
+        recomputeBtn.textContent = 'Recompute groups';
+      }
       return;
     }
     let msg = `Recompute: ${job.status}`;
     if(job.status === 'queued'){
-      msg += ` · queued ${job.created_at || ''}`;
+      msg += ` - queued ${job.created_at || ''}`;
     }
     if(job.status === 'running'){
-      msg += ` · started ${job.started_at || ''}`;
+      msg += ` - started ${job.started_at || ''}`;
     }
     if(job.status === 'completed'){
-      if(job.duration_ms !== undefined){ msg += ` · ${job.duration_ms}ms`; }
-      if(job.actors_considered !== undefined){ msg += ` · actors ${job.actors_considered}`; }
-      if(job.features_cached !== undefined){ msg += ` · cached ${job.features_cached}`; }
-      if(job.features_built !== undefined){ msg += ` · built ${job.features_built}`; }
+      if(job.duration_ms !== undefined){ msg += ` - ${job.duration_ms}ms`; }
+      if(job.actors_considered !== undefined){ msg += ` - actors ${job.actors_considered}`; }
+      if(job.features_cached !== undefined){ msg += ` - cached ${job.features_cached}`; }
+      if(job.features_built !== undefined){ msg += ` - built ${job.features_built}`; }
     }
     if(job.status === 'failed'){
-      msg += job.error ? ` · ${job.error}` : '';
+      msg += job.error ? ` - ${job.error}` : '';
     }
     jobStatusEl.textContent = msg;
     if(recomputeBtn){
-      recomputeBtn.disabled = job.status === 'queued' || job.status === 'running';
+      recomputeBtn.disabled = !backendEnabled || job.status === 'queued' || job.status === 'running';
       recomputeBtn.textContent = recomputeBtn.disabled ? 'Recomputing...' : 'Recompute groups';
     }
+  }
+
+  function renderVerification(state){
+    if(!verifyStatusEl) return;
+    if(!state || !state.message){
+      verifyStatusEl.textContent = '';
+      return;
+    }
+    verifyStatusEl.textContent = state.message;
   }
 
   async function fetchJobStatus(){
@@ -93,6 +124,9 @@
       if(!res.ok) return;
       const data = await res.json();
       renderJobStatus(data);
+      if(data.verification){
+        renderVerification(data.verification);
+      }
       const status = data.status || '';
       if(status !== lastJobStatus){
         lastJobStatus = status;
@@ -111,6 +145,10 @@
   }
 
   async function recomputeCampaigns(btn){
+    if(!backendEnabled){
+      alert('Campaigns PRO requiere backend');
+      return;
+    }
     const original = btn.textContent;
     btn.disabled = true;
     btn.textContent = 'Recomputing...';
@@ -119,6 +157,9 @@
       if(res.ok){
         const data = await res.json();
         renderJobStatus(data.job || data);
+        if(data.verification){
+          renderVerification(data.verification);
+        }
         autoRefreshOnComplete = true;
         if(!jobPollTimer){ jobPollTimer = setTimeout(fetchJobStatus, 1500); }
       }else{
@@ -134,6 +175,7 @@
     }
   }
 
+  renderVerification(initialVerification);
   fetchJobStatus();
 </script>
 {% endblock %}

@@ -57,12 +57,11 @@ This runbook covers:
     - `HP_SEED=<long random secret>` (stable actor IDs + secrets)
     - `HP_REQUIRE_SEED=1` (optional, fail startup if HP_SEED is missing/placeholder)
     - `HP_ACTOR_UA_MODE=family` (recommended; `ip` or `full` also supported)
-    - `LICENSING_URL=https://licensing.example.com` (LicensingApp base URL)
+    - `PRO_BACKEND_URL=https://pro-backend.example.com` (required for PRO validation)
     - `LICENSE_KEY=sk_live_...` (end-user input)
     - `LICENSING_PINNED_PUBLIC_KEY_PATH=/app/app/licensing_server_public_key.pem` (pinned RSA public key PEM)
     - `INSTANCE_ID_PATH=/var/lib/myapp/instance_id` (default)
-    - `LICENSING_HTTP_TIMEOUT_SECONDS=10` (default)
-    - `HP_LICENSE_TIER=core` (legacy/manual override; ignored when LicensingApp is enabled)
+    - `PRO_RESULTS_PUBLIC_KEY_PATH=/app/app/pro_results_public_key.pem`
     - `HP_PUBLIC_RATELIMIT_AVG=120` / `HP_PUBLIC_RATELIMIT_BURST=240` (optional; Traefik rate limit)
 
 ## Phase 4: Certificates (Traefik + ACME)

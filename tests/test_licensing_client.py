@@ -80,13 +80,19 @@ class TestLicensingManager(unittest.TestCase):
         )
         return priv, pub_pem
 
+    def _set_pinned_pubkey_path(self, pub_pem: bytes):
+        old_path = os.environ.get("LICENSING_PINNED_PUBLIC_KEY_PATH")
+        td = tempfile.TemporaryDirectory()
+        pub_path = os.path.join(td.name, "licensing_server_public_key.pem")
+        with open(pub_path, "wb") as f:
+            f.write(pub_pem)
+        os.environ["LICENSING_PINNED_PUBLIC_KEY_PATH"] = pub_path
+        return td, old_path
+
     def test_startup_allow_enables_pro_when_enforced(self):
         priv, pub_pem = self._with_keypair()
-        old_pem = os.environ.get("LICENSING_PINNED_PUBLIC_KEY_PEM")
-        old_allow = os.environ.get("HP_ALLOW_LICENSING_PUBKEY_OVERRIDE")
+        key_dir, old_path = self._set_pinned_pubkey_path(pub_pem)
         try:
-            os.environ["LICENSING_PINNED_PUBLIC_KEY_PEM"] = pub_pem.decode("utf-8")
-            os.environ["HP_ALLOW_LICENSING_PUBKEY_OVERRIDE"] = "1"
             with tempfile.TemporaryDirectory() as td:
                 licensing_url = "https://licensing.example.com"
                 validate_url = licensing_url + "/v1/licenses/validate"
@@ -127,22 +133,16 @@ class TestLicensingManager(unittest.TestCase):
                 finally:
                     mgr.stop()
         finally:
-            if old_pem is None:
-                os.environ.pop("LICENSING_PINNED_PUBLIC_KEY_PEM", None)
+            key_dir.cleanup()
+            if old_path is None:
+                os.environ.pop("LICENSING_PINNED_PUBLIC_KEY_PATH", None)
             else:
-                os.environ["LICENSING_PINNED_PUBLIC_KEY_PEM"] = old_pem
-            if old_allow is None:
-                os.environ.pop("HP_ALLOW_LICENSING_PUBKEY_OVERRIDE", None)
-            else:
-                os.environ["HP_ALLOW_LICENSING_PUBKEY_OVERRIDE"] = old_allow
+                os.environ["LICENSING_PINNED_PUBLIC_KEY_PATH"] = old_path
 
     def test_startup_deny_raises_when_enforced(self):
         priv, pub_pem = self._with_keypair()
-        old_pem = os.environ.get("LICENSING_PINNED_PUBLIC_KEY_PEM")
-        old_allow = os.environ.get("HP_ALLOW_LICENSING_PUBKEY_OVERRIDE")
+        key_dir, old_path = self._set_pinned_pubkey_path(pub_pem)
         try:
-            os.environ["LICENSING_PINNED_PUBLIC_KEY_PEM"] = pub_pem.decode("utf-8")
-            os.environ["HP_ALLOW_LICENSING_PUBKEY_OVERRIDE"] = "1"
             with tempfile.TemporaryDirectory() as td:
                 licensing_url = "https://licensing.example.com"
                 validate_url = licensing_url + "/v1/licenses/validate"
@@ -177,22 +177,16 @@ class TestLicensingManager(unittest.TestCase):
                 with self.assertRaises(LicensingStartupDenied):
                     mgr.start()
         finally:
-            if old_pem is None:
-                os.environ.pop("LICENSING_PINNED_PUBLIC_KEY_PEM", None)
+            key_dir.cleanup()
+            if old_path is None:
+                os.environ.pop("LICENSING_PINNED_PUBLIC_KEY_PATH", None)
             else:
-                os.environ["LICENSING_PINNED_PUBLIC_KEY_PEM"] = old_pem
-            if old_allow is None:
-                os.environ.pop("HP_ALLOW_LICENSING_PUBKEY_OVERRIDE", None)
-            else:
-                os.environ["HP_ALLOW_LICENSING_PUBKEY_OVERRIDE"] = old_allow
+                os.environ["LICENSING_PINNED_PUBLIC_KEY_PATH"] = old_path
 
     def test_nonce_mismatch_sets_invalid_state_when_not_enforced(self):
         priv, pub_pem = self._with_keypair()
-        old_pem = os.environ.get("LICENSING_PINNED_PUBLIC_KEY_PEM")
-        old_allow = os.environ.get("HP_ALLOW_LICENSING_PUBKEY_OVERRIDE")
+        key_dir, old_path = self._set_pinned_pubkey_path(pub_pem)
         try:
-            os.environ["LICENSING_PINNED_PUBLIC_KEY_PEM"] = pub_pem.decode("utf-8")
-            os.environ["HP_ALLOW_LICENSING_PUBKEY_OVERRIDE"] = "1"
             with tempfile.TemporaryDirectory() as td:
                 licensing_url = "https://licensing.example.com"
                 validate_url = licensing_url + "/v1/licenses/validate"
@@ -233,22 +227,16 @@ class TestLicensingManager(unittest.TestCase):
                 finally:
                     mgr.stop()
         finally:
-            if old_pem is None:
-                os.environ.pop("LICENSING_PINNED_PUBLIC_KEY_PEM", None)
+            key_dir.cleanup()
+            if old_path is None:
+                os.environ.pop("LICENSING_PINNED_PUBLIC_KEY_PATH", None)
             else:
-                os.environ["LICENSING_PINNED_PUBLIC_KEY_PEM"] = old_pem
-            if old_allow is None:
-                os.environ.pop("HP_ALLOW_LICENSING_PUBKEY_OVERRIDE", None)
-            else:
-                os.environ["HP_ALLOW_LICENSING_PUBKEY_OVERRIDE"] = old_allow
+                os.environ["LICENSING_PINNED_PUBLIC_KEY_PATH"] = old_path
 
     def test_403_with_signature_is_processed(self):
         priv, pub_pem = self._with_keypair()
-        old_pem = os.environ.get("LICENSING_PINNED_PUBLIC_KEY_PEM")
-        old_allow = os.environ.get("HP_ALLOW_LICENSING_PUBKEY_OVERRIDE")
+        key_dir, old_path = self._set_pinned_pubkey_path(pub_pem)
         try:
-            os.environ["LICENSING_PINNED_PUBLIC_KEY_PEM"] = pub_pem.decode("utf-8")
-            os.environ["HP_ALLOW_LICENSING_PUBKEY_OVERRIDE"] = "1"
             with tempfile.TemporaryDirectory() as td:
                 licensing_url = "https://licensing.example.com"
                 validate_url = licensing_url + "/v1/licenses/validate"
@@ -290,14 +278,64 @@ class TestLicensingManager(unittest.TestCase):
                 finally:
                     mgr.stop()
         finally:
-            if old_pem is None:
-                os.environ.pop("LICENSING_PINNED_PUBLIC_KEY_PEM", None)
+            key_dir.cleanup()
+            if old_path is None:
+                os.environ.pop("LICENSING_PINNED_PUBLIC_KEY_PATH", None)
             else:
-                os.environ["LICENSING_PINNED_PUBLIC_KEY_PEM"] = old_pem
-            if old_allow is None:
-                os.environ.pop("HP_ALLOW_LICENSING_PUBKEY_OVERRIDE", None)
+                os.environ["LICENSING_PINNED_PUBLIC_KEY_PATH"] = old_path
+
+    def test_refresh_now_updates_state_immediately(self):
+        priv, pub_pem = self._with_keypair()
+        key_dir, old_path = self._set_pinned_pubkey_path(pub_pem)
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                licensing_url = "https://licensing.example.com"
+                validate_url = licensing_url + "/v1/licenses/validate"
+                calls = {"n": 0}
+
+                def mock(url: str, payload: dict, timeout: float):
+                    _ = timeout
+                    if url != validate_url:
+                        return 404, {"detail": "not found"}
+                    calls["n"] += 1
+                    signed = {
+                        "request_nonce": payload["nonce"],
+                        "request_timestamp": payload["timestamp"],
+                        "valid": True,
+                        "decision": "ALLOW",
+                        "reason_code": "ok",
+                        "expires_at": int(time.time()) + 3600,
+                        "entitlements": {},
+                        "recheck_after_seconds": 3600,
+                    }
+                    return 200, {"server_signature": _make_jws_rs256(signed, priv)}
+
+                mgr = LicensingManager(
+                    licensing_url=licensing_url,
+                    license_key="sk_live_test",
+                    app_id="shadowapi-pro",
+                    app_version="1.2.3",
+                    instance_id_path=td + "/instance_id",
+                    http_timeout_seconds=0.1,
+                    min_recheck_seconds=1000,
+                    enforce_on_startup=False,
+                    post_json_func=mock,
+                )
+                mgr.start()
+                try:
+                    first = calls["n"]
+                    self.assertGreaterEqual(first, 1)
+                    mgr.refresh_now()
+                    self.assertGreaterEqual(calls["n"], first + 1)
+                    self.assertTrue(mgr.is_pro_enabled())
+                finally:
+                    mgr.stop()
+        finally:
+            key_dir.cleanup()
+            if old_path is None:
+                os.environ.pop("LICENSING_PINNED_PUBLIC_KEY_PATH", None)
             else:
-                os.environ["HP_ALLOW_LICENSING_PUBKEY_OVERRIDE"] = old_allow
+                os.environ["LICENSING_PINNED_PUBLIC_KEY_PATH"] = old_path
 
 
 if __name__ == "__main__":

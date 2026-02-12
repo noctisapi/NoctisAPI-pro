@@ -5,6 +5,10 @@
     <h1>Dashboard</h1>
     <div class="sub">Operational overview of threat activity</div>
   </div>
+  <div>
+    <button id="licenseRefreshBtn" class="btn btn-outline btn-small" type="button" onclick="refreshLicenseNow(this)">Refresh license now</button>
+    <div id="licenseStatusLine" class="muted tiny-text" style="margin-top:6px;"></div>
+  </div>
 </div>
 
 <section class="kpi-grid">
@@ -119,12 +123,70 @@
   const actorsNew = {{ actors_new|tojson }};
   const actorsRecurrent = {{ actors_recurrent|tojson }};
   const stageProgress = {{ stage_progress|tojson }};
+  const licenseRuntime = {{ (license_runtime|default({}))|tojson }};
 
   const byDay = (rows) => {
     const map = {};
     rows.forEach(r => { map[r.day] = (map[r.day] || 0) + r.cnt; });
     return map;
   };
+
+  const renderLicenseStatus = (state) => {
+    const el = document.getElementById('licenseStatusLine');
+    if(!el) return;
+    if(!state || typeof state !== 'object'){
+      el.textContent = 'License: unknown';
+      return;
+    }
+    const chunks = [];
+    const status = state.valid ? 'valid' : 'invalid';
+    chunks.push(`License: ${status}`);
+    if(state.decision){ chunks.push(`decision ${state.decision}`); }
+    if(state.expires_in_seconds !== undefined && state.expires_in_seconds !== null){
+      const remain = Number(state.expires_in_seconds);
+      if(Number.isFinite(remain)){
+        if(remain >= 0){
+          chunks.push(`expires in ${Math.round(remain/60)}m`);
+        }else{
+          chunks.push('expired');
+        }
+      }
+    }
+    if(state.last_ok_at){
+      chunks.push(`last ok ${relTime(state.last_ok_at)}`);
+    }
+    if(state.refresh_error){
+      chunks.push(`refresh error ${state.refresh_error}`);
+    }else if(state.last_error){
+      chunks.push(`error ${state.last_error}`);
+    }
+    el.textContent = chunks.join(' - ');
+  };
+
+  async function refreshLicenseNow(btn){
+    const original = btn ? btn.textContent : '';
+    if(btn){
+      btn.disabled = true;
+      btn.textContent = 'Refreshing...';
+    }
+    try{
+      const res = await fetch('/dashboard/license/refresh', {method: 'POST'});
+      if(!res.ok){
+        const text = await res.text();
+        renderLicenseStatus({valid:false, refresh_error:`http_${res.status}: ${text}`});
+        return;
+      }
+      const data = await res.json();
+      renderLicenseStatus(data);
+    }catch(e){
+      renderLicenseStatus({valid:false, refresh_error:e.message || 'request_failed'});
+    }finally{
+      if(btn){
+        btn.disabled = false;
+        btn.textContent = original || 'Refresh license now';
+      }
+    }
+  }
 
   const renderCharts = () => {
     const eventsMap = byDay(eventsByDay);
@@ -252,6 +314,7 @@
   document.querySelectorAll('[data-rel]').forEach(el => {
     el.textContent = relTime(el.getAttribute('data-rel') || '');
   });
+  renderLicenseStatus(licenseRuntime);
   renderCharts();
 </script>
 {% endblock %}

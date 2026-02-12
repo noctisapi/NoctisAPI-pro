@@ -21,7 +21,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from app import licensing
-from honey_licensing.client import get_default_manager
+from app import pro_license
+from app import pro_ops
 
 APP_TITLE = os.getenv("HP_API_TITLE", "Account Service API")
 APP_VERSION = os.getenv("HP_API_VERSION", "1.0.0")
@@ -125,16 +126,16 @@ def _warn_if_default_seed() -> None:
 @app.on_event("startup")
 async def _startup_checks() -> None:
     _warn_if_default_seed()
-    mgr = get_default_manager()
-    licensing.set_pro_enabled_provider(mgr.is_pro_enabled)
-    mgr.start()
+    licensing.set_pro_enabled_provider(pro_license.is_pro_enabled)
+    pro_license.get_backend_license_snapshot(force_refresh=True)
+    pro_ops.clear_cache()
 
 
 @app.on_event("shutdown")
 async def _shutdown_tasks() -> None:
-    mgr = get_default_manager()
-    mgr.stop()
     licensing.set_pro_enabled_provider(None)
+    pro_license.clear_cache()
+    pro_ops.clear_cache()
 
 
 def _utc_now_iso() -> str:
@@ -209,8 +210,15 @@ def _is_monitor(req: Request) -> bool:
     return (req.headers.get("x-internal-monitor") or "").strip() == "1"
 
 
-def _require_feature(feature: licensing.Feature) -> None:
+def _has_feature(feature: licensing.Feature, *, action: str = "public_api") -> bool:
     if not licensing.has_feature(feature):
+        return False
+    ok, _reason = pro_ops.authorize_pro_feature(feature=feature.value, action=action, force_refresh=False)
+    return bool(ok)
+
+
+def _require_feature(feature: licensing.Feature, *, action: str = "public_api") -> None:
+    if not _has_feature(feature, action=action):
         raise HTTPException(status_code=404, detail="Not found")
 
 

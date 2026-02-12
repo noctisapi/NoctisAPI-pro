@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from enum import Enum
 from typing import Callable, Optional, Set
 
@@ -45,14 +44,8 @@ def is_pro_enabled() -> bool:
 
 
 def get_license_tier() -> LicenseTier:
-    # Preferred: runtime licensing provider (LICENSE_KEY -> /activate, /validate).
     if _PRO_ENABLED_PROVIDER is not None:
         return LicenseTier.PRO if is_pro_enabled() else LicenseTier.CORE
-
-    # Backward-compatible fallback (manual override).
-    raw = (os.getenv("HP_LICENSE_TIER") or "core").strip().lower()
-    if raw == LicenseTier.PRO.value:
-        return LicenseTier.PRO
     return LicenseTier.CORE
 
 

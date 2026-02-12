@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import platform
+import random
 import re
 import socket
 import threading
@@ -175,10 +176,7 @@ def _read_text_file(path: str) -> Optional[str]:
         return None
 
 
-def load_pinned_public_key_pem(*, allow_env_pem: bool) -> bytes:
-    pem = (os.getenv("LICENSING_PINNED_PUBLIC_KEY_PEM") or "").strip()
-    if allow_env_pem and pem:
-        return pem.encode("utf-8")
+def load_pinned_public_key_pem() -> bytes:
     path = (os.getenv("LICENSING_PINNED_PUBLIC_KEY_PATH") or "/app/app/licensing_server_public_key.pem").strip()
     with open(path, "rb") as f:
         return f.read()
@@ -277,6 +275,7 @@ class LicensingState:
     expires_at: Optional[int]
     entitlements: Dict[str, Any]
     recheck_after_seconds: Optional[int]
+    lease_jws: Optional[str] = None
 
 
 class LicensingStartupDenied(RuntimeError):
@@ -332,6 +331,7 @@ class LicensingManager:
         self._post_json = post_json_func
 
         self._lock = threading.Lock()
+        self._validate_lock = threading.Lock()
         self._state = LicensingState(
             decision=None,
             valid=False,
@@ -341,6 +341,7 @@ class LicensingManager:
             expires_at=None,
             entitlements={},
             recheck_after_seconds=None,
+            lease_jws=None,
         )
 
         self._stop = threading.Event()
@@ -361,8 +362,8 @@ class LicensingManager:
         timeout = float(os.getenv("LICENSING_HTTP_TIMEOUT_SECONDS") or 10.0)
         # Intentionally NOT configurable by environment: the recheck interval is part of
         # the licensing enforcement and should not be user-tunable via `.env`.
-        min_recheck = 10
-        max_recheck_opt: Optional[int] = 20
+        min_recheck = 60
+        max_recheck_opt: Optional[int] = 600
 
         enforce = _env_bool("HP_ENFORCE_LICENSE", False)
         limited_behavior = (os.getenv("HP_LICENSE_LIMITED_BEHAVIOR") or "core").strip().lower()
@@ -416,6 +417,18 @@ class LicensingManager:
         with self._lock:
             return replace(self._state)
 
+    def get_lease_jws(self) -> Optional[str]:
+        st = self.get_state()
+        if st.valid and st.decision == LicenseDecision.ALLOW.value and st.lease_jws:
+            return st.lease_jws
+        return None
+
+    def refresh_now(self) -> LicensingState:
+        with self._validate_lock:
+            st = self._validate_once()
+            self._set_state(st)
+            return st
+
     def _set_state(self, st: LicensingState) -> None:
         with self._lock:
             self._state = st
@@ -429,8 +442,7 @@ class LicensingManager:
         if self._fingerprint_sha256 is None:
             self._fingerprint_sha256 = compute_instance_fingerprint_sha256_hex()
         if self._public_key_pem is None:
-            allow_env = _env_bool("HP_ALLOW_LICENSING_PUBKEY_OVERRIDE", False) or (not self._enforce_on_startup)
-            self._public_key_pem = load_pinned_public_key_pem(allow_env_pem=allow_env)
+            self._public_key_pem = load_pinned_public_key_pem()
 
     def _validate_once(self) -> LicensingState:
         if not self._license_key:
@@ -443,6 +455,7 @@ class LicensingManager:
                 expires_at=None,
                 entitlements={},
                 recheck_after_seconds=None,
+                lease_jws=None,
             )
         if not self._licensing_url:
             return LicensingState(
@@ -454,6 +467,7 @@ class LicensingManager:
                 expires_at=None,
                 entitlements={},
                 recheck_after_seconds=None,
+                lease_jws=None,
             )
         if not self._app_id:
             return LicensingState(
@@ -465,6 +479,7 @@ class LicensingManager:
                 expires_at=None,
                 entitlements={},
                 recheck_after_seconds=None,
+                lease_jws=None,
             )
         if not self._app_version:
             # Version is required by the API contract; treat missing as an error to avoid ambiguous telemetry.
@@ -477,6 +492,7 @@ class LicensingManager:
                 expires_at=None,
                 entitlements={},
                 recheck_after_seconds=None,
+                lease_jws=None,
             )
 
         try:
@@ -497,6 +513,7 @@ class LicensingManager:
                 expires_at=None,
                 entitlements={},
                 recheck_after_seconds=None,
+                lease_jws=None,
             )
 
         assert self._instance_id is not None
@@ -536,6 +553,7 @@ class LicensingManager:
                 expires_at=None,
                 entitlements={},
                 recheck_after_seconds=None,
+                lease_jws=None,
             )
 
         sig = str((data or {}).get("server_signature") or "").strip()
@@ -563,6 +581,7 @@ class LicensingManager:
                 expires_at=None,
                 entitlements={},
                 recheck_after_seconds=None,
+                lease_jws=None,
             )
 
         try:
@@ -577,6 +596,7 @@ class LicensingManager:
                 expires_at=None,
                 entitlements={},
                 recheck_after_seconds=None,
+                lease_jws=None,
             )
 
         if str(payload.get("request_nonce") or "") != nonce:
@@ -589,6 +609,7 @@ class LicensingManager:
                 expires_at=None,
                 entitlements={},
                 recheck_after_seconds=None,
+                lease_jws=None,
             )
         try:
             rts = int(payload.get("request_timestamp") or 0)
@@ -604,6 +625,7 @@ class LicensingManager:
                 expires_at=None,
                 entitlements={},
                 recheck_after_seconds=None,
+                lease_jws=None,
             )
 
         decision = str(payload.get("decision") or "").strip().upper()
@@ -642,11 +664,11 @@ class LicensingManager:
             expires_at=expires_at_int,
             entitlements=entitlements,
             recheck_after_seconds=recheck_int,
+            lease_jws=sig if decision_known else None,
         )
 
     def _startup_validate(self) -> None:
-        st = self._validate_once()
-        self._set_state(st)
+        st = self.refresh_now()
 
         if not self._enforce_on_startup:
             return
@@ -662,17 +684,35 @@ class LicensingManager:
 
     def _sleep_seconds(self) -> int:
         st = self.get_state()
+        now_ts = int(time.time())
+        candidates = []
         raw = st.recheck_after_seconds
-        if raw is None:
-            sleep_s = int(self._min_recheck_seconds)
+        if raw is not None:
+            try:
+                candidates.append(max(1, int(raw)))
+            except Exception:
+                pass
+        if st.expires_at is not None:
+            try:
+                remain = int(st.expires_at) - now_ts
+            except Exception:
+                remain = 0
+            if remain > 0:
+                # Ensure at least one refresh shortly before lease expiration.
+                candidates.append(max(10, remain - 30))
+        if candidates:
+            sleep_s = min(candidates)
         else:
-            sleep_s = max(1, int(raw))
+            sleep_s = int(self._min_recheck_seconds)
 
         # Floor: do not check more frequently than min_recheck_seconds.
         sleep_s = max(int(self._min_recheck_seconds), int(sleep_s))
         # Ceiling: ensure changes in license state propagate promptly.
         if self._max_recheck_seconds is not None:
             sleep_s = min(int(sleep_s), int(self._max_recheck_seconds))
+        # Add small jitter so many instances don't hit the server at the same second.
+        jitter = max(1, int(sleep_s * 0.1))
+        sleep_s += random.randint(-jitter, jitter)
         return max(1, int(sleep_s))
 
     def _run(self) -> None:
@@ -681,8 +721,7 @@ class LicensingManager:
             if self._stop.wait(timeout=float(sleep_s)):
                 return
 
-            st = self._validate_once()
-            self._set_state(st)
+            st = self.refresh_now()
 
             if st.valid and st.decision == LicenseDecision.DENY.value and self._deny_behavior == "exit":
                 # Best-effort immediate termination if the license is revoked while running.

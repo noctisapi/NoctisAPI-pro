@@ -16,8 +16,11 @@ from typing import Optional, List
 
 from app import status_checks
 from app import licensing
+from app import campaigns_pro
+from app import pro_license
+from app import pro_ops
 from app.honeypot_monitor import HoneypotAvailabilityMonitor, get_history as hp_get_history, get_summary as hp_get_summary
-from honey_licensing.client import compute_client_identity, get_default_manager
+from honey_licensing.client import compute_client_identity
 
 APP_NAME = "shadowapi-panel"
 DB_PATH = os.getenv("HP_DB_PATH", "/data/honeypot.db")
@@ -32,9 +35,25 @@ def _license_context() -> dict:
     return licensing.feature_flags()
 
 
-def _require_feature(feature: licensing.Feature) -> None:
+def _has_feature(feature: licensing.Feature, *, action: str = "panel_access") -> bool:
     if not licensing.has_feature(feature):
+        return False
+    ok, _reason = pro_ops.authorize_pro_feature(feature=feature.value, action=action, force_refresh=False)
+    return bool(ok)
+
+
+def _require_feature(feature: licensing.Feature, *, action: str = "panel_access") -> None:
+    if not _has_feature(feature, action=action):
         raise HTTPException(status_code=403, detail="feature not available")
+
+
+def _license_runtime_snapshot() -> dict:
+    return pro_license.get_backend_license_snapshot(force_refresh=False)
+
+
+def _campaigns_backend_lease(*, force_refresh: bool = False) -> tuple[Optional[str], Optional[str], dict]:
+    return pro_license.get_backend_lease(force_refresh=force_refresh)
+
 
 CAMPAIGN_JOB_LOCK = threading.Lock()
 
@@ -108,17 +127,17 @@ honeypot_monitor = HoneypotAvailabilityMonitor(db)
 @app.on_event("startup")
 def _start_background_tasks():
     honeypot_monitor.start()
-    mgr = get_default_manager()
-    licensing.set_pro_enabled_provider(mgr.is_pro_enabled)
-    mgr.start()
+    licensing.set_pro_enabled_provider(pro_license.is_pro_enabled)
+    pro_license.get_backend_license_snapshot(force_refresh=True)
+    pro_ops.clear_cache()
 
 
 @app.on_event("shutdown")
 def _stop_background_tasks():
     honeypot_monitor.stop()
-    mgr = get_default_manager()
-    mgr.stop()
     licensing.set_pro_enabled_provider(None)
+    pro_license.clear_cache()
+    pro_ops.clear_cache()
 
 
 @app.get("/health", tags=["Health"], response_class=PlainTextResponse)
@@ -146,24 +165,26 @@ def admin_license_status():
 
     Intended for the admin service (typically bound to 127.0.0.1 in production).
     """
-    mgr = get_default_manager()
-    st = mgr.get_state()
+    snapshot = _license_runtime_snapshot()
     identity = compute_client_identity()
     return {
-        "pro_enabled": bool(mgr.is_pro_enabled()),
+        "pro_enabled": bool(snapshot.get("pro_enabled")),
         "feature_flags": licensing.feature_flags(),
         "client_identity": identity,
-        "licensing": {
-            "valid": bool(st.valid),
-            "decision": st.decision,
-            "reason_code": st.reason_code,
-            "last_error": st.last_error,
-            "last_ok_at": st.last_ok_at.isoformat().replace("+00:00", "Z") if st.last_ok_at else None,
-            "expires_at": st.expires_at,
-            "recheck_after_seconds": st.recheck_after_seconds,
-            "entitlements": st.entitlements or {},
-        },
+        "licensing": snapshot,
     }
+
+
+@app.post("/dashboard/license/refresh", include_in_schema=False, response_class=JSONResponse)
+def dashboard_license_refresh():
+    lease_jws, lease_error, _meta = _campaigns_backend_lease(force_refresh=True)
+    payload = _license_runtime_snapshot()
+    payload["refreshed"] = bool(lease_jws)
+    payload["source"] = "backend"
+    payload["backend_lease_ok"] = bool(lease_jws)
+    if lease_error:
+        payload["refresh_error"] = lease_error
+    return payload
 
 
 def _honeypot_snapshot(conn: sqlite3.Connection, limit: int = 20) -> dict:
@@ -1029,6 +1050,10 @@ def dashboard_root():
 def dashboard_overview(request: Request):
     conn = db()
     try:
+        campaigns_backend_enabled = bool(campaigns_pro.pro_backend_url())
+        campaigns_visible = campaigns_pro.can_render_verified_campaigns(
+            conn, backend_enabled=campaigns_backend_enabled
+        )
         cur = conn.cursor()
         cur.execute("SELECT COUNT(*) AS cnt FROM actors WHERE last_seen >= datetime('now','-1 day')")
         active_24h = int(cur.fetchone()["cnt"] or 0)
@@ -1038,8 +1063,10 @@ def dashboard_overview(request: Request):
         events_total = int(cur.fetchone()["cnt"] or 0)
         cur.execute("SELECT COUNT(*) AS cnt FROM cases WHERE status='open'")
         cases_open = int(cur.fetchone()["cnt"] or 0)
-        cur.execute("SELECT COUNT(*) AS cnt FROM campaigns WHERE COALESCE(last_seen_at, created_at) >= datetime('now','-7 day')")
-        campaigns_active = int(cur.fetchone()["cnt"] or 0)
+        campaigns_active = 0
+        if campaigns_visible:
+            cur.execute("SELECT COUNT(*) AS cnt FROM campaigns WHERE COALESCE(last_seen_at, created_at) >= datetime('now','-7 day')")
+            campaigns_active = int(cur.fetchone()["cnt"] or 0)
         cur.execute("SELECT COALESCE(MAX(stage_max), 0) AS max_stage FROM sessions")
         stage_max = int(cur.fetchone()["max_stage"] or 0)
 
@@ -1093,18 +1120,20 @@ def dashboard_overview(request: Request):
         )
         cases_recent = [dict(r) for r in cur.fetchall()]
 
-        cur.execute(
-            """
-            SELECT campaign_id, label, last_seen_at, COALESCE(first_seen_at, created_at) AS first_seen
-            FROM campaigns
-            WHERE last_seen_at IS NOT NULL
-              AND last_seen_at >= datetime('now','-1 day')
-              AND COALESCE(first_seen_at, created_at) < datetime(last_seen_at,'-1 day')
-            ORDER BY last_seen_at DESC
-            LIMIT 5
-            """
-        )
-        campaigns_reactivated = [dict(r) for r in cur.fetchall()]
+        campaigns_reactivated = []
+        if campaigns_visible:
+            cur.execute(
+                """
+                SELECT campaign_id, label, last_seen_at, COALESCE(first_seen_at, created_at) AS first_seen
+                FROM campaigns
+                WHERE last_seen_at IS NOT NULL
+                  AND last_seen_at >= datetime('now','-1 day')
+                  AND COALESCE(first_seen_at, created_at) < datetime(last_seen_at,'-1 day')
+                ORDER BY last_seen_at DESC
+                LIMIT 5
+                """
+            )
+            campaigns_reactivated = [dict(r) for r in cur.fetchall()]
 
         cur.execute(
             """
@@ -1139,6 +1168,7 @@ def dashboard_overview(request: Request):
                 "cases_recent": cases_recent,
                 "campaigns_reactivated": campaigns_reactivated,
                 "fast_escalations": fast_escalations,
+                "license_runtime": _license_runtime_snapshot(),
                 **_license_context(),
             },
         )
@@ -2026,7 +2056,7 @@ def session_detail(session_id: str, request: Request):
             except Exception:
                 sess["duration_ms"] = None
         open_cases = []
-        if licensing.has_feature(licensing.Feature.CASES):
+        if _has_feature(licensing.Feature.CASES, action="overview_cases"):
             cur.execute("SELECT id, title, severity, status FROM cases WHERE status='open' ORDER BY updated_at DESC LIMIT 200")
             open_cases = [dict(r) for r in cur.fetchall()]
         return templates.TemplateResponse(
@@ -2040,22 +2070,19 @@ def session_detail(session_id: str, request: Request):
 @app.post("/dashboard/campaigns/recompute")
 def recompute_campaigns():
     _require_feature(licensing.Feature.CAMPAIGNS)
-    """
-    Agrupa actores con alto overlap en paths recientes usando un Jaccard robusto.
-    Evita falsos positivos exigiendo suficientes caminos compartidos y limpia campa??as previas.
-    """
-    config = {
-        "min_features": _env_int("HP_CAMPAIGN_MIN_FEATURES", 4, 1),
-        "min_intersection": _env_int("HP_CAMPAIGN_MIN_INTERSECTION", 3, 1),
-        "min_jaccard": _env_float("HP_CAMPAIGN_MIN_JACCARD", 0.4, 0.0),
-        "max_sessions": _env_int("HP_CAMPAIGN_MAX_SESSIONS", 5, 1),
-        "path_ngram_top_k": _env_int("HP_CAMPAIGN_PATH_NGRAM_TOP_K", 12, 1),
-        "path_top_k": _env_int("HP_CAMPAIGN_PATH_TOP_K", 10, 1),
-        "actor_limit": _env_int("HP_CAMPAIGN_ACTOR_LIMIT", 200, 10),
-    }
+    backend_url = campaigns_pro.pro_backend_url()
+    if not backend_url:
+        raise HTTPException(status_code=503, detail="Campaigns PRO requiere backend (PRO_BACKEND_URL)")
+
+    lease_jws, lease_error, lease_meta = _campaigns_backend_lease(force_refresh=False)
+    if not lease_jws:
+        raise HTTPException(status_code=403, detail=lease_error or "missing_valid_lease")
+    app_id = str(lease_meta.get("app_id") or "")
+    instance_id = str(lease_meta.get("instance_id") or "")
 
     conn = db()
     try:
+        campaigns_pro.ensure_campaign_pro_state_table(conn)
         if not _campaign_jobs_table_exists(conn):
             raise HTTPException(status_code=503, detail="campaign_jobs table missing; run alembic upgrade head")
         cur = conn.cursor()
@@ -2065,64 +2092,239 @@ def recompute_campaigns():
         if row:
             return {"started": False, "job": _serialize_campaign_job(row)}
 
-        import secrets
+        config = campaigns_pro.campaign_config_from_env()
+        snapshot = campaigns_pro.build_campaigns_snapshot(conn, config)
+        snapshot_hash = campaigns_pro.sha256_hex_obj(snapshot)
+        if not instance_id:
+            raise HTTPException(status_code=503, detail="missing_instance_id")
 
-        job_id = secrets.token_hex(8)
+        try:
+            backend_job = campaigns_pro.request_recompute_job(
+                backend_url=backend_url,
+                lease_jws=lease_jws,
+                app_id=app_id,
+                instance_id=instance_id,
+                license_key_hash=campaigns_pro.hash_license_key(),
+                snapshot=snapshot,
+                snapshot_hash=snapshot_hash,
+            )
+        except campaigns_pro.CampaignProError as exc:
+            campaigns_pro.clear_campaign_tables(conn)
+            campaigns_pro.mark_campaign_status(conn, status=campaigns_pro.PRO_STATUS_UNVERIFIED, reason=str(exc)[:180])
+            raise HTTPException(status_code=502, detail=f"backend_enqueue_failed:{exc}")
+
+        job_id = str(backend_job.get("job_id") or "")
+        if not job_id:
+            raise HTTPException(status_code=502, detail="backend_missing_job_id")
         now = _utc_now_iso()
+        params_payload = {
+            "config": config,
+            "snapshot_hash": snapshot_hash,
+            "backend_url": backend_url,
+        }
         cur.execute(
             "INSERT INTO campaign_jobs(job_id, status, created_at, params_json) VALUES(?,?,?,?)",
-            (job_id, "queued", now, json.dumps(config, ensure_ascii=False)),
+            (job_id, "queued", now, json.dumps(params_payload, ensure_ascii=False)),
         )
         conn.commit()
+        campaigns_pro.clear_campaign_tables(conn)
+        campaigns_pro.mark_campaign_status(
+            conn,
+            status=campaigns_pro.PRO_STATUS_PENDING,
+            job_id=job_id,
+            snapshot_hash=snapshot_hash,
+        )
     finally:
         conn.close()
 
-    thread = threading.Thread(target=_run_campaign_job, args=(job_id, config), daemon=True)
-    thread.start()
-    return {"started": True, "job": {"job_id": job_id, "status": "queued", "created_at": now, "params": config}}
+    return {"started": True, "job": {"job_id": job_id, "status": "queued", "created_at": now, "params": params_payload}}
+
+
+def _campaigns_verification_summary(conn: sqlite3.Connection, backend_enabled: bool) -> dict:
+    summary = campaigns_pro.campaigns_status_summary(conn, backend_enabled=backend_enabled)
+    if backend_enabled and (not summary.get("verified")):
+        lease_jws, _, _lease_meta = _campaigns_backend_lease(force_refresh=False)
+        if not lease_jws:
+            out = dict(summary)
+            out["status"] = "lease_required"
+            out["message"] = "Campaigns PRO requiere lease valido"
+            return out
+    return summary
 
 
 @app.get("/dashboard/campaigns/recompute/status")
 def recompute_campaigns_status():
-    if not licensing.has_feature(licensing.Feature.CAMPAIGNS):
-        return {"status": "disabled"}
+    backend_url = campaigns_pro.pro_backend_url()
+    backend_enabled = bool(backend_url)
     conn = db()
     try:
+        campaigns_pro.ensure_campaign_pro_state_table(conn)
+        if not _has_feature(licensing.Feature.CAMPAIGNS, action="campaigns_status"):
+            return {
+                "status": "disabled",
+                "verification": _campaigns_verification_summary(conn, backend_enabled=backend_enabled),
+            }
         if not _campaign_jobs_table_exists(conn):
-            return {"status": "disabled"}
+            return {
+                "status": "disabled",
+                "verification": _campaigns_verification_summary(conn, backend_enabled=backend_enabled),
+            }
         cur = conn.cursor()
         row = cur.execute("SELECT * FROM campaign_jobs ORDER BY created_at DESC LIMIT 1").fetchone()
         if not row:
-            return {"status": "none"}
-        return _serialize_campaign_job(row)
+            return {
+                "status": "none",
+                "verification": _campaigns_verification_summary(conn, backend_enabled=backend_enabled),
+            }
+
+        job = _serialize_campaign_job(row)
+        job_id = str(job.get("job_id") or "")
+        status = str(job.get("status") or "")
+
+        if backend_enabled and status in {"queued", "running"} and job_id:
+            lease_jws, _lease_error, _lease_meta = _campaigns_backend_lease(force_refresh=False)
+            if not lease_jws:
+                cur.execute(
+                    "UPDATE campaign_jobs SET status=?, finished_at=?, error=? WHERE job_id=?",
+                    ("failed", _utc_now_iso(), "missing_valid_lease", job_id),
+                )
+                conn.commit()
+                campaigns_pro.clear_campaign_tables(conn)
+                campaigns_pro.mark_campaign_status(
+                    conn, status=campaigns_pro.PRO_STATUS_UNVERIFIED, reason="missing_valid_lease", job_id=job_id
+                )
+            else:
+                try:
+                    remote = campaigns_pro.fetch_job_status(backend_url=backend_url, lease_jws=lease_jws, job_id=job_id)
+                    remote_status = str(remote.get("status") or "")
+                    if remote_status == "queued":
+                        cur.execute("UPDATE campaign_jobs SET status=? WHERE job_id=?", ("queued", job_id))
+                        conn.commit()
+                    elif remote_status == "started":
+                        cur.execute(
+                            "UPDATE campaign_jobs SET status=?, started_at=COALESCE(started_at, ?) WHERE job_id=?",
+                            ("running", _utc_now_iso(), job_id),
+                        )
+                        conn.commit()
+                    elif remote_status == "finished":
+                        result_data = campaigns_pro.fetch_job_result(backend_url=backend_url, lease_jws=lease_jws, job_id=job_id)
+                        params = job.get("params") if isinstance(job.get("params"), dict) else {}
+                        snapshot_hash = str(params.get("snapshot_hash") or "")
+                        identity = compute_client_identity()
+                        app_id = (os.getenv("HP_APP_ID") or os.getenv("APP_ID") or "shadowapi-pro").strip()
+                        instance_id = str(identity.get("instance_id") or "").strip()
+                        result, _sig_payload, exp = campaigns_pro.verify_signed_campaign_result(
+                            data=result_data,
+                            expected_snapshot_hash=snapshot_hash,
+                            expected_app_id=app_id,
+                            expected_instance_id=instance_id,
+                            expected_license_key_hash=campaigns_pro.hash_license_key(),
+                        )
+                        metrics = campaigns_pro.apply_verified_campaign_result(conn, result)
+                        finished_at = _utc_now_iso()
+                        cur.execute(
+                            """
+                            UPDATE campaign_jobs
+                            SET status=?, finished_at=?, duration_ms=?, actors_considered=?, features_cached=?,
+                                features_built=?, links_created=?, cache_enabled=?, error=?
+                            WHERE job_id=?
+                            """,
+                            (
+                                "completed",
+                                finished_at,
+                                metrics.get("duration_ms"),
+                                metrics.get("actors_considered"),
+                                metrics.get("features_cached"),
+                                metrics.get("features_built"),
+                                metrics.get("links_created"),
+                                0,
+                                None,
+                                job_id,
+                            ),
+                        )
+                        conn.commit()
+                        campaigns_pro.mark_campaign_status(
+                            conn,
+                            status=campaigns_pro.PRO_STATUS_VERIFIED,
+                            reason="",
+                            job_id=job_id,
+                            snapshot_hash=snapshot_hash,
+                            expires_at=exp,
+                        )
+                    else:
+                        remote_err = str(remote.get("error") or "backend_job_failed")
+                        cur.execute(
+                            "UPDATE campaign_jobs SET status=?, finished_at=?, error=? WHERE job_id=?",
+                            ("failed", _utc_now_iso(), remote_err[:300], job_id),
+                        )
+                        conn.commit()
+                        campaigns_pro.clear_campaign_tables(conn)
+                        campaigns_pro.mark_campaign_status(
+                            conn,
+                            status=campaigns_pro.PRO_STATUS_UNVERIFIED,
+                            reason=remote_err[:180],
+                            job_id=job_id,
+                        )
+                except campaigns_pro.CampaignProError as exc:
+                    err = str(exc)[:300]
+                    cur.execute(
+                        "UPDATE campaign_jobs SET status=?, finished_at=?, error=? WHERE job_id=?",
+                        ("failed", _utc_now_iso(), err, job_id),
+                    )
+                    conn.commit()
+                    campaigns_pro.clear_campaign_tables(conn)
+                    campaigns_pro.mark_campaign_status(
+                        conn,
+                        status=campaigns_pro.PRO_STATUS_UNVERIFIED,
+                        reason=str(exc)[:180],
+                        job_id=job_id,
+                    )
+
+            row = cur.execute("SELECT * FROM campaign_jobs WHERE job_id=?", (job_id,)).fetchone()
+            job = _serialize_campaign_job(row)
+
+        job["verification"] = _campaigns_verification_summary(conn, backend_enabled=backend_enabled)
+        return job
     finally:
         conn.close()
 
 @app.get("/dashboard/campaigns", response_class=HTMLResponse)
 def list_campaigns(request: Request):
     _require_feature(licensing.Feature.CAMPAIGNS)
+    backend_enabled = bool(campaigns_pro.pro_backend_url())
     conn = db()
     try:
+        campaigns_pro.ensure_campaign_pro_state_table(conn)
+        verification = _campaigns_verification_summary(conn, backend_enabled=backend_enabled)
         cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT
-              c.campaign_id,
-              c.label,
-              c.created_at,
-              c.last_seen_at,
-              c.first_seen_at,
-              c.score_det,
-              COUNT(l.actor_id) AS member_count
-            FROM campaigns c
-            LEFT JOIN campaign_actor_links l ON l.campaign_id = c.campaign_id
-            GROUP BY c.campaign_id
-            ORDER BY COALESCE(c.last_seen_at, c.created_at) DESC
-            """
-        )
-        rows = [dict(r) for r in cur.fetchall()]
+        rows = []
+        if verification.get("verified"):
+            cur.execute(
+                """
+                SELECT
+                  c.campaign_id,
+                  c.label,
+                  c.created_at,
+                  c.last_seen_at,
+                  c.first_seen_at,
+                  c.score_det,
+                  COUNT(l.actor_id) AS member_count
+                FROM campaigns c
+                LEFT JOIN campaign_actor_links l ON l.campaign_id = c.campaign_id
+                GROUP BY c.campaign_id
+                ORDER BY COALESCE(c.last_seen_at, c.created_at) DESC
+                """
+            )
+            rows = [dict(r) for r in cur.fetchall()]
         return templates.TemplateResponse(
-            "campaigns.html", {"request": request, "campaigns": rows, **_license_context()}
+            "campaigns.html",
+            {
+                "request": request,
+                "campaigns": rows,
+                "campaigns_pro_state": verification,
+                "pro_backend_enabled": backend_enabled,
+                **_license_context(),
+            },
         )
     finally:
         conn.close()
@@ -2175,6 +2377,8 @@ def campaign_detail(campaign_id: str, request: Request):
     _require_feature(licensing.Feature.CAMPAIGNS)
     conn = db()
     try:
+        if not campaigns_pro.can_render_verified_campaigns(conn, backend_enabled=bool(campaigns_pro.pro_backend_url())):
+            raise HTTPException(status_code=404, detail="campaign_result_not_verified")
         cur = conn.cursor()
         cur.execute("SELECT * FROM campaigns WHERE campaign_id=?", (campaign_id,))
         row = cur.fetchone()
@@ -2276,10 +2480,12 @@ def campaign_detail(campaign_id: str, request: Request):
 
 @app.get("/dashboard/actors/{actor_id}/campaign")
 def actor_campaign(actor_id: str):
-    if not licensing.has_feature(licensing.Feature.CAMPAIGNS):
+    if not _has_feature(licensing.Feature.CAMPAIGNS, action="actor_campaign_lookup"):
         return {"campaign": None}
     conn = db()
     try:
+        if not campaigns_pro.can_render_verified_campaigns(conn, backend_enabled=bool(campaigns_pro.pro_backend_url())):
+            return {"campaign": None}
         cur = conn.cursor()
         cur.execute("SELECT campaign_id, confidence, reasons_json FROM campaign_actor_links WHERE actor_id=? ORDER BY confidence DESC LIMIT 1", (actor_id,))
         row = cur.fetchone()
@@ -2399,7 +2605,9 @@ def actor(actor_id: str, request: Request):
             a["latest_session_stage"] = actor_replay["stage_max"]
 
         actor_campaign = None
-        if licensing.has_feature(licensing.Feature.CAMPAIGNS):
+        if _has_feature(licensing.Feature.CAMPAIGNS, action="actor_detail_campaign") and campaigns_pro.can_render_verified_campaigns(
+            conn, backend_enabled=bool(campaigns_pro.pro_backend_url())
+        ):
             cur.execute(
                 """
                 SELECT c.campaign_id, c.label, c.representative_session_id, l.confidence, l.reasons_json

@@ -7,30 +7,41 @@ ShadowAPI is a compact deception platform that exposes a realistic public API su
 - Pro (paid): cases workflow, campaigns explorer + recompute, replay/evidence linkage, advanced scoring, file upload + analysis simulation pipeline
 
 ## Licensing
-The app supports automatic PRO licensing via an external licensing server.
+PRO licensing is enforced through the separate PRO backend.
 
 Recommended configuration:
 - `LICENSE_KEY=sk_live_...` (end-user input)
-- `LICENSING_URL=https://licensing.example.com`
+- `PRO_BACKEND_URL=https://pro-backend.example.com`
 - Pin the licensing server RSA public key (PEM):
-  - `LICENSING_PINNED_PUBLIC_KEY_PATH=/app/app/licensing_server_public_key.pem` (default in image), or
-  - `LICENSING_PINNED_PUBLIC_KEY_PEM="-----BEGIN PUBLIC KEY----- ..."`
+  - `LICENSING_PINNED_PUBLIC_KEY_PATH=/app/app/licensing_server_public_key.pem` (default in image)
+- Pin the PRO results RSA public key (PEM):
+  - `PRO_RESULTS_PUBLIC_KEY_PATH=/app/app/pro_results_public_key.pem` (default in image)
 - Persist a stable installation identifier:
   - `INSTANCE_ID_PATH=/var/lib/myapp/instance_id` (default; mount a persistent volume at `/var/lib/myapp`)
-- Optional tuning:
-  - `LICENSING_HTTP_TIMEOUT_SECONDS=10` (default)
-  - `HP_ENFORCE_LICENSE=1` to fail startup if licensing is invalid or the decision is `DENY` (default `0` = degrade to CORE)
-  - `HP_LICENSE_LIMITED_BEHAVIOR=core|exit` (default `core`)
-  - `HP_LICENSE_DENY_BEHAVIOR=exit|disable` (default `disable`)
 
 The client computes a best-effort host fingerprint and sends its SHA-256 hex (64 chars). If you want a fully stable host-locked fingerprint across container rebuilds, set `INSTANCE_FINGERPRINT_SHA256` (64 hex) or mount the host machine-id into the container (for example mount `/etc/machine-id` to `/etc/host-machine-id` and set `HP_HOST_MACHINE_ID_PATH=/etc/host-machine-id`).
 
 Debugging:
-- `GET /admin/license` includes a `client_identity` object with `instance_id` and `instance_fingerprint_sha256` so you can reconcile what the app is sending with what the licensing server expects.
+- `GET /admin/license` includes backend license status and `client_identity` (`instance_id`, `instance_fingerprint_sha256`).
 - Or run `python /app/scripts/print_licensing_identity.py` inside the container.
 
-Legacy/manual override:
-- `HP_LICENSE_TIER=core|pro` is still supported, but is ignored when the runtime licensing manager is enabled.
+Manual override by tier is disabled. Without backend-validated licensing, all PRO features stay disabled.
+
+## Campaigns PRO Backend
+
+`Campaigns` now requires a separate backend that signs recompute results.
+The panel no longer performs local recompute for campaigns.
+
+Backend env (separate repo, e.g. `C:/Users/williamkhepri/Documents/Shadow_API_pro_backend`):
+- `PRO_BACKEND_REDIS_URL`
+- `PRO_BACKEND_LICENSING_PUBLIC_KEY_PATH`
+- `PRO_BACKEND_RESULTS_PRIVATE_KEY_PATH`
+
+Hardening:
+- Public keys are loaded from pinned file paths only (`LICENSING_PINNED_PUBLIC_KEY_PATH`, `PRO_RESULTS_PUBLIC_KEY_PATH`).
+- Campaigns and PRO feature gating require backend-validated lease and signed backend results.
+- Todas las operaciones PRO requieren autorizacion firmada por backend (`/v1/pro/features/authorize`); cualquier fallo fuerza fallback a `core`.
+- Ajuste opcional: `HP_PRO_OPS_AUTHZ_CACHE_SECONDS` (default `0`, validar cada operacion contra backend).
 
 ## Repository Layout
 - `app/` — core services (public API, admin panel, monitor, health)
