@@ -19,5 +19,7 @@ services:
       - ./app/pro_results_public_key.pem:/app/app/pro_results_public_key.pem:ro
 
 volumes:
-  hp_dev_data: {}
-  hp_dev_myapp: {}
+  hp_dev_data:
+    name: hp-app_hp_dev_data
+  hp_dev_myapp:
+    name: hp-app_hp_dev_myapp
