@@ -14,10 +14,10 @@ Recommended configuration:
 - `PRO_BACKEND_URL=https://pro-backend.example.com`
 - Pin the licensing server RSA public key (PEM):
   - `LICENSING_PINNED_PUBLIC_KEY_PATH=/app/app/licensing_server_public_key.pem` (default in image)
-- Pin the PRO results RSA public key (PEM):
-  - `PRO_RESULTS_PUBLIC_KEY_PATH=/app/app/pro_results_public_key.pem` (default in image)
 - Persist a stable installation identifier:
   - `INSTANCE_ID_PATH=/var/lib/myapp/instance_id` (default; mount a persistent volume at `/var/lib/myapp`)
+- Persist the signed lease cache:
+  - `HP_PRO_LEASE_CACHE_PATH=/var/lib/myapp/pro_lease_cache.json`
 
 The client computes a best-effort host fingerprint and sends its SHA-256 hex (64 chars). If you want a fully stable host-locked fingerprint across container rebuilds, set `INSTANCE_FINGERPRINT_SHA256` (64 hex) or mount the host machine-id into the container (for example mount `/etc/machine-id` to `/etc/host-machine-id` and set `HP_HOST_MACHINE_ID_PATH=/etc/host-machine-id`).
 
@@ -29,19 +29,14 @@ Manual override by tier is disabled. Without backend-validated licensing, all PR
 
 ## Campaigns PRO Backend
 
-`Campaigns` now requires a separate backend that signs recompute results.
-The panel no longer performs local recompute for campaigns.
-
-Backend env (separate repo, e.g. `C:/Users/williamkhepri/Documents/Shadow_API_pro_backend`):
-- `PRO_BACKEND_REDIS_URL`
-- `PRO_BACKEND_LICENSING_PUBLIC_KEY_PATH`
-- `PRO_BACKEND_RESULTS_PRIVATE_KEY_PATH`
+Campaign recompute is local in the client app again.
+The backend is used only for `POST /v1/licenses/validate` and returns a signed lease (`RS256`) with fields like `tier`, `exp`, `features`, `instance_id`, `fingerprint_sha256`.
 
 Hardening:
-- Public keys are loaded from pinned file paths only (`LICENSING_PINNED_PUBLIC_KEY_PATH`, `PRO_RESULTS_PUBLIC_KEY_PATH`).
-- Campaigns and PRO feature gating require backend-validated lease and signed backend results.
-- Todas las operaciones PRO requieren autorizacion firmada por backend (`/v1/pro/features/authorize`); cualquier fallo fuerza fallback a `core`.
-- Ajuste opcional: `HP_PRO_OPS_AUTHZ_CACHE_SECONDS` (default `0`, validar cada operacion contra backend).
+- Public keys are loaded from pinned file paths only (`LICENSING_PINNED_PUBLIC_KEY_PATH`).
+- Lease JWS is always verified locally with the pinned key.
+- Offline grace is bounded by a client-side constant in code (`CLIENT_CAP_SECONDS`), not `.env`.
+- If the lease is expired and the backend cannot be reached, the app falls back to `core`.
 
 ## Repository Layout
 - `app/` — core services (public API, admin panel, monitor, health)

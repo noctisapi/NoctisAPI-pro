@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
 import sqlite3
 import threading
+import tempfile
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -18,8 +20,19 @@ PRO_STATE_TABLE = "campaign_pro_state"
 PRO_STATUS_VERIFIED = "verified"
 PRO_STATUS_PENDING = "pending"
 PRO_STATUS_UNVERIFIED = "unverified"
+CLIENT_CAP_SECONDS = 43200
 _LEASE_CACHE_LOCK = threading.Lock()
-_LEASE_CACHE: dict[str, Any] = {"lease_jws": "", "exp": 0}
+_LEASE_CACHE: dict[str, Any] = {
+    "lease_jws": "",
+    "exp": 0,
+    "cached_at": 0,
+    "backend_url": "",
+    "app_id": "",
+    "app_version": "",
+    "instance_id": "",
+    "instance_fingerprint": "",
+    "license_key_hash": "",
+}
 
 
 class CampaignProError(RuntimeError):
@@ -60,6 +73,142 @@ def _env_float(name: str, default: float, min_value: float | None = None, max_va
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _lease_cache_path() -> str:
+    return (os.getenv("HP_PRO_LEASE_CACHE_PATH") or "/var/lib/myapp/pro_lease_cache.json").strip()
+
+
+def _decode_jws_payload_unverified(jws_compact: str) -> dict[str, Any]:
+    parts = (jws_compact or "").strip().split(".")
+    if len(parts) != 3:
+        return {}
+    payload_b64 = str(parts[1] or "").strip()
+    if not payload_b64:
+        return {}
+    pad = "=" * ((4 - (len(payload_b64) % 4)) % 4)
+    try:
+        raw = base64.urlsafe_b64decode((payload_b64 + pad).encode("ascii"))
+        obj = json.loads(raw.decode("utf-8", errors="strict"))
+        return obj if isinstance(obj, dict) else {}
+    except Exception:
+        return {}
+
+
+def _best_effort_lease_exp(lease_jws: str) -> int:
+    payload = _decode_jws_payload_unverified(lease_jws)
+    exp_raw = payload.get("exp") if payload.get("exp") is not None else payload.get("expires_at")
+    try:
+        return int(exp_raw) if exp_raw is not None else 0
+    except Exception:
+        return 0
+
+
+def _best_effort_lease_issued_at(lease_jws: str) -> int:
+    payload = _decode_jws_payload_unverified(lease_jws)
+    issued_at_raw = payload.get("issued_at") if payload.get("issued_at") is not None else payload.get("iat")
+    try:
+        return int(issued_at_raw) if issued_at_raw is not None else 0
+    except Exception:
+        return 0
+
+
+def _best_effort_offline_grace_seconds(lease_jws: str) -> int | None:
+    payload = _decode_jws_payload_unverified(lease_jws)
+    raw = payload.get("offline_grace_seconds")
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except Exception:
+        return None
+
+
+def _effective_grace_seconds(raw_offline_grace_seconds: int | None) -> int:
+    if raw_offline_grace_seconds is None:
+        return int(CLIENT_CAP_SECONDS)
+    return min(max(0, int(raw_offline_grace_seconds)), int(CLIENT_CAP_SECONDS))
+
+
+def _cache_binding(
+    *,
+    backend_url: str,
+    license_key: str,
+    app_id: str,
+    app_version: str,
+    instance_id: str,
+    instance_fingerprint: str,
+) -> dict[str, str]:
+    return {
+        "backend_url": str(backend_url or "").strip().rstrip("/"),
+        "app_id": str(app_id or "").strip(),
+        "app_version": str(app_version or "").strip(),
+        "instance_id": str(instance_id or "").strip(),
+        "instance_fingerprint": str(instance_fingerprint or "").strip(),
+        "license_key_hash": sha256_hex_text(str(license_key or "").strip()),
+    }
+
+
+def _cache_entry_usable(
+    entry: dict[str, Any],
+    *,
+    now: int,
+    binding: dict[str, str],
+    require_offline_grace: bool,
+) -> bool:
+    lease_jws = str(entry.get("lease_jws") or "").strip()
+    if not lease_jws:
+        return False
+    exp = _best_effort_lease_exp(lease_jws)
+    if exp <= now + 30:
+        return False
+    for key in ("backend_url", "app_id", "app_version", "instance_id", "instance_fingerprint", "license_key_hash"):
+        expected = str(binding.get(key) or "")
+        if key == "backend_url" and not expected:
+            continue
+        if expected and str(entry.get(key) or "") != expected:
+            return False
+    if require_offline_grace:
+        issued_at = _best_effort_lease_issued_at(lease_jws)
+        if issued_at <= 0:
+            return False
+        grace_raw = _best_effort_offline_grace_seconds(lease_jws)
+        effective_grace = _effective_grace_seconds(grace_raw)
+        if (now - issued_at) > effective_grace:
+            return False
+    return True
+
+
+def _read_lease_cache_file(path: str) -> dict[str, Any]:
+    cache_path = str(path or "").strip()
+    if not cache_path:
+        return {}
+    try:
+        with open(cache_path, "r", encoding="utf-8") as f:
+            obj = json.load(f)
+            return obj if isinstance(obj, dict) else {}
+    except Exception:
+        return {}
+
+
+def _write_lease_cache_file(path: str, payload: dict[str, Any]) -> None:
+    cache_path = str(path or "").strip()
+    if not cache_path:
+        return
+    parent = os.path.dirname(cache_path) or "."
+    os.makedirs(parent, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix="lease-cache-", suffix=".tmp", dir=parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, sort_keys=True)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, cache_path)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
 
 
 def stage_from_score(score: int) -> int:
@@ -292,36 +441,33 @@ def mark_campaign_status(
 
 
 def campaigns_status_summary(conn: sqlite3.Connection, backend_enabled: bool) -> dict[str, Any]:
+    _ = backend_enabled
     state = get_campaign_pro_state(conn)
-    if not backend_enabled:
-        return {
-            "status": "backend_required",
-            "verified": False,
-            "message": "Campaigns PRO requiere backend",
-        }
     status = state.get("status") or ""
     if status == PRO_STATUS_VERIFIED:
+        out: dict[str, Any] = {
+            "status": status,
+            "verified": True,
+            "message": "Resultado disponible",
+        }
         try:
             exp = int(state.get("expires_at") or "0")
         except Exception:
             exp = 0
-        now = int(time.time())
-        if exp > now:
-            return {
-                "status": status,
-                "verified": True,
-                "message": "Resultado verificado",
-                "expires_at": exp,
-            }
-        return {
-            "status": PRO_STATUS_UNVERIFIED,
-            "verified": False,
-            "message": "Resultado no disponible (expirado)",
-        }
+        if exp > 0:
+            now = int(time.time())
+            if exp <= now:
+                return {
+                    "status": PRO_STATUS_UNVERIFIED,
+                    "verified": False,
+                    "message": "Resultado no disponible (expirado)",
+                }
+            out["expires_at"] = exp
+        return out
     if status == PRO_STATUS_PENDING:
         return {"status": status, "verified": False, "message": "Recompute en progreso"}
     if status == PRO_STATUS_UNVERIFIED:
-        reason = state.get("reason") or "firma inválida"
+        reason = state.get("reason") or "invalido"
         return {"status": status, "verified": False, "message": f"Resultado no disponible ({reason})"}
     return {"status": "none", "verified": False, "message": "Resultado no disponible"}
 
@@ -439,18 +585,10 @@ def get_backend_lease_cached(
     instance_id: str,
     instance_fingerprint: str,
     force_refresh: bool = False,
-) -> str:
+) -> tuple[str, str]:
+    cache_path = _lease_cache_path()
     now = int(time.time())
-    with _LEASE_CACHE_LOCK:
-        cached_jws = str(_LEASE_CACHE.get("lease_jws") or "")
-        try:
-            cached_exp = int(_LEASE_CACHE.get("exp") or 0)
-        except Exception:
-            cached_exp = 0
-        if (not force_refresh) and cached_jws and cached_exp > now + 30:
-            return cached_jws
-
-    data = request_backend_lease(
+    binding = _cache_binding(
         backend_url=backend_url,
         license_key=license_key,
         app_id=app_id,
@@ -458,15 +596,81 @@ def get_backend_lease_cached(
         instance_id=instance_id,
         instance_fingerprint=instance_fingerprint,
     )
-    lease_jws = str(data.get("lease_jws") or "").strip()
-    try:
-        exp = int(data.get("exp") or 0)
-    except Exception:
-        exp = 0
+
     with _LEASE_CACHE_LOCK:
-        _LEASE_CACHE["lease_jws"] = lease_jws
-        _LEASE_CACHE["exp"] = exp
-    return lease_jws
+        mem_entry = dict(_LEASE_CACHE)
+    if (not force_refresh) and _cache_entry_usable(
+        mem_entry,
+        now=now,
+        binding=binding,
+        require_offline_grace=True,
+    ):
+        return str(mem_entry.get("lease_jws") or ""), "cache"
+
+    disk_entry = _read_lease_cache_file(cache_path)
+    if (not force_refresh) and _cache_entry_usable(
+        disk_entry,
+        now=now,
+        binding=binding,
+        require_offline_grace=True,
+    ):
+        with _LEASE_CACHE_LOCK:
+            _LEASE_CACHE.update(disk_entry)
+        return str(disk_entry.get("lease_jws") or ""), "cache"
+
+    if not backend_url:
+        for entry in (mem_entry, disk_entry):
+            if _cache_entry_usable(
+                entry,
+                now=now,
+                binding=binding,
+                require_offline_grace=True,
+            ):
+                return str(entry.get("lease_jws") or ""), "cache"
+        raise CampaignProError("missing_PRO_BACKEND_URL")
+
+    try:
+        data = request_backend_lease(
+            backend_url=backend_url,
+            license_key=license_key,
+            app_id=app_id,
+            app_version=app_version,
+            instance_id=instance_id,
+            instance_fingerprint=instance_fingerprint,
+        )
+    except CampaignProError as exc:
+        for entry in (mem_entry, disk_entry):
+            if _cache_entry_usable(
+                entry,
+                now=now,
+                binding=binding,
+                require_offline_grace=True,
+            ):
+                return str(entry.get("lease_jws") or ""), "cache"
+        raise exc
+
+    lease_jws = str(data.get("lease_jws") or "").strip()
+    exp = _best_effort_lease_exp(lease_jws)
+    if exp <= 0:
+        try:
+            exp = int(data.get("exp") or 0)
+        except Exception:
+            exp = 0
+    issued_at = _best_effort_lease_issued_at(lease_jws)
+    offline_grace_seconds = _best_effort_offline_grace_seconds(lease_jws)
+
+    cache_entry = {
+        "lease_jws": lease_jws,
+        "exp": int(exp or 0),
+        "issued_at": int(issued_at or 0),
+        "offline_grace_seconds": offline_grace_seconds,
+        "cached_at": now,
+        **binding,
+    }
+    with _LEASE_CACHE_LOCK:
+        _LEASE_CACHE.update(cache_entry)
+    _write_lease_cache_file(cache_path, cache_entry)
+    return lease_jws, "backend"
 
 
 def request_recompute_job(

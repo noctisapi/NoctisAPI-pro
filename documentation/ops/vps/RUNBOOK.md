@@ -61,7 +61,7 @@ This runbook covers:
     - `LICENSE_KEY=sk_live_...` (end-user input)
     - `LICENSING_PINNED_PUBLIC_KEY_PATH=/app/app/licensing_server_public_key.pem` (pinned RSA public key PEM)
     - `INSTANCE_ID_PATH=/var/lib/myapp/instance_id` (default)
-    - `PRO_RESULTS_PUBLIC_KEY_PATH=/app/app/pro_results_public_key.pem`
+    - `HP_PRO_LEASE_CACHE_PATH=/var/lib/myapp/pro_lease_cache.json`
     - `HP_PUBLIC_RATELIMIT_AVG=120` / `HP_PUBLIC_RATELIMIT_BURST=240` (optional; Traefik rate limit)
 
 ## Phase 4: Certificates (Traefik + ACME)

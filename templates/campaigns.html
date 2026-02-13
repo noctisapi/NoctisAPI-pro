@@ -12,7 +12,6 @@
       class="btn btn-primary"
       type="button"
       onclick="recomputeCampaigns(this)"
-      {% if not pro_backend_enabled %}disabled title="Campaigns PRO requiere backend"{% endif %}
     >
       Recompute groups
     </button>
@@ -62,7 +61,7 @@
       </table>
     </div>
   {% else %}
-    <div class="case-empty" style="margin:14px;">No campaigns available. Run recompute when backend and valid lease are ready.</div>
+    <div class="case-empty" style="margin:14px;">No campaigns available. Run recompute to build campaigns.</div>
   {% endif %}
 </div>
 
@@ -70,7 +69,7 @@
   const jobStatusEl = document.getElementById('campaignJobStatus');
   const verifyStatusEl = document.getElementById('campaignVerifyStatus');
   const recomputeBtn = document.getElementById('recomputeBtn');
-  const backendEnabled = {{ (pro_backend_enabled|default(false))|tojson }};
+  const recomputeEnabled = {{ (campaigns_recompute_enabled|default(true))|tojson }};
   const initialVerification = {{ (campaigns_pro_state|default({}))|tojson }};
   let jobPollTimer = null;
   let autoRefreshOnComplete = false;
@@ -80,7 +79,7 @@
     if(!jobStatusEl) return;
     if(!job || !job.status || job.status === 'none' || job.status === 'disabled'){
       jobStatusEl.textContent = '';
-      if(recomputeBtn && backendEnabled){
+      if(recomputeBtn && recomputeEnabled){
         recomputeBtn.disabled = false;
         recomputeBtn.textContent = 'Recompute groups';
       }
@@ -104,7 +103,7 @@
     }
     jobStatusEl.textContent = msg;
     if(recomputeBtn){
-      recomputeBtn.disabled = !backendEnabled || job.status === 'queued' || job.status === 'running';
+      recomputeBtn.disabled = !recomputeEnabled || job.status === 'queued' || job.status === 'running';
       recomputeBtn.textContent = recomputeBtn.disabled ? 'Recomputing...' : 'Recompute groups';
     }
   }
@@ -145,10 +144,6 @@
   }
 
   async function recomputeCampaigns(btn){
-    if(!backendEnabled){
-      alert('Campaigns PRO requiere backend');
-      return;
-    }
     const original = btn.textContent;
     btn.disabled = true;
     btn.textContent = 'Recomputing...';

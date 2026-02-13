@@ -21,9 +21,8 @@ Recommended configuration:
 - `PRO_BACKEND_URL=https://pro-backend.example.com`
 - Pin the licensing server RSA public key (PEM):
   - `LICENSING_PINNED_PUBLIC_KEY_PATH=/app/app/licensing_server_public_key.pem` (default in image)
-- Pin the PRO results RSA public key (PEM):
-  - `PRO_RESULTS_PUBLIC_KEY_PATH=/app/app/pro_results_public_key.pem` (default in image)
 - `INSTANCE_ID_PATH=/var/lib/myapp/instance_id` (default)
+- `HP_PRO_LEASE_CACHE_PATH=/var/lib/myapp/pro_lease_cache.json`
 
 The app computes a host fingerprint and sends its SHA-256 hex. Mount a persistent Docker volume at `/var/lib/myapp` so `INSTANCE_ID_PATH` survives container recreation.
 
@@ -32,8 +31,9 @@ Debugging:
 - You can also run `python /app/scripts/print_licensing_identity.py` inside a container.
 
 Hard requirement:
-- PRO operations are enabled only after backend signed authorization; on any backend/auth signature failure the app behaves as `core`.
-- Optional tune: `HP_PRO_OPS_AUTHZ_CACHE_SECONDS` (default `0`, backend authorization on every PRO operation).
+- PRO operations are enabled only with a valid signed lease (`RS256`) verified with the pinned licensing public key.
+- Campaign recompute runs locally in the app; backend is only used for `POST /v1/licenses/validate`.
+- Offline grace is capped by a client code constant (`CLIENT_CAP_SECONDS`), not environment configuration.
 
 Manual tier override is disabled. Without backend-validated licensing, PRO remains disabled.
 
