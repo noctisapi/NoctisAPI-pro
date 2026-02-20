@@ -55,7 +55,7 @@ class TestCampaignResultVerification(unittest.TestCase):
         priv, pub_pem = self._with_keypair()
         result = {"campaigns": [{"campaign_id": "abc"}], "links": [], "metrics": {"duration_ms": 1}}
         snapshot_hash = "a" * 64
-        app_id = "shadowapi-pro"
+        app_id = "noctisapi-pro"
         instance_id = "instance-1"
         license_key_hash = "b" * 64
         exp = int(time.time()) + 120
@@ -94,7 +94,7 @@ class TestCampaignResultVerification(unittest.TestCase):
         base_result = {"campaigns": [{"campaign_id": "abc"}], "links": [], "metrics": {}}
         tampered_result = {"campaigns": [{"campaign_id": "xyz"}], "links": [], "metrics": {}}
         snapshot_hash = "a" * 64
-        app_id = "shadowapi-pro"
+        app_id = "noctisapi-pro"
         instance_id = "instance-1"
         exp = int(time.time()) + 120
         payload = {
@@ -128,7 +128,7 @@ class TestCampaignResultVerification(unittest.TestCase):
         priv, pub_pem = self._with_keypair()
         result = {"campaigns": [], "links": [], "metrics": {}}
         snapshot_hash = "a" * 64
-        app_id = "shadowapi-pro"
+        app_id = "noctisapi-pro"
         instance_id = "instance-1"
         exp = int(time.time()) - 10
         payload = {

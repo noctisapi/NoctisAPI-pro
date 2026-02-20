@@ -1,8 +1,8 @@
-# ShadowAPI Features: Cases, Replay, Campaign
+# NoctisAPI Features: Cases, Replay, Campaign
 
 ## Overview
 
-Three new features added to the ShadowAPI dashboard for advanced attack investigation and actor correlation:
+Three new features added to the NoctisAPI dashboard for advanced attack investigation and actor correlation:
 
 ### 1) **Cases** (Investigation Dossiers)
 

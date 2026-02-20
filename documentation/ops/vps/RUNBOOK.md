@@ -1,4 +1,4 @@
-# ShadowAPI Production Runbook
+# NoctisAPI Production Runbook
 
 This runbook covers:
 - Initial VPS setup
@@ -9,7 +9,7 @@ This runbook covers:
 ## Prerequisites
 - VPS with public IP and SSH access
 - DuckDNS subdomain + token
-- Docker image published (e.g. `ghcr.io/<ORG>/shadowapi-pro`)
+- Docker image published (e.g. `ghcr.io/<ORG>/noctisapi-pro`)
 - `.env.prod` prepared with real values (kept on the server, not inside the image)
 
 ## Phase 1: VPS Baseline
@@ -49,7 +49,7 @@ This runbook covers:
    - `cp /opt/hp-app/.env.prod /opt/hp-app/.env.prod`
    - Fill real values (tokens, URLs, passwords).
    - Add:
-     - `HP_IMAGE=ghcr.io/<ORG>/shadowapi-pro`
+     - `HP_IMAGE=ghcr.io/<ORG>/noctisapi-pro`
      - `HP_PUBLIC_HOST=<SUBDOMAIN>.duckdns.org`
      - `ACME_EMAIL=<you@example.com>`
      - `HONEYPOT_PUBLIC_BASE_URL=https://<SUBDOMAIN>.duckdns.org` (public URL shown in admin)
@@ -126,13 +126,13 @@ Use an SSH deploy action that:
 ## GitHub Actions + GHCR (automatic image build)
 This repo includes `.github/workflows/ghcr.yml` which:
 - Builds the Docker image on every push to `main`
-- Pushes it to `ghcr.io/<OWNER>/shadowapi-pro` with tags `latest` and commit SHA
+- Pushes it to `ghcr.io/<OWNER>/noctisapi-pro` with tags `latest` and commit SHA
 
 Steps:
 1. Push to GitHub (`main` branch).
 2. GHCR will publish the image automatically.
 3. On the VPS, set:
-   - `HP_IMAGE=ghcr.io/<OWNER>/shadowapi-pro`
+   - `HP_IMAGE=ghcr.io/<OWNER>/noctisapi-pro`
    - `APP_VERSION=latest` (or use the SHA tag)
 4. Run:
    - `bash ops/vps/deploy.sh`

@@ -70,7 +70,7 @@ class TestCampaignsProLeaseCache(unittest.TestCase):
         binding = campaigns_pro._cache_binding(
             backend_url=backend_url,
             license_key="sk_test_123",
-            app_id="shadowapi-pro",
+            app_id="noctisapi-pro",
             app_version="1.2.3",
             instance_id="instance-1",
             instance_fingerprint="f" * 64,
@@ -98,7 +98,7 @@ class TestCampaignsProLeaseCache(unittest.TestCase):
         lease, source = campaigns_pro.get_backend_lease_cached(
             backend_url="",
             license_key="sk_test_123",
-            app_id="shadowapi-pro",
+            app_id="noctisapi-pro",
             app_version="1.2.3",
             instance_id="instance-1",
             instance_fingerprint="f" * 64,
@@ -122,7 +122,7 @@ class TestCampaignsProLeaseCache(unittest.TestCase):
             campaigns_pro.get_backend_lease_cached(
                 backend_url="",
                 license_key="sk_test_123",
-                app_id="shadowapi-pro",
+                app_id="noctisapi-pro",
                 app_version="1.2.3",
                 instance_id="instance-1",
                 instance_fingerprint="f" * 64,
@@ -144,7 +144,7 @@ class TestCampaignsProLeaseCache(unittest.TestCase):
             lease, source = campaigns_pro.get_backend_lease_cached(
                 backend_url="https://pro.example.com",
                 license_key="sk_test_123",
-                app_id="shadowapi-pro",
+                app_id="noctisapi-pro",
                 app_version="1.2.3",
                 instance_id="instance-1",
                 instance_fingerprint="f" * 64,

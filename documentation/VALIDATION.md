@@ -1,4 +1,4 @@
-ShadowAPI validation checklist
+NoctisAPI validation checklist
 
 1) Ensure schema applied
 

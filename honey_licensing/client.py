@@ -355,7 +355,7 @@ class LicensingManager:
     def from_env() -> "LicensingManager":
         licensing_url = (os.getenv("LICENSING_URL") or "").strip()
         license_key = (os.getenv("LICENSE_KEY") or "").strip()
-        app_id = (os.getenv("HP_APP_ID") or os.getenv("APP_ID") or "shadowapi-pro").strip()
+        app_id = (os.getenv("HP_APP_ID") or os.getenv("APP_ID") or "noctisapi-pro").strip()
         app_version = (os.getenv("HP_APP_VERSION") or os.getenv("APP_VERSION") or os.getenv("HP_API_VERSION") or "").strip()
         instance_id_path = (os.getenv("INSTANCE_ID_PATH") or "/var/lib/myapp/instance_id").strip()
 

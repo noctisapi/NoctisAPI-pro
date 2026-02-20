@@ -116,7 +116,7 @@ class TestLicensingManager(unittest.TestCase):
                 mgr = LicensingManager(
                     licensing_url=licensing_url,
                     license_key="sk_live_test",
-                    app_id="shadowapi-pro",
+                    app_id="noctisapi-pro",
                     app_version="1.2.3",
                     instance_id_path=td + "/instance_id",
                     http_timeout_seconds=0.1,
@@ -166,7 +166,7 @@ class TestLicensingManager(unittest.TestCase):
                 mgr = LicensingManager(
                     licensing_url=licensing_url,
                     license_key="sk_live_test",
-                    app_id="shadowapi-pro",
+                    app_id="noctisapi-pro",
                     app_version="1.2.3",
                     instance_id_path=td + "/instance_id",
                     http_timeout_seconds=0.1,
@@ -210,7 +210,7 @@ class TestLicensingManager(unittest.TestCase):
                 mgr = LicensingManager(
                     licensing_url=licensing_url,
                     license_key="sk_live_test",
-                    app_id="shadowapi-pro",
+                    app_id="noctisapi-pro",
                     app_version="1.2.3",
                     instance_id_path=td + "/instance_id",
                     http_timeout_seconds=0.1,
@@ -260,7 +260,7 @@ class TestLicensingManager(unittest.TestCase):
                 mgr = LicensingManager(
                     licensing_url=licensing_url,
                     license_key="sk_live_test",
-                    app_id="shadowapi-pro",
+                    app_id="noctisapi-pro",
                     app_version="1.2.3",
                     instance_id_path=td + "/instance_id",
                     http_timeout_seconds=0.1,
@@ -313,7 +313,7 @@ class TestLicensingManager(unittest.TestCase):
                 mgr = LicensingManager(
                     licensing_url=licensing_url,
                     license_key="sk_live_test",
-                    app_id="shadowapi-pro",
+                    app_id="noctisapi-pro",
                     app_version="1.2.3",
                     instance_id_path=td + "/instance_id",
                     http_timeout_seconds=0.1,

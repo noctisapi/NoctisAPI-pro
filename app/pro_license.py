@@ -76,7 +76,7 @@ def _effective_grace_seconds(raw_offline_grace_seconds: Any) -> int:
 
 def _fetch_backend_lease(*, force_refresh: bool) -> tuple[Optional[str], Optional[int], Optional[str], dict[str, Any]]:
     backend_url = campaigns_pro.pro_backend_url()
-    app_id = (os.getenv("HP_APP_ID") or os.getenv("APP_ID") or "shadowapi-pro").strip()
+    app_id = (os.getenv("HP_APP_ID") or os.getenv("APP_ID") or "noctisapi-pro").strip()
     app_version = (os.getenv("HP_APP_VERSION") or os.getenv("APP_VERSION") or os.getenv("HP_API_VERSION") or "").strip()
     license_key = (os.getenv("LICENSE_KEY") or "").strip()
     identity = compute_client_identity()
