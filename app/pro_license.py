@@ -125,6 +125,8 @@ def _fetch_backend_lease(*, force_refresh: bool) -> tuple[Optional[str], Optiona
 
     now = int(time.time())
     exp_raw = payload.get("exp")
+    if exp_raw is None:
+        exp_raw = payload.get("expires_at")
     try:
         exp = int(exp_raw) if exp_raw is not None else None
     except Exception:
@@ -135,6 +137,8 @@ def _fetch_backend_lease(*, force_refresh: bool) -> tuple[Optional[str], Optiona
         return None, exp, "lease_expired", meta
 
     issued_at_raw = payload.get("issued_at")
+    if issued_at_raw is None:
+        issued_at_raw = payload.get("iat")
     try:
         issued_at = int(issued_at_raw) if issued_at_raw is not None else None
     except Exception:

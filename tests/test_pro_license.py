@@ -94,6 +94,38 @@ class TestProLicenseLeaseValidation(unittest.TestCase):
         self.assertIsNone(lease_jws)
         self.assertEqual(error, "lease_missing_issued_at")
 
+    def test_expires_at_fallback_is_accepted(self):
+        now = int(time.time())
+        payload = self._base_payload(now)
+        payload["expires_at"] = payload.pop("exp")
+
+        with (
+            mock.patch("app.pro_license.compute_client_identity", return_value=self._identity()),
+            mock.patch("app.pro_license.campaigns_pro.get_backend_lease_cached", return_value=("lease-jws", "backend")),
+            mock.patch("app.pro_license._lease_payload", return_value=payload),
+        ):
+            lease_jws, exp, error, _meta = pro_license._fetch_backend_lease(force_refresh=False)
+
+        self.assertEqual(lease_jws, "lease-jws")
+        self.assertIsNone(error)
+        self.assertEqual(exp, payload["expires_at"])
+
+    def test_iat_fallback_is_accepted(self):
+        now = int(time.time())
+        payload = self._base_payload(now)
+        payload["iat"] = payload.pop("issued_at")
+
+        with (
+            mock.patch("app.pro_license.compute_client_identity", return_value=self._identity()),
+            mock.patch("app.pro_license.campaigns_pro.get_backend_lease_cached", return_value=("lease-jws", "backend")),
+            mock.patch("app.pro_license._lease_payload", return_value=payload),
+        ):
+            lease_jws, exp, error, _meta = pro_license._fetch_backend_lease(force_refresh=False)
+
+        self.assertEqual(lease_jws, "lease-jws")
+        self.assertIsNone(error)
+        self.assertEqual(exp, payload["exp"])
+
 
 if __name__ == "__main__":
     unittest.main()
