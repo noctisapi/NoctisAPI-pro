@@ -6,7 +6,10 @@
     <div class="sub">Operational overview of threat activity</div>
   </div>
   <div>
-    <button id="licenseRefreshBtn" class="btn btn-outline btn-small" type="button" onclick="refreshLicenseNow(this)">Refresh license now</button>
+    <div class="page-head-actions">
+      <button id="licenseConfigBtn" class="btn btn-ghost btn-small" type="button" onclick="openLicenseConfigModal()">License setup</button>
+      <button id="licenseRefreshBtn" class="btn btn-outline btn-small" type="button" onclick="refreshLicenseNow(this)">Refresh license now</button>
+    </div>
     <div id="licenseStatusLine" class="muted tiny-text" style="margin-top:6px;"></div>
   </div>
 </div>
@@ -118,12 +121,51 @@
   </div>
 </section>
 
+<div id="licenseConfigModal" class="modal-backdrop" aria-hidden="true">
+  <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="licenseConfigTitle">
+    <div class="modal-head">
+      <div>
+        <h3 id="licenseConfigTitle">License Setup</h3>
+        <p class="modal-subtitle">Edit runtime license settings and validate immediately.</p>
+      </div>
+      <button type="button" class="btn btn-icon" onclick="closeLicenseConfigModal()" aria-label="Close license setup">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div id="licenseConfigHint" class="modal-hint"></div>
+      <div class="modal-form">
+        <label for="licenseBackendUrl">PRO backend URL</label>
+        <input id="licenseBackendUrl" class="input" type="url" placeholder="https://licensing.example.com" />
+
+        <label for="licenseAppVersion">App version</label>
+        <input id="licenseAppVersion" class="input" type="text" placeholder="0.1.1" />
+
+        <label for="licenseAppId">App ID</label>
+        <input id="licenseAppId" class="input" type="text" placeholder="noctisapi-pro" />
+
+        <label for="licenseFingerprintOverride">Fingerprint override (optional, 64 hex)</label>
+        <input id="licenseFingerprintOverride" class="input mono" type="text" placeholder="" />
+
+        <label for="licenseKeyInput">License key (optional, only updates if provided)</label>
+        <input id="licenseKeyInput" class="input mono" type="password" placeholder="" autocomplete="off" />
+      </div>
+      <div id="licenseConfigSummary" class="modal-hint" style="margin-top:10px;"></div>
+      <div id="licenseConfigIdentity" class="modal-hint"></div>
+    </div>
+    <div class="modal-actions">
+      <button id="licenseConfigSaveBtn" type="button" class="btn btn-primary" onclick="saveLicenseConfig(this)">Save and validate</button>
+      <button id="licenseConfigResetBtn" type="button" class="btn btn-outline" onclick="resetLicenseOverrides(this)">Use only .env</button>
+      <button type="button" class="btn btn-ghost" onclick="closeLicenseConfigModal()">Close</button>
+    </div>
+  </div>
+</div>
+
 <script>
   const eventsByDay = {{ events_by_day|tojson }};
   const actorsNew = {{ actors_new|tojson }};
   const actorsRecurrent = {{ actors_recurrent|tojson }};
   const stageProgress = {{ stage_progress|tojson }};
   const licenseRuntime = {{ (license_runtime|default({}))|tojson }};
+  let licenseConfigLoaded = false;
 
   const byDay = (rows) => {
     const map = {};
@@ -185,6 +227,158 @@
         btn.disabled = false;
         btn.textContent = original || 'Refresh license now';
       }
+    }
+  }
+
+  const setButtonBusy = (btn, busy, busyLabel) => {
+    if(!btn) return;
+    if(busy){
+      if(!btn.dataset.originalLabel){
+        btn.dataset.originalLabel = btn.textContent;
+      }
+      btn.disabled = true;
+      btn.textContent = busyLabel || 'Working...';
+      return;
+    }
+    btn.disabled = false;
+    btn.textContent = btn.dataset.originalLabel || btn.textContent;
+  };
+
+  const closeLicenseConfigModal = () => {
+    const modal = document.getElementById('licenseConfigModal');
+    if(!modal) return;
+    modal.classList.remove('is-open');
+    modal.setAttribute('aria-hidden', 'true');
+  };
+
+  const applyLicenseConfigData = (data) => {
+    const config = (data && data.config) ? data.config : {};
+    const effective = config.effective || {};
+    const identity = config.identity || {};
+    const sources = config.sources || {};
+
+    const backendInput = document.getElementById('licenseBackendUrl');
+    const appVersionInput = document.getElementById('licenseAppVersion');
+    const appIdInput = document.getElementById('licenseAppId');
+    const fpInput = document.getElementById('licenseFingerprintOverride');
+    const keyInput = document.getElementById('licenseKeyInput');
+    const hintEl = document.getElementById('licenseConfigHint');
+    const summaryEl = document.getElementById('licenseConfigSummary');
+    const identityEl = document.getElementById('licenseConfigIdentity');
+
+    if(backendInput){ backendInput.value = effective.backend_url || ''; }
+    if(appVersionInput){ appVersionInput.value = effective.app_version || ''; }
+    if(appIdInput){ appIdInput.value = effective.app_id || ''; }
+    if(fpInput){ fpInput.value = effective.instance_fingerprint_sha256_override || ''; }
+    if(keyInput){
+      keyInput.value = '';
+      const preview = effective.license_key_preview || '';
+      keyInput.placeholder = effective.license_key_configured ? `Configured (${preview})` : 'sk_live_...';
+    }
+    if(hintEl){
+      hintEl.textContent = data && data.hint ? data.hint : '';
+    }
+    if(summaryEl){
+      summaryEl.textContent = `Sources - backend: ${sources.backend_url || 'default'}, app_version: ${sources.app_version || 'default'}, app_id: ${sources.app_id || 'default'}, license_key: ${sources.license_key || 'default'}`;
+    }
+    if(identityEl){
+      identityEl.textContent = `Instance ID: ${identity.instance_id || 'n/a'} | Fingerprint: ${identity.instance_fingerprint_sha256 || 'n/a'}`;
+    }
+  };
+
+  async function loadLicenseConfig(){
+    const hintEl = document.getElementById('licenseConfigHint');
+    if(hintEl){ hintEl.textContent = 'Loading current license configuration...'; }
+    try{
+      const res = await fetch('/dashboard/license/config');
+      if(!res.ok){
+        const text = await res.text();
+        if(hintEl){ hintEl.textContent = `Failed to load config: http_${res.status}: ${text}`; }
+        return;
+      }
+      const data = await res.json();
+      applyLicenseConfigData(data);
+      if(data && data.licensing){ renderLicenseStatus(data.licensing); }
+      licenseConfigLoaded = true;
+    }catch(e){
+      if(hintEl){ hintEl.textContent = `Failed to load config: ${e.message || 'request_failed'}`; }
+    }
+  }
+
+  function openLicenseConfigModal(){
+    const modal = document.getElementById('licenseConfigModal');
+    if(!modal) return;
+    modal.classList.add('is-open');
+    modal.setAttribute('aria-hidden', 'false');
+    if(!licenseConfigLoaded){
+      loadLicenseConfig();
+    }
+  }
+
+  async function saveLicenseConfig(btn){
+    const backendInput = document.getElementById('licenseBackendUrl');
+    const appVersionInput = document.getElementById('licenseAppVersion');
+    const appIdInput = document.getElementById('licenseAppId');
+    const fpInput = document.getElementById('licenseFingerprintOverride');
+    const keyInput = document.getElementById('licenseKeyInput');
+    const hintEl = document.getElementById('licenseConfigHint');
+
+    const payload = {
+      backend_url: backendInput ? backendInput.value.trim() : '',
+      app_version: appVersionInput ? appVersionInput.value.trim() : '',
+      app_id: appIdInput ? appIdInput.value.trim() : '',
+      instance_fingerprint_sha256: fpInput ? fpInput.value.trim() : '',
+    };
+    const keyValue = keyInput ? keyInput.value.trim() : '';
+    if(keyValue){
+      payload.license_key = keyValue;
+    }
+
+    setButtonBusy(btn, true, 'Saving...');
+    if(hintEl){ hintEl.textContent = 'Saving config and validating license...'; }
+    try{
+      const res = await fetch('/dashboard/license/config', {
+        method: 'POST',
+        headers: {'content-type': 'application/json'},
+        body: JSON.stringify(payload),
+      });
+      if(!res.ok){
+        const text = await res.text();
+        if(hintEl){ hintEl.textContent = `Save failed: http_${res.status}: ${text}`; }
+        return;
+      }
+      const data = await res.json();
+      applyLicenseConfigData(data);
+      if(data && data.licensing){ renderLicenseStatus(data.licensing); }
+    }catch(e){
+      if(hintEl){ hintEl.textContent = `Save failed: ${e.message || 'request_failed'}`; }
+    }finally{
+      setButtonBusy(btn, false);
+    }
+  }
+
+  async function resetLicenseOverrides(btn){
+    const hintEl = document.getElementById('licenseConfigHint');
+    setButtonBusy(btn, true, 'Resetting...');
+    if(hintEl){ hintEl.textContent = 'Clearing runtime overrides and validating...'; }
+    try{
+      const res = await fetch('/dashboard/license/config', {
+        method: 'POST',
+        headers: {'content-type': 'application/json'},
+        body: JSON.stringify({clear_overrides: true}),
+      });
+      if(!res.ok){
+        const text = await res.text();
+        if(hintEl){ hintEl.textContent = `Reset failed: http_${res.status}: ${text}`; }
+        return;
+      }
+      const data = await res.json();
+      applyLicenseConfigData(data);
+      if(data && data.licensing){ renderLicenseStatus(data.licensing); }
+    }catch(e){
+      if(hintEl){ hintEl.textContent = `Reset failed: ${e.message || 'request_failed'}`; }
+    }finally{
+      setButtonBusy(btn, false);
     }
   }
 
@@ -313,6 +507,19 @@
   };
   document.querySelectorAll('[data-rel]').forEach(el => {
     el.textContent = relTime(el.getAttribute('data-rel') || '');
+  });
+  const licenseModal = document.getElementById('licenseConfigModal');
+  if(licenseModal){
+    licenseModal.addEventListener('click', (ev) => {
+      if(ev.target === licenseModal){
+        closeLicenseConfigModal();
+      }
+    });
+  }
+  document.addEventListener('keydown', (ev) => {
+    if(ev.key === 'Escape'){
+      closeLicenseConfigModal();
+    }
   });
   renderLicenseStatus(licenseRuntime);
   renderCharts();

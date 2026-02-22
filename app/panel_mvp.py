@@ -8,7 +8,7 @@ from collections import Counter
 from statistics import median
 from datetime import datetime, timezone
 
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, Body
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -19,6 +19,7 @@ from app import licensing
 from app import campaigns_pro
 from app import pro_license
 from app import pro_ops
+from app import license_runtime
 from app.honeypot_monitor import HoneypotAvailabilityMonitor, get_history as hp_get_history, get_summary as hp_get_summary
 from honey_licensing.client import compute_client_identity
 
@@ -53,6 +54,84 @@ def _license_runtime_snapshot() -> dict:
 
 def _campaigns_backend_lease(*, force_refresh: bool = False) -> tuple[Optional[str], Optional[str], dict]:
     return pro_license.get_backend_lease(force_refresh=force_refresh)
+
+
+def _mask_secret(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if len(raw) <= 8:
+        return "*" * len(raw)
+    return f"{raw[:4]}...{raw[-4:]}"
+
+
+def _license_error_hint(error: Optional[str]) -> str:
+    code = str(error or "").strip()
+    if not code:
+        return ""
+    if "missing_LICENSE_KEY" in code:
+        return "Configura una LICENSE_KEY valida y vuelve a validar."
+    if "missing_app_version" in code:
+        return "Configura HP_APP_VERSION con una version no vacia."
+    if "missing_PRO_BACKEND_URL" in code or "lease_transport_error" in code:
+        return "Verifica PRO_BACKEND_URL y conectividad de red hacia el servidor de licencias."
+    if "lease_missing_exp" in code:
+        return "El servidor debe incluir exp o expires_at en el lease firmado."
+    if "lease_missing_issued_at" in code:
+        return "El servidor debe incluir issued_at o iat en el lease firmado."
+    if "lease_instance_id_mismatch" in code:
+        return "La licencia no esta emitida para este instance_id. Reemite/bindea usando el ID mostrado."
+    if "lease_fingerprint_mismatch" in code:
+        return "La licencia no coincide con el fingerprint del cliente. Reemite/bindea la licencia."
+    if "lease_signature_invalid" in code:
+        return "La firma no coincide con la clave publica fijada en el cliente."
+    if "lease_expired" in code:
+        return "La licencia esta expirada. Renuevala en el servidor de licencias."
+    return "Revisa la configuracion y vuelve a validar la licencia."
+
+
+def _license_config_snapshot() -> dict:
+    overrides = license_runtime.load_overrides()
+    identity = compute_client_identity()
+
+    def _source(key: str) -> str:
+        if str(overrides.get(key) or "").strip():
+            return "override"
+        raw = str(os.getenv(key) or "").strip()
+        if raw:
+            return "env"
+        return "default"
+
+    backend_url = campaigns_pro.pro_backend_url()
+    app_id = (license_runtime.get_effective("HP_APP_ID") or os.getenv("APP_ID") or "noctisapi-pro").strip()
+    app_version = (
+        license_runtime.get_effective("HP_APP_VERSION")
+        or os.getenv("APP_VERSION")
+        or os.getenv("HP_API_VERSION")
+        or ""
+    ).strip()
+    license_key = license_runtime.get_effective("LICENSE_KEY").strip()
+    fp_override = license_runtime.get_effective("INSTANCE_FINGERPRINT_SHA256").strip()
+
+    return {
+        "runtime_config_path": license_runtime.config_path(),
+        "effective": {
+            "backend_url": backend_url,
+            "app_id": app_id,
+            "app_version": app_version,
+            "license_key_configured": bool(license_key),
+            "license_key_preview": _mask_secret(license_key),
+            "instance_fingerprint_sha256_override": fp_override,
+        },
+        "sources": {
+            "backend_url": _source("PRO_BACKEND_URL"),
+            "app_id": _source("HP_APP_ID"),
+            "app_version": _source("HP_APP_VERSION"),
+            "license_key": _source("LICENSE_KEY"),
+            "instance_fingerprint_sha256_override": _source("INSTANCE_FINGERPRINT_SHA256"),
+        },
+        "identity": identity,
+    }
 
 
 CAMPAIGN_JOB_LOCK = threading.Lock()
@@ -172,6 +251,8 @@ def admin_license_status():
         "feature_flags": licensing.feature_flags(),
         "client_identity": identity,
         "licensing": snapshot,
+        "config": _license_config_snapshot(),
+        "hint": _license_error_hint(snapshot.get("last_error")),
     }
 
 
@@ -184,7 +265,68 @@ def dashboard_license_refresh():
     payload["backend_lease_ok"] = bool(lease_jws)
     if lease_error:
         payload["refresh_error"] = lease_error
+    payload["hint"] = _license_error_hint(payload.get("refresh_error") or payload.get("last_error"))
     return payload
+
+
+@app.get("/dashboard/license/config", include_in_schema=False, response_class=JSONResponse)
+def dashboard_license_config():
+    snapshot = _license_runtime_snapshot()
+    return {
+        "config": _license_config_snapshot(),
+        "licensing": snapshot,
+        "hint": _license_error_hint(snapshot.get("last_error")),
+    }
+
+
+@app.post("/dashboard/license/config", include_in_schema=False, response_class=JSONResponse)
+def dashboard_license_config_update(payload: dict = Body(default={})):
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="invalid_payload")
+
+    field_map = {
+        "backend_url": "PRO_BACKEND_URL",
+        "license_key": "LICENSE_KEY",
+        "app_version": "HP_APP_VERSION",
+        "app_id": "HP_APP_ID",
+        "instance_fingerprint_sha256": "INSTANCE_FINGERPRINT_SHA256",
+    }
+    updates: dict[str, str] = {}
+    for field, env_key in field_map.items():
+        if field not in payload:
+            continue
+        raw = payload.get(field)
+        updates[env_key] = "" if raw is None else str(raw)
+
+    clear_all = bool(payload.get("clear_overrides"))
+    try:
+        if clear_all:
+            license_runtime.clear_overrides()
+        if updates:
+            license_runtime.save_overrides(updates=updates, clear_all=False)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"license_config_save_failed:{exc.__class__.__name__}")
+
+    pro_license.clear_cache()
+    pro_ops.clear_cache()
+
+    lease_jws, lease_error, _meta = _campaigns_backend_lease(force_refresh=True)
+    licensing_snapshot = _license_runtime_snapshot()
+    licensing_snapshot["refreshed"] = bool(lease_jws)
+    licensing_snapshot["backend_lease_ok"] = bool(lease_jws)
+    if lease_error:
+        licensing_snapshot["refresh_error"] = lease_error
+    hint = _license_error_hint(licensing_snapshot.get("refresh_error") or licensing_snapshot.get("last_error"))
+    licensing_snapshot["hint"] = hint
+
+    return {
+        "saved": True,
+        "config": _license_config_snapshot(),
+        "licensing": licensing_snapshot,
+        "hint": hint,
+    }
 
 
 def _honeypot_snapshot(conn: sqlite3.Connection, limit: int = 20) -> dict:

@@ -6,6 +6,7 @@ import time
 from typing import Any, Optional
 
 from app import campaigns_pro
+from app import license_runtime
 from honey_licensing.client import compute_client_identity, load_pinned_public_key_pem, verify_jws_rs256_compact
 
 
@@ -76,9 +77,14 @@ def _effective_grace_seconds(raw_offline_grace_seconds: Any) -> int:
 
 def _fetch_backend_lease(*, force_refresh: bool) -> tuple[Optional[str], Optional[int], Optional[str], dict[str, Any]]:
     backend_url = campaigns_pro.pro_backend_url()
-    app_id = (os.getenv("HP_APP_ID") or os.getenv("APP_ID") or "noctisapi-pro").strip()
-    app_version = (os.getenv("HP_APP_VERSION") or os.getenv("APP_VERSION") or os.getenv("HP_API_VERSION") or "").strip()
-    license_key = (os.getenv("LICENSE_KEY") or "").strip()
+    app_id = (license_runtime.get_effective("HP_APP_ID") or os.getenv("APP_ID") or "noctisapi-pro").strip()
+    app_version = (
+        license_runtime.get_effective("HP_APP_VERSION")
+        or os.getenv("APP_VERSION")
+        or os.getenv("HP_API_VERSION")
+        or ""
+    ).strip()
+    license_key = license_runtime.get_effective("LICENSE_KEY").strip()
     identity = compute_client_identity()
     instance_id = str(identity.get("instance_id") or "").strip()
     instance_fingerprint = str(identity.get("instance_fingerprint_sha256") or "").strip()

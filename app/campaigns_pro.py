@@ -14,6 +14,7 @@ from typing import Any
 import httpx
 
 from honey_licensing.client import verify_jws_rs256_compact
+from app import license_runtime
 
 
 PRO_STATE_TABLE = "campaign_pro_state"
@@ -540,7 +541,7 @@ def apply_verified_campaign_result(conn: sqlite3.Connection, result: dict[str, A
 
 
 def pro_backend_url() -> str:
-    return (os.getenv("PRO_BACKEND_URL") or "").strip().rstrip("/")
+    return license_runtime.get_effective("PRO_BACKEND_URL").strip().rstrip("/")
 
 
 def request_backend_lease(
@@ -803,7 +804,7 @@ def verify_signed_campaign_result(
 
 
 def hash_license_key() -> str:
-    key = (os.getenv("LICENSE_KEY") or "").strip()
+    key = license_runtime.get_effective("LICENSE_KEY").strip()
     if not key:
         return ""
     return sha256_hex_text(key)
