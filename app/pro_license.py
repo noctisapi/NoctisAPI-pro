@@ -164,6 +164,11 @@ def _fetch_backend_lease(*, force_refresh: bool) -> tuple[Optional[str], Optiona
     issued_at_raw = payload.get("issued_at")
     if issued_at_raw is None:
         issued_at_raw = payload.get("iat")
+    if issued_at_raw is None:
+        # Compatibility fallback for licensing servers that sign a runtime-style payload.
+        issued_at_raw = payload.get("request_timestamp")
+    if issued_at_raw is None:
+        issued_at_raw = payload.get("server_time")
     issued_at = _claim_epoch(issued_at_raw)
     if issued_at is None:
         return None, exp, "lease_missing_issued_at", meta
