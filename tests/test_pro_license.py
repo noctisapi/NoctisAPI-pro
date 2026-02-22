@@ -126,6 +126,22 @@ class TestProLicenseLeaseValidation(unittest.TestCase):
         self.assertIsNone(error)
         self.assertEqual(exp, payload["exp"])
 
+    def test_expires_at_iso_fallback_is_accepted(self):
+        now = int(time.time())
+        payload = self._base_payload(now)
+        payload["expires_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(payload.pop("exp")))
+
+        with (
+            mock.patch("app.pro_license.compute_client_identity", return_value=self._identity()),
+            mock.patch("app.pro_license.campaigns_pro.get_backend_lease_cached", return_value=("lease-jws", "backend")),
+            mock.patch("app.pro_license._lease_payload", return_value=payload),
+        ):
+            lease_jws, exp, error, _meta = pro_license._fetch_backend_lease(force_refresh=False)
+
+        self.assertEqual(lease_jws, "lease-jws")
+        self.assertIsNone(error)
+        self.assertGreater(int(exp or 0), now)
+
 
 if __name__ == "__main__":
     unittest.main()

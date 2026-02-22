@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import threading
 import time
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from app import campaigns_pro
@@ -75,6 +76,27 @@ def _effective_grace_seconds(raw_offline_grace_seconds: Any) -> int:
     return min(max(0, val), int(CLIENT_CAP_SECONDS))
 
 
+def _claim_epoch(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except Exception:
+        pass
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return None
+        try:
+            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return int(dt.timestamp())
+        except Exception:
+            return None
+    return None
+
+
 def _fetch_backend_lease(*, force_refresh: bool) -> tuple[Optional[str], Optional[int], Optional[str], dict[str, Any]]:
     backend_url = campaigns_pro.pro_backend_url()
     app_id = (license_runtime.get_effective("HP_APP_ID") or os.getenv("APP_ID") or "noctisapi-pro").strip()
@@ -133,10 +155,7 @@ def _fetch_backend_lease(*, force_refresh: bool) -> tuple[Optional[str], Optiona
     exp_raw = payload.get("exp")
     if exp_raw is None:
         exp_raw = payload.get("expires_at")
-    try:
-        exp = int(exp_raw) if exp_raw is not None else None
-    except Exception:
-        exp = None
+    exp = _claim_epoch(exp_raw)
     if exp is None:
         return None, None, "lease_missing_exp", meta
     if exp <= now:
@@ -145,10 +164,7 @@ def _fetch_backend_lease(*, force_refresh: bool) -> tuple[Optional[str], Optiona
     issued_at_raw = payload.get("issued_at")
     if issued_at_raw is None:
         issued_at_raw = payload.get("iat")
-    try:
-        issued_at = int(issued_at_raw) if issued_at_raw is not None else None
-    except Exception:
-        issued_at = None
+    issued_at = _claim_epoch(issued_at_raw)
     if issued_at is None:
         return None, exp, "lease_missing_issued_at", meta
     if issued_at > now + 60:
