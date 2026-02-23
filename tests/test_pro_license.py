@@ -11,10 +11,12 @@ class TestProLicenseLeaseValidation(unittest.TestCase):
         self._old_license_key = os.environ.get("LICENSE_KEY")
         self._old_app_version = os.environ.get("HP_APP_VERSION")
         self._old_backend_url = os.environ.get("PRO_BACKEND_URL")
+        self._old_report = os.environ.get("HP_LICENSE_REPORT_TO_SERVER")
         os.environ["LICENSE_KEY"] = "sk_test_123"
         os.environ["HP_APP_VERSION"] = "1.2.3"
         os.environ["PRO_BACKEND_URL"] = "https://pro.example.com"
         os.environ["HP_LICENSE_SYNC_ON_STATE_CHANGE"] = "1"
+        os.environ["HP_LICENSE_REPORT_TO_SERVER"] = "0"
         pro_license.clear_cache()
 
     def tearDown(self):
@@ -30,6 +32,10 @@ class TestProLicenseLeaseValidation(unittest.TestCase):
             os.environ.pop("PRO_BACKEND_URL", None)
         else:
             os.environ["PRO_BACKEND_URL"] = self._old_backend_url
+        if self._old_report is None:
+            os.environ.pop("HP_LICENSE_REPORT_TO_SERVER", None)
+        else:
+            os.environ["HP_LICENSE_REPORT_TO_SERVER"] = self._old_report
         os.environ.pop("HP_LICENSE_SYNC_ON_STATE_CHANGE", None)
 
     @staticmethod
@@ -227,6 +233,22 @@ class TestProLicenseLeaseValidation(unittest.TestCase):
         self.assertEqual(calls, [False])
         self.assertFalse(snap.get("valid"))
         self.assertEqual(snap.get("last_error"), "lease_missing_exp")
+
+    def test_force_refresh_reports_snapshot_to_server(self):
+        now = int(time.time())
+        os.environ["HP_LICENSE_REPORT_TO_SERVER"] = "1"
+        with pro_license._STATUS_LOCK:
+            pro_license._STATUS_CACHE["checked_at"] = now - 999
+            pro_license._STATUS_CACHE["snapshot"] = {}
+
+        with (
+            mock.patch("app.pro_license._fetch_backend_lease", return_value=("lease-jws", now + 3600, None, {"lease_tier": "pro", "lease_features": ["cases"]})),
+            mock.patch("app.pro_license._report_runtime_status", return_value=None) as rep,
+        ):
+            snap = pro_license.get_backend_license_snapshot(force_refresh=True)
+
+        self.assertTrue(snap.get("valid"))
+        rep.assert_called_once()
 
 
 if __name__ == "__main__":

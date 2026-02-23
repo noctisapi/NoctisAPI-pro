@@ -258,13 +258,12 @@ def admin_license_status():
 
 @app.post("/dashboard/license/refresh", include_in_schema=False, response_class=JSONResponse)
 def dashboard_license_refresh():
-    lease_jws, lease_error, _meta = _campaigns_backend_lease(force_refresh=True)
-    payload = _license_runtime_snapshot()
-    payload["refreshed"] = bool(lease_jws)
+    payload = pro_license.get_backend_license_snapshot(force_refresh=True)
+    payload["refreshed"] = bool(payload.get("valid"))
     payload["source"] = "backend"
-    payload["backend_lease_ok"] = bool(lease_jws)
-    if lease_error:
-        payload["refresh_error"] = lease_error
+    payload["backend_lease_ok"] = bool(payload.get("valid"))
+    if payload.get("last_error"):
+        payload["refresh_error"] = payload.get("last_error")
     payload["hint"] = _license_error_hint(payload.get("refresh_error") or payload.get("last_error"))
     return payload
 
@@ -312,12 +311,11 @@ def dashboard_license_config_update(payload: dict = Body(default={})):
     pro_license.clear_cache()
     pro_ops.clear_cache()
 
-    lease_jws, lease_error, _meta = _campaigns_backend_lease(force_refresh=True)
-    licensing_snapshot = _license_runtime_snapshot()
-    licensing_snapshot["refreshed"] = bool(lease_jws)
-    licensing_snapshot["backend_lease_ok"] = bool(lease_jws)
-    if lease_error:
-        licensing_snapshot["refresh_error"] = lease_error
+    licensing_snapshot = pro_license.get_backend_license_snapshot(force_refresh=True)
+    licensing_snapshot["refreshed"] = bool(licensing_snapshot.get("valid"))
+    licensing_snapshot["backend_lease_ok"] = bool(licensing_snapshot.get("valid"))
+    if licensing_snapshot.get("last_error"):
+        licensing_snapshot["refresh_error"] = licensing_snapshot.get("last_error")
     hint = _license_error_hint(licensing_snapshot.get("refresh_error") or licensing_snapshot.get("last_error"))
     licensing_snapshot["hint"] = hint
 

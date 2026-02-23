@@ -279,10 +279,60 @@ def _snapshot_state_key(snapshot: dict[str, Any]) -> tuple[Any, ...]:
     )
 
 
+def _report_runtime_status(snapshot: dict[str, Any]) -> Optional[str]:
+    backend_url = campaigns_pro.pro_backend_url()
+    if not backend_url:
+        return "missing_PRO_BACKEND_URL"
+    app_id = (license_runtime.get_effective("HP_APP_ID") or os.getenv("APP_ID") or "noctisapi-pro").strip()
+    app_version = (
+        license_runtime.get_effective("HP_APP_VERSION")
+        or os.getenv("APP_VERSION")
+        or os.getenv("HP_API_VERSION")
+        or ""
+    ).strip()
+    license_key = license_runtime.get_effective("LICENSE_KEY").strip()
+    identity = compute_client_identity()
+    instance_id = str(identity.get("instance_id") or "").strip()
+    instance_fingerprint = str(identity.get("instance_fingerprint_sha256") or "").strip()
+    if not license_key:
+        return "missing_LICENSE_KEY"
+    if not app_version:
+        return "missing_app_version"
+    if not instance_id or not instance_fingerprint:
+        return "missing_instance_identity"
+    ent = snapshot.get("entitlements") if isinstance(snapshot.get("entitlements"), dict) else {}
+    features = ent.get("features") if isinstance(ent, dict) else []
+    tier = str(ent.get("tier") or "").strip().lower() if isinstance(ent, dict) else ""
+    reported_entitlements: list[str] = []
+    if tier:
+        reported_entitlements.append(tier)
+        reported_entitlements.append(f"{app_id}:{tier}")
+    if isinstance(features, list):
+        for item in features:
+            name = str(item or "").strip().lower()
+            if name:
+                reported_entitlements.append(name)
+    return campaigns_pro.report_runtime_state(
+        backend_url=backend_url,
+        license_key=license_key,
+        app_id=app_id,
+        app_version=app_version,
+        instance_id=instance_id,
+        instance_fingerprint=instance_fingerprint,
+        valid=bool(snapshot.get("valid")),
+        decision=str(snapshot.get("decision") or "DENY").strip().upper(),
+        reason_code=(str(snapshot.get("reason_code") or "").strip() or None),
+        client_error=(str(snapshot.get("last_error") or "").strip() or None),
+        expires_at=int(snapshot.get("expires_at")) if snapshot.get("expires_at") is not None else None,
+        entitlements=reported_entitlements,
+    )
+
+
 def get_backend_license_snapshot(*, force_refresh: bool = False) -> dict[str, Any]:
     now = int(time.time())
     min_refresh_seconds = _env_int("HP_BACKEND_LICENSE_STATUS_REFRESH_SECONDS", 15, 5, 300)
     sync_on_change = _env_bool("HP_LICENSE_SYNC_ON_STATE_CHANGE", True)
+    report_to_server = _env_bool("HP_LICENSE_REPORT_TO_SERVER", True)
 
     with _STATUS_LOCK:
         checked_at = int(_STATUS_CACHE.get("checked_at") or 0)
@@ -298,7 +348,8 @@ def get_backend_license_snapshot(*, force_refresh: bool = False) -> dict[str, An
         meta=meta,
         recheck_after_seconds=min_refresh_seconds,
     )
-    if (not force_refresh) and sync_on_change and _snapshot_state_key(snapshot) != _snapshot_state_key(cached_snapshot):
+    state_changed = _snapshot_state_key(snapshot) != _snapshot_state_key(cached_snapshot)
+    if (not force_refresh) and sync_on_change and state_changed:
         # Ensure licensing server sees the new state immediately when client status changes.
         lease_jws2, exp2, error2, meta2 = _fetch_backend_lease(force_refresh=True)
         snapshot = _snapshot_from_backend_result(
@@ -308,6 +359,12 @@ def get_backend_license_snapshot(*, force_refresh: bool = False) -> dict[str, An
             meta=meta2,
             recheck_after_seconds=min_refresh_seconds,
         )
+        state_changed = _snapshot_state_key(snapshot) != _snapshot_state_key(cached_snapshot)
+
+    if report_to_server and (force_refresh or state_changed):
+        report_error = _report_runtime_status(snapshot)
+        if report_error:
+            snapshot["runtime_report_error"] = report_error
 
     with _STATUS_LOCK:
         _STATUS_CACHE["checked_at"] = int(time.time())

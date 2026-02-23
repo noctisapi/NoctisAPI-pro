@@ -577,6 +577,47 @@ def request_backend_lease(
     return data
 
 
+def report_runtime_state(
+    *,
+    backend_url: str,
+    license_key: str,
+    app_id: str,
+    app_version: str,
+    instance_id: str,
+    instance_fingerprint: str,
+    valid: bool,
+    decision: str,
+    reason_code: str | None,
+    client_error: str | None,
+    expires_at: int | None,
+    entitlements: list[str],
+    timeout_s: float = 8.0,
+) -> str | None:
+    if not backend_url:
+        return "missing_PRO_BACKEND_URL"
+    payload: dict[str, Any] = {
+        "license_key": license_key,
+        "app_id": app_id,
+        "app_version": app_version,
+        "instance_id": instance_id,
+        "instance_fingerprint_sha256": instance_fingerprint,
+        "valid": bool(valid),
+        "decision": str(decision or "").strip().upper() or ("ALLOW" if valid else "DENY"),
+        "reason_code": (str(reason_code or "").strip() or None),
+        "client_error": (str(client_error or "").strip() or None),
+        "expires_at": int(expires_at) if expires_at is not None else None,
+        "entitlements": [str(x or "").strip() for x in (entitlements or []) if str(x or "").strip()],
+    }
+    try:
+        with httpx.Client(timeout=timeout_s) as client:
+            resp = client.post(f"{backend_url}/v1/runtime/report", json=payload)
+    except Exception as exc:
+        return f"runtime_report_transport_error:{exc.__class__.__name__}"
+    if resp.status_code != 200:
+        return f"runtime_report_failed:{resp.status_code}:{resp.text[:120]}"
+    return None
+
+
 def get_backend_lease_cached(
     *,
     backend_url: str,
