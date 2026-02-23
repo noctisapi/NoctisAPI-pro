@@ -43,6 +43,18 @@ def _env_int(name: str, default: int, min_value: int, max_value: int) -> int:
     return max(min_value, min(max_value, val))
 
 
+def _env_bool(name: str, default: bool = True) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return bool(default)
+    val = raw.strip().lower()
+    if val in ("1", "true", "yes", "on"):
+        return True
+    if val in ("0", "false", "no", "off"):
+        return False
+    return bool(default)
+
+
 def _utc_now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
@@ -222,22 +234,19 @@ def _fetch_backend_lease(*, force_refresh: bool) -> tuple[Optional[str], Optiona
     return lease_jws, exp, None, meta
 
 
-def get_backend_license_snapshot(*, force_refresh: bool = False) -> dict[str, Any]:
+def _snapshot_from_backend_result(
+    *,
+    lease_jws: Optional[str],
+    exp: Optional[int],
+    error: Optional[str],
+    meta: dict[str, Any],
+    recheck_after_seconds: int,
+) -> dict[str, Any]:
     now = int(time.time())
-    min_refresh_seconds = _env_int("HP_BACKEND_LICENSE_STATUS_REFRESH_SECONDS", 15, 5, 300)
-
-    with _STATUS_LOCK:
-        checked_at = int(_STATUS_CACHE.get("checked_at") or 0)
-        cached_snapshot = dict(_STATUS_CACHE.get("snapshot") or {})
-        if not force_refresh and checked_at > 0 and (now - checked_at) < min_refresh_seconds:
-            return cached_snapshot
-
-    lease_jws, exp, error, meta = _fetch_backend_lease(force_refresh=force_refresh)
     expires_in = None
     if exp is not None:
         expires_in = int(exp) - now
-
-    snapshot: dict[str, Any] = {
+    return {
         "pro_enabled": bool(lease_jws),
         "valid": bool(lease_jws),
         "decision": "ALLOW" if lease_jws else "DENY",
@@ -246,7 +255,7 @@ def get_backend_license_snapshot(*, force_refresh: bool = False) -> dict[str, An
         "last_ok_at": _utc_now_iso() if lease_jws else None,
         "expires_at": exp,
         "expires_in_seconds": expires_in,
-        "recheck_after_seconds": min_refresh_seconds,
+        "recheck_after_seconds": recheck_after_seconds,
         "entitlements": {
             "tier": meta.get("lease_tier"),
             "features": meta.get("lease_features") if isinstance(meta.get("lease_features"), list) else [],
@@ -254,8 +263,54 @@ def get_backend_license_snapshot(*, force_refresh: bool = False) -> dict[str, An
         "source": "backend_lease",
     }
 
+
+def _snapshot_state_key(snapshot: dict[str, Any]) -> tuple[Any, ...]:
+    ent = snapshot.get("entitlements") if isinstance(snapshot.get("entitlements"), dict) else {}
+    raw_features = ent.get("features") if isinstance(ent, dict) else []
+    features = sorted({str(x or "").strip().lower() for x in (raw_features or []) if str(x or "").strip()})
+    return (
+        bool(snapshot.get("valid")),
+        str(snapshot.get("decision") or "").strip().upper(),
+        str(snapshot.get("reason_code") or "").strip(),
+        str(snapshot.get("last_error") or "").strip(),
+        int(snapshot.get("expires_at") or 0),
+        str(ent.get("tier") or "").strip().lower() if isinstance(ent, dict) else "",
+        tuple(features),
+    )
+
+
+def get_backend_license_snapshot(*, force_refresh: bool = False) -> dict[str, Any]:
+    now = int(time.time())
+    min_refresh_seconds = _env_int("HP_BACKEND_LICENSE_STATUS_REFRESH_SECONDS", 15, 5, 300)
+    sync_on_change = _env_bool("HP_LICENSE_SYNC_ON_STATE_CHANGE", True)
+
     with _STATUS_LOCK:
-        _STATUS_CACHE["checked_at"] = now
+        checked_at = int(_STATUS_CACHE.get("checked_at") or 0)
+        cached_snapshot = dict(_STATUS_CACHE.get("snapshot") or {})
+        if not force_refresh and checked_at > 0 and (now - checked_at) < min_refresh_seconds:
+            return cached_snapshot
+
+    lease_jws, exp, error, meta = _fetch_backend_lease(force_refresh=force_refresh)
+    snapshot: dict[str, Any] = _snapshot_from_backend_result(
+        lease_jws=lease_jws,
+        exp=exp,
+        error=error,
+        meta=meta,
+        recheck_after_seconds=min_refresh_seconds,
+    )
+    if (not force_refresh) and sync_on_change and _snapshot_state_key(snapshot) != _snapshot_state_key(cached_snapshot):
+        # Ensure licensing server sees the new state immediately when client status changes.
+        lease_jws2, exp2, error2, meta2 = _fetch_backend_lease(force_refresh=True)
+        snapshot = _snapshot_from_backend_result(
+            lease_jws=lease_jws2,
+            exp=exp2,
+            error=error2,
+            meta=meta2,
+            recheck_after_seconds=min_refresh_seconds,
+        )
+
+    with _STATUS_LOCK:
+        _STATUS_CACHE["checked_at"] = int(time.time())
         _STATUS_CACHE["snapshot"] = snapshot
     return dict(snapshot)
 

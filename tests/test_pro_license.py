@@ -14,6 +14,8 @@ class TestProLicenseLeaseValidation(unittest.TestCase):
         os.environ["LICENSE_KEY"] = "sk_test_123"
         os.environ["HP_APP_VERSION"] = "1.2.3"
         os.environ["PRO_BACKEND_URL"] = "https://pro.example.com"
+        os.environ["HP_LICENSE_SYNC_ON_STATE_CHANGE"] = "1"
+        pro_license.clear_cache()
 
     def tearDown(self):
         if self._old_license_key is None:
@@ -28,6 +30,7 @@ class TestProLicenseLeaseValidation(unittest.TestCase):
             os.environ.pop("PRO_BACKEND_URL", None)
         else:
             os.environ["PRO_BACKEND_URL"] = self._old_backend_url
+        os.environ.pop("HP_LICENSE_SYNC_ON_STATE_CHANGE", None)
 
     @staticmethod
     def _identity():
@@ -158,6 +161,72 @@ class TestProLicenseLeaseValidation(unittest.TestCase):
         self.assertEqual(lease_jws, "lease-jws")
         self.assertIsNone(error)
         self.assertEqual(exp, payload["exp"])
+
+    def test_snapshot_change_triggers_force_refresh_to_backend(self):
+        now = int(time.time())
+        cached = {
+            "pro_enabled": False,
+            "valid": False,
+            "decision": "DENY",
+            "reason_code": "backend_validation_failed",
+            "last_error": "old_error",
+            "last_ok_at": None,
+            "expires_at": None,
+            "expires_in_seconds": None,
+            "recheck_after_seconds": 15,
+            "entitlements": {"tier": None, "features": []},
+            "source": "backend_lease",
+        }
+        with pro_license._STATUS_LOCK:
+            pro_license._STATUS_CACHE["checked_at"] = now - 999
+            pro_license._STATUS_CACHE["snapshot"] = cached
+
+        calls: list[bool] = []
+
+        def _fake_fetch(*, force_refresh: bool):
+            calls.append(bool(force_refresh))
+            if force_refresh:
+                return "lease-jws", now + 3600, None, {"lease_tier": "pro", "lease_features": ["cases"]}
+            return None, None, "lease_missing_exp", {"lease_tier": None, "lease_features": []}
+
+        with mock.patch("app.pro_license._fetch_backend_lease", side_effect=_fake_fetch):
+            snap = pro_license.get_backend_license_snapshot(force_refresh=False)
+
+        self.assertEqual(calls, [False, True])
+        self.assertTrue(snap.get("valid"))
+        self.assertEqual(snap.get("decision"), "ALLOW")
+
+    def test_snapshot_unchanged_does_not_force_refresh_again(self):
+        now = int(time.time())
+        cached = {
+            "pro_enabled": False,
+            "valid": False,
+            "decision": "DENY",
+            "reason_code": "backend_validation_failed",
+            "last_error": "lease_missing_exp",
+            "last_ok_at": None,
+            "expires_at": None,
+            "expires_in_seconds": None,
+            "recheck_after_seconds": 15,
+            "entitlements": {"tier": None, "features": []},
+            "source": "backend_lease",
+        }
+        with pro_license._STATUS_LOCK:
+            pro_license._STATUS_CACHE["checked_at"] = now - 999
+            pro_license._STATUS_CACHE["snapshot"] = cached
+
+        calls: list[bool] = []
+
+        def _fake_fetch(*, force_refresh: bool):
+            calls.append(bool(force_refresh))
+            return None, None, "lease_missing_exp", {"lease_tier": None, "lease_features": []}
+
+        with mock.patch("app.pro_license._fetch_backend_lease", side_effect=_fake_fetch):
+            snap = pro_license.get_backend_license_snapshot(force_refresh=False)
+
+        self.assertEqual(calls, [False])
+        self.assertFalse(snap.get("valid"))
+        self.assertEqual(snap.get("last_error"), "lease_missing_exp")
 
 
 if __name__ == "__main__":
