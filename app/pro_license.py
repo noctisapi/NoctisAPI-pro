@@ -280,9 +280,12 @@ def _snapshot_state_key(snapshot: dict[str, Any]) -> tuple[Any, ...]:
 
 
 def _report_runtime_status(snapshot: dict[str, Any]) -> Optional[str]:
-    backend_url = campaigns_pro.pro_backend_url()
-    if not backend_url:
-        return "missing_PRO_BACKEND_URL"
+    report_backend_url = (
+        license_runtime.get_effective("HP_LICENSE_REPORT_URL")
+        or campaigns_pro.pro_backend_url()
+    ).strip().rstrip("/")
+    if not report_backend_url:
+        return "missing_report_backend_url"
     app_id = (license_runtime.get_effective("HP_APP_ID") or os.getenv("APP_ID") or "noctisapi-pro").strip()
     app_version = (
         license_runtime.get_effective("HP_APP_VERSION")
@@ -313,7 +316,7 @@ def _report_runtime_status(snapshot: dict[str, Any]) -> Optional[str]:
             if name:
                 reported_entitlements.append(name)
     return campaigns_pro.report_runtime_state(
-        backend_url=backend_url,
+        backend_url=report_backend_url,
         license_key=license_key,
         app_id=app_id,
         app_version=app_version,

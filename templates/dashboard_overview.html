@@ -136,6 +136,9 @@
         <label for="licenseBackendUrl">PRO backend URL</label>
         <input id="licenseBackendUrl" class="input" type="url" placeholder="https://licensing.example.com" />
 
+        <label for="licenseReportUrl">License report URL (optional, recommended when backend is separate)</label>
+        <input id="licenseReportUrl" class="input" type="url" placeholder="https://license.example.com" />
+
         <label for="licenseAppVersion">App version</label>
         <input id="licenseAppVersion" class="input" type="text" placeholder="0.1.1" />
 
@@ -260,6 +263,7 @@
     const backendInput = document.getElementById('licenseBackendUrl');
     const appVersionInput = document.getElementById('licenseAppVersion');
     const appIdInput = document.getElementById('licenseAppId');
+    const reportUrlInput = document.getElementById('licenseReportUrl');
     const fpInput = document.getElementById('licenseFingerprintOverride');
     const keyInput = document.getElementById('licenseKeyInput');
     const hintEl = document.getElementById('licenseConfigHint');
@@ -267,6 +271,7 @@
     const identityEl = document.getElementById('licenseConfigIdentity');
 
     if(backendInput){ backendInput.value = effective.backend_url || ''; }
+    if(reportUrlInput){ reportUrlInput.value = effective.report_url || ''; }
     if(appVersionInput){ appVersionInput.value = effective.app_version || ''; }
     if(appIdInput){ appIdInput.value = effective.app_id || ''; }
     if(fpInput){ fpInput.value = effective.instance_fingerprint_sha256_override || ''; }
@@ -279,7 +284,7 @@
       hintEl.textContent = data && data.hint ? data.hint : '';
     }
     if(summaryEl){
-      summaryEl.textContent = `Sources - backend: ${sources.backend_url || 'default'}, app_version: ${sources.app_version || 'default'}, app_id: ${sources.app_id || 'default'}, license_key: ${sources.license_key || 'default'}`;
+      summaryEl.textContent = `Sources - backend: ${sources.backend_url || 'default'}, report: ${sources.report_url || 'default'}, app_version: ${sources.app_version || 'default'}, app_id: ${sources.app_id || 'default'}, license_key: ${sources.license_key || 'default'}`;
     }
     if(identityEl){
       identityEl.textContent = `Instance ID: ${identity.instance_id || 'n/a'} | Fingerprint: ${identity.instance_fingerprint_sha256 || 'n/a'}`;
@@ -319,12 +324,14 @@
     const backendInput = document.getElementById('licenseBackendUrl');
     const appVersionInput = document.getElementById('licenseAppVersion');
     const appIdInput = document.getElementById('licenseAppId');
+    const reportUrlInput = document.getElementById('licenseReportUrl');
     const fpInput = document.getElementById('licenseFingerprintOverride');
     const keyInput = document.getElementById('licenseKeyInput');
     const hintEl = document.getElementById('licenseConfigHint');
 
     const payload = {
       backend_url: backendInput ? backendInput.value.trim() : '',
+      report_url: reportUrlInput ? reportUrlInput.value.trim() : '',
       app_version: appVersionInput ? appVersionInput.value.trim() : '',
       app_id: appIdInput ? appIdInput.value.trim() : '',
       instance_fingerprint_sha256: fpInput ? fpInput.value.trim() : '',

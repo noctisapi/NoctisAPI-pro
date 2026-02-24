@@ -75,6 +75,8 @@ def _license_error_hint(error: Optional[str]) -> str:
         return "Configura HP_APP_VERSION con una version no vacia."
     if "missing_PRO_BACKEND_URL" in code or "lease_transport_error" in code:
         return "Verifica PRO_BACKEND_URL y conectividad de red hacia el servidor de licencias."
+    if "runtime_report_failed" in code or "runtime_report_transport_error" in code or "missing_report_backend_url" in code:
+        return "Verifica HP_LICENSE_REPORT_URL (o PRO_BACKEND_URL) para reportar el estado al Licensing App."
     if "lease_missing_exp" in code:
         return "El servidor debe incluir exp o expires_at en el lease firmado."
     if "lease_missing_issued_at" in code:
@@ -112,6 +114,7 @@ def _license_config_snapshot() -> dict:
     ).strip()
     license_key = license_runtime.get_effective("LICENSE_KEY").strip()
     fp_override = license_runtime.get_effective("INSTANCE_FINGERPRINT_SHA256").strip()
+    report_url = license_runtime.get_effective("HP_LICENSE_REPORT_URL").strip()
 
     return {
         "runtime_config_path": license_runtime.config_path(),
@@ -122,9 +125,11 @@ def _license_config_snapshot() -> dict:
             "license_key_configured": bool(license_key),
             "license_key_preview": _mask_secret(license_key),
             "instance_fingerprint_sha256_override": fp_override,
+            "report_url": report_url,
         },
         "sources": {
             "backend_url": _source("PRO_BACKEND_URL"),
+            "report_url": _source("HP_LICENSE_REPORT_URL"),
             "app_id": _source("HP_APP_ID"),
             "app_version": _source("HP_APP_VERSION"),
             "license_key": _source("LICENSE_KEY"),
@@ -285,6 +290,7 @@ def dashboard_license_config_update(payload: dict = Body(default={})):
 
     field_map = {
         "backend_url": "PRO_BACKEND_URL",
+        "report_url": "HP_LICENSE_REPORT_URL",
         "license_key": "LICENSE_KEY",
         "app_version": "HP_APP_VERSION",
         "app_id": "HP_APP_ID",

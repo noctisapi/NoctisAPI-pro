@@ -12,6 +12,7 @@ _LOCK = threading.Lock()
 _HEX64_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 _ALLOWED_KEYS = {
     "PRO_BACKEND_URL",
+    "HP_LICENSE_REPORT_URL",
     "LICENSE_KEY",
     "HP_APP_VERSION",
     "HP_APP_ID",
@@ -27,7 +28,7 @@ def _normalize_value(key: str, value: Any) -> str:
     out = str(value or "").strip()
     if not out:
         return ""
-    if key == "PRO_BACKEND_URL":
+    if key in ("PRO_BACKEND_URL", "HP_LICENSE_REPORT_URL"):
         return out.rstrip("/")
     if key == "INSTANCE_FINGERPRINT_SHA256":
         lowered = out.lower()
@@ -133,6 +134,6 @@ def get_effective(name: str, default: str = "") -> str:
     env_val = str(env_raw).strip()
     if not env_val:
         return default
-    if name == "PRO_BACKEND_URL":
+    if name in ("PRO_BACKEND_URL", "HP_LICENSE_REPORT_URL"):
         return env_val.rstrip("/")
     return env_val

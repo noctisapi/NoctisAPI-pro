@@ -12,6 +12,7 @@ class TestProLicenseLeaseValidation(unittest.TestCase):
         self._old_app_version = os.environ.get("HP_APP_VERSION")
         self._old_backend_url = os.environ.get("PRO_BACKEND_URL")
         self._old_report = os.environ.get("HP_LICENSE_REPORT_TO_SERVER")
+        self._old_report_url = os.environ.get("HP_LICENSE_REPORT_URL")
         os.environ["LICENSE_KEY"] = "sk_test_123"
         os.environ["HP_APP_VERSION"] = "1.2.3"
         os.environ["PRO_BACKEND_URL"] = "https://pro.example.com"
@@ -36,6 +37,10 @@ class TestProLicenseLeaseValidation(unittest.TestCase):
             os.environ.pop("HP_LICENSE_REPORT_TO_SERVER", None)
         else:
             os.environ["HP_LICENSE_REPORT_TO_SERVER"] = self._old_report
+        if self._old_report_url is None:
+            os.environ.pop("HP_LICENSE_REPORT_URL", None)
+        else:
+            os.environ["HP_LICENSE_REPORT_URL"] = self._old_report_url
         os.environ.pop("HP_LICENSE_SYNC_ON_STATE_CHANGE", None)
 
     @staticmethod
@@ -249,6 +254,28 @@ class TestProLicenseLeaseValidation(unittest.TestCase):
 
         self.assertTrue(snap.get("valid"))
         rep.assert_called_once()
+
+    def test_report_uses_dedicated_report_url_when_configured(self):
+        now = int(time.time())
+        os.environ["HP_LICENSE_REPORT_TO_SERVER"] = "1"
+        os.environ["HP_LICENSE_REPORT_URL"] = "https://report.example.com/"
+        with pro_license._STATUS_LOCK:
+            pro_license._STATUS_CACHE["checked_at"] = now - 999
+            pro_license._STATUS_CACHE["snapshot"] = {}
+
+        def _identity():
+            return {"instance_id": "instance-1", "instance_fingerprint_sha256": "f" * 64}
+
+        with (
+            mock.patch("app.pro_license.compute_client_identity", side_effect=_identity),
+            mock.patch("app.pro_license._fetch_backend_lease", return_value=("lease-jws", now + 3600, None, {"lease_tier": "pro", "lease_features": ["cases"]})),
+            mock.patch("app.pro_license.campaigns_pro.report_runtime_state", return_value=None) as rep,
+        ):
+            pro_license.get_backend_license_snapshot(force_refresh=True)
+
+        self.assertEqual(rep.call_count, 1)
+        kwargs = rep.call_args.kwargs
+        self.assertEqual(kwargs.get("backend_url"), "https://report.example.com")
 
 
 if __name__ == "__main__":
