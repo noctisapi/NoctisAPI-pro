@@ -1,6 +1,7 @@
 import os
 import tempfile
 import unittest
+from unittest import mock
 
 from app import pro_ops
 from honey_licensing.feature_flags import set_pro_enabled_provider
@@ -56,6 +57,13 @@ class TestProOpsAuthorization(unittest.TestCase):
         ok, reason = pro_ops.authorize_pro_feature(feature="unknown_feature", action="x")
         self.assertFalse(ok)
         self.assertEqual(reason, "unknown_feature")
+
+    def test_tier_fallback_allows_new_pro_feature_when_lease_feature_list_is_old(self):
+        lease_meta = {"lease_tier": "pro", "lease_features": ["cases"], "lease_exp": 9999999999}
+        with mock.patch("app.pro_ops.pro_license.get_backend_lease", return_value=("lease-jws", None, lease_meta)):
+            ok, reason = pro_ops.authorize_pro_feature(feature="api_mutation", action="panel_api_modular")
+        self.assertTrue(ok)
+        self.assertEqual(reason, "ok_tier_fallback")
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ from app import pro_license
 
 
 _ALLOWLIST = {"cases", "campaigns", "replay", "advanced_scoring", "file_pipeline", "api_mutation", "analytics"}
+_TIER_COMPAT_FALLBACK = {"api_mutation", "analytics"}
 _CACHE_LOCK = threading.Lock()
 _CACHE: dict[str, int] = {}
 
@@ -61,8 +62,12 @@ def authorize_pro_feature(*, feature: str, action: str = "access", force_refresh
             name = str(item or "").strip().lower()
             if name:
                 features.add(name)
+    used_tier_fallback = False
     if features and feature_name not in features:
-        return False, "feature_not_in_lease"
+        if tier == "pro" and feature_name in _TIER_COMPAT_FALLBACK:
+            used_tier_fallback = True
+        else:
+            return False, "feature_not_in_lease"
 
     exp_raw = meta.get("lease_exp")
     try:
@@ -76,7 +81,7 @@ def authorize_pro_feature(*, feature: str, action: str = "access", force_refresh
             _CACHE[cache_key] = min(ttl_exp, exp) if exp > 0 else ttl_exp
         else:
             _CACHE[cache_key] = 0
-    return True, "ok"
+    return True, ("ok_tier_fallback" if used_tier_fallback else "ok")
 
 
 def clear_cache() -> None:

@@ -57,6 +57,13 @@ def _has_analytics_pro() -> bool:
     return _has_feature(licensing.Feature.ANALYTICS, action="panel_pro_analytics")
 
 
+def _pro_feature_status(feature: licensing.Feature, *, action: str) -> tuple[bool, str]:
+    if not licensing.has_feature(feature):
+        return False, "tier_not_pro"
+    ok, reason = pro_ops.authorize_pro_feature(feature=feature.value, action=action, force_refresh=False)
+    return bool(ok), str(reason or "")
+
+
 def _license_runtime_snapshot() -> dict:
     return pro_license.get_backend_license_snapshot(force_refresh=False)
 
@@ -1347,26 +1354,108 @@ def dashboard_overview(request: Request):
 
 @app.get("/dashboard/api-modular", response_class=HTMLResponse)
 def dashboard_api_modular(request: Request):
+    modular_ok, modular_reason = _pro_feature_status(
+        licensing.Feature.API_MUTATION,
+        action="panel_api_modular",
+    )
+    analytics_ok, analytics_reason = _pro_feature_status(
+        licensing.Feature.ANALYTICS,
+        action="panel_pro_analytics",
+    )
     return templates.TemplateResponse(
         "api_modular.html",
         {
             "request": request,
-            "pro_modular_enabled": _has_modular_pro(),
-            "pro_analytics_enabled": _has_analytics_pro(),
+            "pro_modular_enabled": modular_ok,
+            "pro_modular_reason": modular_reason,
+            "pro_analytics_enabled": analytics_ok,
+            "pro_analytics_reason": analytics_reason,
             **_license_context(),
         },
     )
 
 
+def _api_modular_endpoint_catalog(conn: sqlite3.Connection, limit: int = 400) -> list[dict]:
+    seen: set[str] = set()
+    out: list[dict] = []
+
+    def _add(method: str, path: str) -> None:
+        mm = str(method or "*").strip().upper() or "*"
+        pp = str(path or "").strip()
+        if not pp:
+            return
+        if not pp.startswith("/"):
+            pp = "/" + pp
+        if pp.startswith("/static/"):
+            return
+        key = f"{mm} {pp}"
+        if key in seen:
+            return
+        seen.add(key)
+        out.append({"method": mm, "path": pp, "label": key})
+
+    seeds = [
+        ("GET", "/health"),
+        ("GET", "/status"),
+        ("GET", "/"),
+        ("POST", "/v1/auth/token"),
+        ("GET", "/auth/sessions"),
+        ("GET", "/api/v1/users"),
+        ("GET", "/api/v1/accounts"),
+        ("GET", "/api/v1/transactions"),
+        ("POST", "/api/v1/payments"),
+        ("GET", "/admin/users"),
+    ]
+    for method, path in seeds:
+        _add(method, path)
+
+    rows = conn.execute(
+        """
+        SELECT method, path
+        FROM api_endpoint_configs
+        ORDER BY updated_ts DESC
+        LIMIT ?
+        """,
+        (max(1, int(limit)),),
+    ).fetchall()
+    for row in rows:
+        _add(str(row["method"] or "*"), str(row["path"] or "/"))
+
+    rows = conn.execute(
+        """
+        SELECT method, path
+        FROM events
+        WHERE path IS NOT NULL AND path != ''
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        (max(1, int(limit)),),
+    ).fetchall()
+    for row in rows:
+        _add(str(row["method"] or "*"), str(row["path"] or "/"))
+
+    out.sort(key=lambda item: (item.get("path") or "", item.get("method") or ""))
+    return out
+
+
 @app.get("/dashboard/api-modular/state", response_class=JSONResponse)
 def dashboard_api_modular_state():
+    modular_ok, modular_reason = _pro_feature_status(
+        licensing.Feature.API_MUTATION,
+        action="panel_api_modular",
+    )
+    analytics_ok, analytics_reason = _pro_feature_status(
+        licensing.Feature.ANALYTICS,
+        action="panel_pro_analytics",
+    )
     conn = db()
     try:
         ensure_schema(conn)
         api_modular.ensure_tables(conn)
         configs = api_modular.list_endpoint_configs(conn)
-        rules = api_modular.list_rules(conn) if _has_modular_pro() else []
-        mutation = api_modular.get_mutation_config(conn) if _has_modular_pro() else {"mutation_policy": "none", "mutation_intensity": 0}
+        rules = api_modular.list_rules(conn) if modular_ok else []
+        mutation = api_modular.get_mutation_config(conn) if modular_ok else {"mutation_policy": "none", "mutation_intensity": 0}
+        endpoint_catalog = _api_modular_endpoint_catalog(conn, limit=600)
     finally:
         conn.close()
     return {
@@ -1374,8 +1463,11 @@ def dashboard_api_modular_state():
         "endpoint_configs": configs,
         "mutation": mutation,
         "rules": rules,
-        "pro_modular_enabled": _has_modular_pro(),
-        "pro_analytics_enabled": _has_analytics_pro(),
+        "endpoint_catalog": endpoint_catalog,
+        "pro_modular_enabled": modular_ok,
+        "pro_modular_reason": modular_reason,
+        "pro_analytics_enabled": analytics_ok,
+        "pro_analytics_reason": analytics_reason,
     }
 
 
