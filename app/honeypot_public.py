@@ -96,8 +96,6 @@ tags_metadata = [
     {"name": "Account", "description": "Account operations"},
     {"name": "Admin", "description": "Administrative operations"},
     {"name": "Export", "description": "Export jobs"},
-    {"name": "Modular", "description": "Modular endpoint behavior controls"},
-    {"name": "Analytics", "description": "PRO analytics and fingerprinting"},
 ]
 
 app = FastAPI(
@@ -2974,7 +2972,7 @@ async def root_console(request: Request, r: str = Depends(require_root_token)):
     return payload
 
 
-@app.get("/pro/analytics/endpoints", tags=["Analytics"], response_class=JSONResponse)
+@app.get("/pro/analytics/endpoints", include_in_schema=False, response_class=JSONResponse)
 async def pro_analytics_endpoints(
     request: Request,
     hours: int = 24,
@@ -2996,7 +2994,7 @@ async def pro_analytics_endpoints(
     return {"window_hours": max(1, min(int(hours), 168)), "items": items}
 
 
-@app.get("/pro/analytics/interest", tags=["Analytics"], response_class=JSONResponse)
+@app.get("/pro/analytics/interest", include_in_schema=False, response_class=JSONResponse)
 async def pro_analytics_interest(
     request: Request,
     hours: int = 24,
@@ -3018,7 +3016,7 @@ async def pro_analytics_interest(
     return {"window_hours": max(1, min(int(hours), 168)), "items": items}
 
 
-@app.get("/pro/analytics/fingerprinting", tags=["Analytics"], response_class=JSONResponse)
+@app.get("/pro/analytics/fingerprinting", include_in_schema=False, response_class=JSONResponse)
 async def pro_analytics_fingerprinting(
     request: Request,
     hours: int = 24,
@@ -3040,7 +3038,7 @@ async def pro_analytics_fingerprinting(
     return {"window_hours": max(1, min(int(hours), 168)), "items": items}
 
 
-@app.get("/pro/analytics/overview", tags=["Analytics"], response_class=JSONResponse)
+@app.get("/pro/analytics/overview", include_in_schema=False, response_class=JSONResponse)
 async def pro_analytics_overview(
     request: Request,
     hours: int = 24,

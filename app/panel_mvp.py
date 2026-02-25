@@ -4,6 +4,7 @@ import time
 import threading
 import json
 import sqlite3
+import urllib.request
 from collections import Counter
 from statistics import median
 from datetime import datetime, timezone
@@ -27,6 +28,7 @@ from honey_licensing.client import compute_client_identity
 APP_NAME = "noctisapi-panel"
 DB_PATH = os.getenv("HP_DB_PATH", "/data/honeypot.db")
 HP_GEOIP_DB = os.getenv("HP_GEOIP_DB", "/data/GeoLite2-Country.mmdb")
+HP_PUBLIC_BASE_URL = (os.getenv("HP_PUBLIC_BASE_URL") or "").strip().rstrip("/")
 
 app = FastAPI(title=APP_NAME)
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -1398,30 +1400,53 @@ def _normalize_catalog_path(path: str) -> str:
 
 
 def _honeypot_public_endpoint_catalog() -> list[dict]:
-    # Import lazily to avoid coupling app startup order.
-    try:
-        from app.honeypot_public import app as public_api
-    except Exception:
+    def _catalog_from_openapi_doc(doc: dict) -> list[dict]:
+        paths = doc.get("paths") if isinstance(doc, dict) else {}
+        if not isinstance(paths, dict):
+            return []
+        seen: set[str] = set()
+        out: list[dict] = []
+        for path, path_item in paths.items():
+            pp = _normalize_catalog_path(path)
+            if not isinstance(path_item, dict):
+                continue
+            for method in sorted(path_item.keys()):
+                mm = _normalize_catalog_method(method)
+                if mm in {"HEAD", "OPTIONS", "TRACE"}:
+                    continue
+                key = f"{mm} {pp}"
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append({"method": mm, "path": pp, "label": key})
+        out.sort(key=lambda item: (item.get("path") or "", item.get("method") or ""))
+        return out
+
+    if HP_PUBLIC_BASE_URL:
+        url = f"{HP_PUBLIC_BASE_URL}/openapi.json"
+        try:
+            req = urllib.request.Request(url, headers={"accept": "application/json"})
+            with urllib.request.urlopen(req, timeout=3.0) as resp:
+                raw = resp.read()
+            parsed = json.loads(raw.decode("utf-8", errors="ignore") or "{}")
+            remote_catalog = _catalog_from_openapi_doc(parsed)
+            if remote_catalog:
+                return remote_catalog
+        except Exception:
+            pass
+        # In production, enforce catalog from the configured public docs source only.
         return []
 
-    seen: set[str] = set()
-    out: list[dict] = []
-    for route in getattr(public_api, "routes", []):
-        path = _normalize_catalog_path(getattr(route, "path", "") or "")
-        methods = set(getattr(route, "methods", set()) or set())
-        if not path or path.startswith("/static/"):
-            continue
-        for method in sorted(methods):
-            mm = _normalize_catalog_method(method)
-            if mm in {"HEAD", "OPTIONS"}:
-                continue
-            key = f"{mm} {path}"
-            if key in seen:
-                continue
-            seen.add(key)
-            out.append({"method": mm, "path": path, "label": key})
-    out.sort(key=lambda item: (item.get("path") or "", item.get("method") or ""))
-    return out
+    # Fallback to local app OpenAPI only when no explicit public base URL is configured.
+    try:
+        from app.honeypot_public import app as public_api
+        local_doc = public_api.openapi()
+        local_catalog = _catalog_from_openapi_doc(local_doc if isinstance(local_doc, dict) else {})
+        if local_catalog:
+            return local_catalog
+    except Exception:
+        pass
+    return []
 
 
 def _is_real_honeypot_endpoint(path: str, method: str, catalog: list[dict]) -> bool:
@@ -1438,42 +1463,9 @@ def _is_real_honeypot_endpoint(path: str, method: str, catalog: list[dict]) -> b
 
 
 def _api_modular_endpoint_catalog(conn: sqlite3.Connection, limit: int = 400) -> list[dict]:
-    seen: set[str] = set()
-    out: list[dict] = []
-
-    def _add(method: str, path: str) -> None:
-        mm = _normalize_catalog_method(method)
-        pp = _normalize_catalog_path(path)
-        if pp.startswith("/static/"):
-            return
-        key = f"{mm} {pp}"
-        if key in seen:
-            return
-        seen.add(key)
-        out.append({"method": mm, "path": pp, "label": key})
-
-    real_routes = _honeypot_public_endpoint_catalog()
-    # Real honeypot routes only.
-    for item in real_routes:
-        _add(str(item.get("method") or "*"), str(item.get("path") or "/"))
-
-    rows = conn.execute(
-        """
-        SELECT method, path
-        FROM api_endpoint_configs
-        ORDER BY updated_ts DESC
-        LIMIT ?
-        """,
-        (max(1, int(limit)),),
-    ).fetchall()
-    for row in rows:
-        row_method = str(row["method"] or "*")
-        row_path = str(row["path"] or "/")
-        if _is_real_honeypot_endpoint(row_path, row_method, real_routes):
-            _add(row_method, row_path)
-
-    out.sort(key=lambda item: (item.get("path") or "", item.get("method") or ""))
-    return out
+    _ = conn
+    _ = limit
+    return _honeypot_public_endpoint_catalog()
 
 
 @app.get("/dashboard/api-modular/state", response_class=JSONResponse)
