@@ -1383,17 +1383,67 @@ def dashboard_api_modular(request: Request):
     )
 
 
+def _normalize_catalog_method(method: str) -> str:
+    raw = str(method or "*").strip().upper()
+    return raw or "*"
+
+
+def _normalize_catalog_path(path: str) -> str:
+    raw = str(path or "").strip()
+    if not raw:
+        return "/"
+    if not raw.startswith("/"):
+        return "/" + raw
+    return raw
+
+
+def _honeypot_public_endpoint_catalog() -> list[dict]:
+    # Import lazily to avoid coupling app startup order.
+    try:
+        from app.honeypot_public import app as public_api
+    except Exception:
+        return []
+
+    seen: set[str] = set()
+    out: list[dict] = []
+    for route in getattr(public_api, "routes", []):
+        path = _normalize_catalog_path(getattr(route, "path", "") or "")
+        methods = set(getattr(route, "methods", set()) or set())
+        if not path or path.startswith("/static/"):
+            continue
+        for method in sorted(methods):
+            mm = _normalize_catalog_method(method)
+            if mm in {"HEAD", "OPTIONS"}:
+                continue
+            key = f"{mm} {path}"
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append({"method": mm, "path": path, "label": key})
+    out.sort(key=lambda item: (item.get("path") or "", item.get("method") or ""))
+    return out
+
+
+def _is_real_honeypot_endpoint(path: str, method: str, catalog: list[dict]) -> bool:
+    target_path = _normalize_catalog_path(path)
+    target_method = _normalize_catalog_method(method)
+    for item in catalog:
+        item_method = _normalize_catalog_method(item.get("method") or "*")
+        item_path = _normalize_catalog_path(item.get("path") or "/")
+        if target_method != "*" and item_method != target_method:
+            continue
+        if api_modular.path_matches_pattern(item_path, target_path):
+            return True
+    return False
+
+
 def _api_modular_endpoint_catalog(conn: sqlite3.Connection, limit: int = 400) -> list[dict]:
     seen: set[str] = set()
     out: list[dict] = []
 
     def _add(method: str, path: str) -> None:
-        mm = str(method or "*").strip().upper() or "*"
-        pp = str(path or "").strip()
-        if not pp:
-            return
-        if not pp.startswith("/"):
-            pp = "/" + pp
+        mm = _normalize_catalog_method(method)
+        pp = _normalize_catalog_path(path)
         if pp.startswith("/static/"):
             return
         key = f"{mm} {pp}"
@@ -1402,20 +1452,10 @@ def _api_modular_endpoint_catalog(conn: sqlite3.Connection, limit: int = 400) ->
         seen.add(key)
         out.append({"method": mm, "path": pp, "label": key})
 
-    seeds = [
-        ("GET", "/health"),
-        ("GET", "/status"),
-        ("GET", "/"),
-        ("POST", "/v1/auth/token"),
-        ("GET", "/auth/sessions"),
-        ("GET", "/api/v1/users"),
-        ("GET", "/api/v1/accounts"),
-        ("GET", "/api/v1/transactions"),
-        ("POST", "/api/v1/payments"),
-        ("GET", "/admin/users"),
-    ]
-    for method, path in seeds:
-        _add(method, path)
+    real_routes = _honeypot_public_endpoint_catalog()
+    # Real honeypot routes only.
+    for item in real_routes:
+        _add(str(item.get("method") or "*"), str(item.get("path") or "/"))
 
     rows = conn.execute(
         """
@@ -1427,20 +1467,10 @@ def _api_modular_endpoint_catalog(conn: sqlite3.Connection, limit: int = 400) ->
         (max(1, int(limit)),),
     ).fetchall()
     for row in rows:
-        _add(str(row["method"] or "*"), str(row["path"] or "/"))
-
-    rows = conn.execute(
-        """
-        SELECT method, path
-        FROM events
-        WHERE path IS NOT NULL AND path != ''
-        ORDER BY id DESC
-        LIMIT ?
-        """,
-        (max(1, int(limit)),),
-    ).fetchall()
-    for row in rows:
-        _add(str(row["method"] or "*"), str(row["path"] or "/"))
+        row_method = str(row["method"] or "*")
+        row_path = str(row["path"] or "/")
+        if _is_real_honeypot_endpoint(row_path, row_method, real_routes):
+            _add(row_method, row_path)
 
     out.sort(key=lambda item: (item.get("path") or "", item.get("method") or ""))
     return out
@@ -1498,6 +1528,9 @@ def dashboard_api_modular_save_config(payload: dict = Body(default={})):
     try:
         ensure_schema(conn)
         api_modular.ensure_tables(conn)
+        route_catalog = _honeypot_public_endpoint_catalog()
+        if not _is_real_honeypot_endpoint(path, method, route_catalog):
+            raise HTTPException(status_code=400, detail="unknown_honeypot_endpoint")
         saved = api_modular.upsert_endpoint_config(conn, path=path, method=method, config=config_raw)
     finally:
         conn.close()
@@ -1537,6 +1570,9 @@ def dashboard_api_modular_apply_template(payload: dict = Body(default={})):
     try:
         ensure_schema(conn)
         api_modular.ensure_tables(conn)
+        route_catalog = _honeypot_public_endpoint_catalog()
+        if not _is_real_honeypot_endpoint(path, method, route_catalog):
+            raise HTTPException(status_code=400, detail="unknown_honeypot_endpoint")
         try:
             saved = api_modular.apply_template(conn, template_name=template_name, path=path, method=method)
         except ValueError as exc:

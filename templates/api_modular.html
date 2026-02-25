@@ -103,6 +103,7 @@
   <div class="card">
     <div class="card-head"><div class="card-title">Pro Mutation</div></div>
     <div class="card-body">
+      {% if pro_modular_visible %}
       {% if pro_modular_enabled %}
       <div class="modal-form">
         <label for="mutationPolicy">mutation_policy</label>
@@ -121,12 +122,16 @@
       {% else %}
       <div class="case-empty">PRO mutation disabled (reason: {{ pro_modular_reason or "not_available" }}).</div>
       {% endif %}
+      {% else %}
+      <div class="case-empty">PRO mutation unavailable for current tier.</div>
+      {% endif %}
     </div>
   </div>
 
   <div class="card">
     <div class="card-head"><div class="card-title">Pro Rules</div></div>
     <div class="card-body">
+      {% if pro_modular_visible %}
       {% if pro_modular_enabled %}
       <div class="modal-form">
         <label for="rulePathSelect">Path catalog</label>
@@ -167,6 +172,9 @@
       {% else %}
       <div class="case-empty">PRO rules disabled (reason: {{ pro_modular_reason or "not_available" }}).</div>
       {% endif %}
+      {% else %}
+      <div class="case-empty">PRO rules unavailable for current tier.</div>
+      {% endif %}
     </div>
   </div>
 </section>
@@ -174,6 +182,7 @@
 <section class="card">
   <div class="card-head"><div class="card-title">Pro Analytics</div></div>
   <div class="card-body">
+    {% if pro_analytics_visible %}
     {% if pro_analytics_enabled %}
     <div class="modal-actions">
       <button class="btn btn-outline" type="button" onclick="loadAnalytics()">Refresh Analytics</button>
@@ -183,10 +192,15 @@
     {% else %}
     <div class="case-empty">PRO analytics disabled (reason: {{ pro_analytics_reason or "not_available" }}).</div>
     {% endif %}
+    {% else %}
+    <div class="case-empty">PRO analytics unavailable for current tier.</div>
+    {% endif %}
   </div>
 </section>
 
 <script>
+  const INITIAL_PRO_MODULAR_VISIBLE = {{ 'true' if pro_modular_visible else 'false' }};
+  const INITIAL_PRO_ANALYTICS_VISIBLE = {{ 'true' if pro_analytics_visible else 'false' }};
   const INITIAL_PRO_MODULAR_ENABLED = {{ 'true' if pro_modular_enabled else 'false' }};
   const INITIAL_PRO_ANALYTICS_ENABLED = {{ 'true' if pro_analytics_enabled else 'false' }};
   const INITIAL_PRO_MODULAR_REASON = {{ (pro_modular_reason|default(''))|tojson }};
@@ -212,13 +226,15 @@
     const summary = document.getElementById("tierSummary");
     const detail = document.getElementById("featureStatus");
     const state = stateCache || {};
+    const modVisible = ("pro_modular_visible" in state) ? !!state.pro_modular_visible : INITIAL_PRO_MODULAR_VISIBLE;
+    const anaVisible = ("pro_analytics_visible" in state) ? !!state.pro_analytics_visible : INITIAL_PRO_ANALYTICS_VISIBLE;
     const modEnabled = !!state.pro_modular_enabled;
     const anaEnabled = !!state.pro_analytics_enabled;
     const modReason = state.pro_modular_reason || INITIAL_PRO_MODULAR_REASON || "";
     const anaReason = state.pro_analytics_reason || INITIAL_PRO_ANALYTICS_REASON || "";
 
     if(summary){
-      summary.textContent = `modular_pro=${modEnabled} (${modReason || "n/a"}) | analytics_pro=${anaEnabled} (${anaReason || "n/a"})`;
+      summary.textContent = `modular_visible=${modVisible} enabled=${modEnabled} (${modReason || "n/a"}) | analytics_visible=${anaVisible} enabled=${anaEnabled} (${anaReason || "n/a"})`;
     }
     if(detail){
       detail.textContent = "Core is always available. PRO sections require valid pro authz for each feature.";

@@ -74,6 +74,25 @@ class TestApiModular(unittest.TestCase):
         self.assertEqual(policy["latency_ms"], 250)
         self.assertTrue(policy["rules"]["matched_rule_ids"])
 
+    def test_path_template_config_matches_runtime_path(self):
+        api_modular.upsert_endpoint_config(
+            self.conn,
+            path="/files/{file_id}/analysis",
+            method="GET",
+            config={"enabled": True, "response_mode": "minimal", "richness_level": 1},
+        )
+        resolved = api_modular.resolve_endpoint_config(
+            self.conn,
+            path="/files/abc123/analysis",
+            method="GET",
+        )
+        self.assertEqual(resolved["match_type"], "pattern_same_method")
+        self.assertEqual(resolved["config"]["response_mode"], "minimal")
+
+    def test_path_pattern_helper_supports_template(self):
+        self.assertTrue(api_modular.path_matches_pattern("/files/{id}", "/files/xyz"))
+        self.assertFalse(api_modular.path_matches_pattern("/files/{id}", "/files/xyz/more"))
+
     def test_mutation_payload_and_status(self):
         status = api_modular.compute_status(
             original_status=200,

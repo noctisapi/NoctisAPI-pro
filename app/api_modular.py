@@ -89,6 +89,52 @@ def _normalize_path(path: Any) -> str:
     return raw
 
 
+def _path_segment_match(config_segment: str, actual_segment: str) -> bool:
+    cfg = str(config_segment or "")
+    act = str(actual_segment or "")
+    if not cfg:
+        return cfg == act
+    if cfg.startswith("{") and cfg.endswith("}") and len(cfg) > 2:
+        return bool(act)
+    return cfg == act
+
+
+def path_matches_pattern(config_path: str, request_path: str) -> bool:
+    cfg = _normalize_path(config_path)
+    req = _normalize_path(request_path)
+    if cfg == req:
+        return True
+    if "*" in cfg or "?" in cfg:
+        return bool(fnmatch.fnmatch(req, cfg))
+
+    cfg_parts = cfg.strip("/").split("/") if cfg != "/" else []
+    req_parts = req.strip("/").split("/") if req != "/" else []
+    if len(cfg_parts) != len(req_parts):
+        return False
+    for cfg_seg, req_seg in zip(cfg_parts, req_parts):
+        if not _path_segment_match(cfg_seg, req_seg):
+            return False
+    return True
+
+
+def _path_specificity_score(path_pattern: str) -> tuple[int, int, int, int]:
+    path = _normalize_path(path_pattern)
+    if path == "/":
+        return (0, 1, 0, 1)
+    parts = path.strip("/").split("/")
+    literal_count = 0
+    template_count = 0
+    wildcard_count = 0
+    for part in parts:
+        if "*" in part or "?" in part:
+            wildcard_count += 1
+        elif part.startswith("{") and part.endswith("}") and len(part) > 2:
+            template_count += 1
+        else:
+            literal_count += 1
+    return (literal_count, -template_count, -wildcard_count, len(path))
+
+
 def _normalize_response_mode(value: Any) -> str:
     raw = str(value or DEFAULT_ENDPOINT_CONFIG["response_mode"]).strip().lower()
     if raw not in RESPONSE_MODES:
@@ -263,38 +309,51 @@ def resolve_endpoint_config(conn: sqlite3.Connection, *, path: str, method: str)
     ensure_tables(conn)
     normalized_path = _normalize_path(path)
     normalized_method = _normalize_method(method)
-    row = conn.execute(
+    rows = conn.execute(
         """
-        SELECT enabled, response_mode, fixed_status, richness_level
+        SELECT method, path, enabled, response_mode, fixed_status, richness_level
         FROM api_endpoint_configs
-        WHERE path=? AND method=?
+        WHERE method IN (?, '*')
         """,
-        (normalized_path, normalized_method),
-    ).fetchone()
-    match_type = "exact"
-    if not row:
-        row = conn.execute(
-            """
-            SELECT enabled, response_mode, fixed_status, richness_level
-            FROM api_endpoint_configs
-            WHERE path=? AND method='*'
-            """,
-            (normalized_path,),
-        ).fetchone()
-        match_type = "path_wildcard"
-    if not row:
+        (normalized_method,),
+    ).fetchall()
+    best_row: Optional[sqlite3.Row] = None
+    best_key: Optional[tuple[Any, ...]] = None
+    best_match_type = "default"
+    for row in rows:
+        row_method = _normalize_method(row["method"] or "*")
+        row_path = _normalize_path(row["path"] or "/")
+        if not path_matches_pattern(row_path, normalized_path):
+            continue
+        method_rank = 0 if row_method == normalized_method else 1
+        path_rank = 0 if row_path == normalized_path else 1
+        spec = _path_specificity_score(row_path)
+        key = (method_rank, path_rank, -spec[0], -spec[1], -spec[2], -spec[3])
+        if best_key is None or key < best_key:
+            best_key = key
+            best_row = row
+            if path_rank == 0 and method_rank == 0:
+                best_match_type = "exact"
+            elif path_rank == 0:
+                best_match_type = "exact_path_any_method"
+            elif method_rank == 0:
+                best_match_type = "pattern_same_method"
+            else:
+                best_match_type = "pattern_any_method"
+
+    if not best_row:
         return {
             "config": dict(DEFAULT_ENDPOINT_CONFIG),
             "match_type": "default",
         }
     return {
         "config": {
-            "enabled": bool(int(row["enabled"] or 0)),
-            "response_mode": _normalize_response_mode(row["response_mode"]),
-            "fixed_status": int(row["fixed_status"]) if row["fixed_status"] is not None else None,
-            "richness_level": _clamp_int(row["richness_level"], 0, 2, 2),
+            "enabled": bool(int(best_row["enabled"] or 0)),
+            "response_mode": _normalize_response_mode(best_row["response_mode"]),
+            "fixed_status": int(best_row["fixed_status"]) if best_row["fixed_status"] is not None else None,
+            "richness_level": _clamp_int(best_row["richness_level"], 0, 2, 2),
         },
-        "match_type": match_type,
+        "match_type": best_match_type,
     }
 
 
@@ -462,9 +521,7 @@ def _match_path(pattern: str, actual_path: str) -> bool:
     clean_pattern = str(pattern or "").strip()
     if not clean_pattern:
         return True
-    if "*" in clean_pattern or "?" in clean_pattern:
-        return bool(fnmatch.fnmatch(actual_path, clean_pattern))
-    return clean_pattern == actual_path
+    return path_matches_pattern(clean_pattern, actual_path)
 
 
 def _match_ua(pattern: str, user_agent: str) -> bool:
