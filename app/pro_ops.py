@@ -8,7 +8,10 @@ from app import pro_license
 
 
 _ALLOWLIST = {"cases", "campaigns", "replay", "advanced_scoring", "file_pipeline", "api_mutation", "analytics"}
-_TIER_COMPAT_FALLBACK = {"api_mutation", "analytics"}
+_LEASE_FEATURE_ALIASES = {
+    "api_mutation": {"api_mutation", "advanced_scoring", "campaigns"},
+    "analytics": {"analytics", "advanced_scoring", "campaigns"},
+}
 _CACHE_LOCK = threading.Lock()
 _CACHE: dict[str, int] = {}
 
@@ -31,6 +34,11 @@ def _canonical_feature(feature: str) -> str:
 
 def _canonical_action(action: str) -> str:
     return str(action or "access").strip().lower()
+
+
+def _lease_allows_feature(feature_name: str, lease_features: set[str]) -> bool:
+    aliases = _LEASE_FEATURE_ALIASES.get(feature_name, {feature_name})
+    return any(name in lease_features for name in aliases)
 
 
 def authorize_pro_feature(*, feature: str, action: str = "access", force_refresh: bool = False) -> tuple[bool, str]:
@@ -62,12 +70,8 @@ def authorize_pro_feature(*, feature: str, action: str = "access", force_refresh
             name = str(item or "").strip().lower()
             if name:
                 features.add(name)
-    used_tier_fallback = False
-    if features and feature_name not in features:
-        if tier == "pro" and feature_name in _TIER_COMPAT_FALLBACK:
-            used_tier_fallback = True
-        else:
-            return False, "feature_not_in_lease"
+    if features and not _lease_allows_feature(feature_name, features):
+        return False, "feature_not_in_lease"
 
     exp_raw = meta.get("lease_exp")
     try:
@@ -81,7 +85,7 @@ def authorize_pro_feature(*, feature: str, action: str = "access", force_refresh
             _CACHE[cache_key] = min(ttl_exp, exp) if exp > 0 else ttl_exp
         else:
             _CACHE[cache_key] = 0
-    return True, ("ok_tier_fallback" if used_tier_fallback else "ok")
+    return True, "ok"
 
 
 def clear_cache() -> None:

@@ -64,6 +64,10 @@ def _pro_feature_status(feature: licensing.Feature, *, action: str) -> tuple[boo
     return bool(ok), str(reason or "")
 
 
+def _tier_has_feature(feature: licensing.Feature) -> bool:
+    return bool(licensing.has_feature(feature))
+
+
 def _license_runtime_snapshot() -> dict:
     return pro_license.get_backend_license_snapshot(force_refresh=False)
 
@@ -1354,6 +1358,8 @@ def dashboard_overview(request: Request):
 
 @app.get("/dashboard/api-modular", response_class=HTMLResponse)
 def dashboard_api_modular(request: Request):
+    modular_visible = _tier_has_feature(licensing.Feature.API_MUTATION)
+    analytics_visible = _tier_has_feature(licensing.Feature.ANALYTICS)
     modular_ok, modular_reason = _pro_feature_status(
         licensing.Feature.API_MUTATION,
         action="panel_api_modular",
@@ -1366,6 +1372,8 @@ def dashboard_api_modular(request: Request):
         "api_modular.html",
         {
             "request": request,
+            "pro_modular_visible": modular_visible,
+            "pro_analytics_visible": analytics_visible,
             "pro_modular_enabled": modular_ok,
             "pro_modular_reason": modular_reason,
             "pro_analytics_enabled": analytics_ok,
@@ -1440,6 +1448,8 @@ def _api_modular_endpoint_catalog(conn: sqlite3.Connection, limit: int = 400) ->
 
 @app.get("/dashboard/api-modular/state", response_class=JSONResponse)
 def dashboard_api_modular_state():
+    modular_visible = _tier_has_feature(licensing.Feature.API_MUTATION)
+    analytics_visible = _tier_has_feature(licensing.Feature.ANALYTICS)
     modular_ok, modular_reason = _pro_feature_status(
         licensing.Feature.API_MUTATION,
         action="panel_api_modular",
@@ -1464,8 +1474,10 @@ def dashboard_api_modular_state():
         "mutation": mutation,
         "rules": rules,
         "endpoint_catalog": endpoint_catalog,
+        "pro_modular_visible": modular_visible,
         "pro_modular_enabled": modular_ok,
         "pro_modular_reason": modular_reason,
+        "pro_analytics_visible": analytics_visible,
         "pro_analytics_enabled": analytics_ok,
         "pro_analytics_reason": analytics_reason,
     }
