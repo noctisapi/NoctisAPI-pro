@@ -1201,6 +1201,39 @@ def _load_json_from_response(response: Any) -> Optional[Any]:
         return None
 
 
+def _load_text_from_response(response: Any) -> Optional[str]:
+    ctype = str(getattr(response, "media_type", "") or response.headers.get("content-type") or "").lower()
+    if "text/plain" not in ctype:
+        return None
+    body = getattr(response, "body", b"")
+    if body is None:
+        return None
+    if isinstance(body, memoryview):
+        body = body.tobytes()
+    if isinstance(body, str):
+        raw = body
+    else:
+        raw = bytes(body).decode("utf-8", errors="ignore")
+    return raw
+
+
+def _mutate_text_payload(payload: str, *, response_mode: str, richness_level: int) -> str:
+    text = str(payload or "")
+    mode = str(response_mode or "normal").strip().lower()
+    richness = max(0, min(2, int(richness_level or 0)))
+    if mode != "minimal":
+        return text
+
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    if richness <= 0:
+        return "status=ok\n"
+    if richness == 1:
+        return (lines[0] + "\n") if lines else "status=ok\n"
+    if not lines:
+        return text
+    return "\n".join(lines[:5]) + "\n"
+
+
 def _apply_modular_response_policy(request: Request, response: Any, policy: Dict[str, Any]) -> Any:
     endpoint_cfg = dict(policy.get("endpoint_config") or {})
     mutation_cfg = dict(policy.get("mutation") or {})
@@ -1244,6 +1277,17 @@ def _apply_modular_response_policy(request: Request, response: Any, policy: Dict
         headers = {k: v for k, v in response.headers.items() if k.lower() not in {"content-length"}}
         headers.update(extra_headers)
         return JSONResponse(status_code=final_status, content=transformed, headers=headers)
+
+    body_text = _load_text_from_response(response)
+    if body_text is not None:
+        transformed_text = _mutate_text_payload(
+            body_text,
+            response_mode=str(endpoint_cfg.get("response_mode") or "normal"),
+            richness_level=int(endpoint_cfg.get("richness_level") or 2),
+        )
+        headers = {k: v for k, v in response.headers.items() if k.lower() not in {"content-length"}}
+        headers.update(extra_headers)
+        return PlainTextResponse(status_code=final_status, content=transformed_text, headers=headers)
 
     response.status_code = int(final_status)
     for key, value in extra_headers.items():
