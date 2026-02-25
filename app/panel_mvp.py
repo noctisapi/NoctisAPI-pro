@@ -20,6 +20,7 @@ from app import campaigns_pro
 from app import pro_license
 from app import pro_ops
 from app import license_runtime
+from app import api_modular
 from app.honeypot_monitor import HoneypotAvailabilityMonitor, get_history as hp_get_history, get_summary as hp_get_summary
 from honey_licensing.client import compute_client_identity
 
@@ -46,6 +47,14 @@ def _has_feature(feature: licensing.Feature, *, action: str = "panel_access") ->
 def _require_feature(feature: licensing.Feature, *, action: str = "panel_access") -> None:
     if not _has_feature(feature, action=action):
         raise HTTPException(status_code=403, detail="feature not available")
+
+
+def _has_modular_pro() -> bool:
+    return _has_feature(licensing.Feature.API_MUTATION, action="panel_api_modular")
+
+
+def _has_analytics_pro() -> bool:
+    return _has_feature(licensing.Feature.ANALYTICS, action="panel_pro_analytics")
 
 
 def _license_runtime_snapshot() -> dict:
@@ -1334,6 +1343,178 @@ def dashboard_overview(request: Request):
         )
     finally:
         conn.close()
+
+
+@app.get("/dashboard/api-modular", response_class=HTMLResponse)
+def dashboard_api_modular(request: Request):
+    return templates.TemplateResponse(
+        "api_modular.html",
+        {
+            "request": request,
+            "pro_modular_enabled": _has_modular_pro(),
+            "pro_analytics_enabled": _has_analytics_pro(),
+            **_license_context(),
+        },
+    )
+
+
+@app.get("/dashboard/api-modular/state", response_class=JSONResponse)
+def dashboard_api_modular_state():
+    conn = db()
+    try:
+        ensure_schema(conn)
+        api_modular.ensure_tables(conn)
+        configs = api_modular.list_endpoint_configs(conn)
+        rules = api_modular.list_rules(conn) if _has_modular_pro() else []
+        mutation = api_modular.get_mutation_config(conn) if _has_modular_pro() else {"mutation_policy": "none", "mutation_intensity": 0}
+    finally:
+        conn.close()
+    return {
+        "templates": api_modular.list_templates(),
+        "endpoint_configs": configs,
+        "mutation": mutation,
+        "rules": rules,
+        "pro_modular_enabled": _has_modular_pro(),
+        "pro_analytics_enabled": _has_analytics_pro(),
+    }
+
+
+@app.post("/dashboard/api-modular/config", response_class=JSONResponse)
+def dashboard_api_modular_save_config(payload: dict = Body(default={})):
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="invalid_payload")
+    path = str(payload.get("path") or "").strip()
+    if not path:
+        raise HTTPException(status_code=400, detail="path_required")
+    method = str(payload.get("method") or "*").strip().upper() or "*"
+    config_raw = payload.get("config")
+    if not isinstance(config_raw, dict):
+        raise HTTPException(status_code=400, detail="config_required")
+    conn = db()
+    try:
+        ensure_schema(conn)
+        api_modular.ensure_tables(conn)
+        saved = api_modular.upsert_endpoint_config(conn, path=path, method=method, config=config_raw)
+    finally:
+        conn.close()
+    return {"saved": True, "entry": saved}
+
+
+@app.post("/dashboard/api-modular/config/delete", response_class=JSONResponse)
+def dashboard_api_modular_delete_config(payload: dict = Body(default={})):
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="invalid_payload")
+    path = str(payload.get("path") or "").strip()
+    method = str(payload.get("method") or "*").strip().upper() or "*"
+    if not path:
+        raise HTTPException(status_code=400, detail="path_required")
+    conn = db()
+    try:
+        ensure_schema(conn)
+        api_modular.ensure_tables(conn)
+        deleted = api_modular.delete_endpoint_config(conn, path=path, method=method)
+    finally:
+        conn.close()
+    return {"deleted": bool(deleted)}
+
+
+@app.post("/dashboard/api-modular/template/apply", response_class=JSONResponse)
+def dashboard_api_modular_apply_template(payload: dict = Body(default={})):
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="invalid_payload")
+    template_name = str(payload.get("template_name") or "").strip().lower()
+    path = str(payload.get("path") or "").strip()
+    method = str(payload.get("method") or "*").strip().upper() or "*"
+    if not template_name:
+        raise HTTPException(status_code=400, detail="template_name_required")
+    if not path:
+        raise HTTPException(status_code=400, detail="path_required")
+    conn = db()
+    try:
+        ensure_schema(conn)
+        api_modular.ensure_tables(conn)
+        try:
+            saved = api_modular.apply_template(conn, template_name=template_name, path=path, method=method)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+    finally:
+        conn.close()
+    return {"saved": True, "entry": saved}
+
+
+@app.post("/dashboard/api-modular/mutation", response_class=JSONResponse)
+def dashboard_api_modular_set_mutation(payload: dict = Body(default={})):
+    if not _has_modular_pro():
+        raise HTTPException(status_code=403, detail="feature not available")
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="invalid_payload")
+    policy = str(payload.get("mutation_policy") or "none")
+    intensity = int(payload.get("mutation_intensity") or 0)
+    conn = db()
+    try:
+        ensure_schema(conn)
+        api_modular.ensure_tables(conn)
+        saved = api_modular.set_mutation_config(conn, mutation_policy=policy, mutation_intensity=intensity)
+    finally:
+        conn.close()
+    return {"saved": True, "mutation": saved}
+
+
+@app.post("/dashboard/api-modular/rules", response_class=JSONResponse)
+def dashboard_api_modular_add_rule(payload: dict = Body(default={})):
+    if not _has_modular_pro():
+        raise HTTPException(status_code=403, detail="feature not available")
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="invalid_payload")
+    conn = db()
+    try:
+        ensure_schema(conn)
+        api_modular.ensure_tables(conn)
+        saved = api_modular.add_rule(conn, payload)
+    finally:
+        conn.close()
+    return {"saved": True, "rule": saved}
+
+
+@app.post("/dashboard/api-modular/rules/delete", response_class=JSONResponse)
+def dashboard_api_modular_delete_rule(payload: dict = Body(default={})):
+    if not _has_modular_pro():
+        raise HTTPException(status_code=403, detail="feature not available")
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="invalid_payload")
+    rule_id = int(payload.get("id") or 0)
+    if rule_id <= 0:
+        raise HTTPException(status_code=400, detail="id_required")
+    conn = db()
+    try:
+        ensure_schema(conn)
+        api_modular.ensure_tables(conn)
+        deleted = api_modular.delete_rule(conn, rule_id=rule_id)
+    finally:
+        conn.close()
+    return {"deleted": bool(deleted)}
+
+
+@app.get("/dashboard/api-modular/analytics", response_class=JSONResponse)
+def dashboard_api_modular_analytics(hours: int = 24):
+    if not _has_analytics_pro():
+        raise HTTPException(status_code=403, detail="feature not available")
+    window_hours = max(1, min(int(hours), 168))
+    conn = db()
+    try:
+        ensure_schema(conn)
+        api_modular.ensure_tables(conn)
+        endpoints = api_modular.analytics_endpoint_metrics(conn, window_hours=window_hours, limit=20)
+        interest = api_modular.analytics_interest_scoring(conn, window_hours=window_hours, limit=20)
+        fingerprinting = api_modular.analytics_fingerprinting(conn, window_hours=window_hours, limit=20)
+    finally:
+        conn.close()
+    return {
+        "window_hours": window_hours,
+        "endpoints": endpoints,
+        "interest": interest,
+        "fingerprinting": fingerprinting,
+    }
 
 
 @app.get("/dashboard/actors", response_class=HTMLResponse)

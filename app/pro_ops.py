@@ -7,7 +7,7 @@ import time
 from app import pro_license
 
 
-_ALLOWLIST = {"cases", "campaigns", "replay", "advanced_scoring", "file_pipeline"}
+_ALLOWLIST = {"cases", "campaigns", "replay", "advanced_scoring", "file_pipeline", "api_mutation", "analytics"}
 _CACHE_LOCK = threading.Lock()
 _CACHE: dict[str, int] = {}
 

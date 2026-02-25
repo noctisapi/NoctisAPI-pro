@@ -1,0 +1,435 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>API Modular</h1>
+    <div class="sub">Core: control manual por endpoint. Pro: mutacion, reglas y analytics.</div>
+  </div>
+</div>
+
+<section class="section-grid" style="grid-template-columns: 1.2fr 1fr;">
+  <div class="card">
+    <div class="card-head"><div class="card-title">Core Endpoint Config</div></div>
+    <div class="card-body">
+      <div class="modal-form">
+        <label for="cfgPath">Path</label>
+        <input id="cfgPath" class="input mono" type="text" placeholder="/api/v1/users" />
+        <label for="cfgMethod">Method</label>
+        <select id="cfgMethod" class="input">
+          <option value="*">*</option>
+          <option value="GET">GET</option>
+          <option value="POST">POST</option>
+          <option value="PUT">PUT</option>
+          <option value="DELETE">DELETE</option>
+          <option value="PATCH">PATCH</option>
+        </select>
+        <label for="cfgEnabled">Enabled</label>
+        <select id="cfgEnabled" class="input">
+          <option value="true">true</option>
+          <option value="false">false</option>
+        </select>
+        <label for="cfgMode">response_mode</label>
+        <select id="cfgMode" class="input">
+          <option value="normal">normal</option>
+          <option value="minimal">minimal</option>
+          <option value="error_bias">error_bias</option>
+        </select>
+        <label for="cfgFixedStatus">fixed_status (optional)</label>
+        <input id="cfgFixedStatus" class="input" type="number" min="100" max="599" placeholder="(empty)" />
+        <label for="cfgRichness">richness_level (0..2)</label>
+        <input id="cfgRichness" class="input" type="number" min="0" max="2" value="2" />
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-primary" type="button" onclick="saveEndpointConfig()">Save Config</button>
+      </div>
+      <div id="cfgStatus" class="modal-hint"></div>
+
+      <hr style="border-color:var(--stroke); border-width:1px 0 0; margin:14px 0;" />
+
+      <div class="modal-form">
+        <label for="tplName">Apply Core Template</label>
+        <select id="tplName" class="input"></select>
+        <label for="tplPath">Path</label>
+        <input id="tplPath" class="input mono" type="text" placeholder="/api/v1/reports/123" />
+        <label for="tplMethod">Method</label>
+        <select id="tplMethod" class="input">
+          <option value="*">*</option>
+          <option value="GET">GET</option>
+          <option value="POST">POST</option>
+          <option value="PUT">PUT</option>
+          <option value="DELETE">DELETE</option>
+          <option value="PATCH">PATCH</option>
+        </select>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-outline" type="button" onclick="applyTemplate()">Apply Template</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><div class="card-title">Current Configs</div></div>
+    <div class="card-body">
+      <div id="endpointConfigs" class="muted">Loading...</div>
+    </div>
+  </div>
+</section>
+
+<section class="section-grid" style="grid-template-columns: 1fr 1fr;">
+  <div class="card">
+    <div class="card-head"><div class="card-title">Pro Mutation</div></div>
+    <div class="card-body">
+      {% if pro_modular_enabled %}
+      <div class="modal-form">
+        <label for="mutationPolicy">mutation_policy</label>
+        <select id="mutationPolicy" class="input">
+          <option value="none">none</option>
+          <option value="daily">daily</option>
+          <option value="weekly">weekly</option>
+        </select>
+        <label for="mutationIntensity">mutation_intensity (0..3)</label>
+        <input id="mutationIntensity" class="input" type="number" min="0" max="3" value="0" />
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-primary" type="button" onclick="saveMutation()">Save Mutation</button>
+      </div>
+      <div id="mutationStatus" class="modal-hint"></div>
+      {% else %}
+      <div class="case-empty">PRO mutation unavailable in core tier.</div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><div class="card-title">Pro Rules</div></div>
+    <div class="card-body">
+      {% if pro_modular_enabled %}
+      <div class="modal-form">
+        <label for="rulePath">match.path (supports * wildcard)</label>
+        <input id="rulePath" class="input mono" type="text" placeholder="/admin/*" />
+        <label for="ruleMethod">match.method</label>
+        <select id="ruleMethod" class="input">
+          <option value="*">*</option>
+          <option value="GET">GET</option>
+          <option value="POST">POST</option>
+          <option value="PUT">PUT</option>
+          <option value="DELETE">DELETE</option>
+          <option value="PATCH">PATCH</option>
+        </select>
+        <label for="ruleUa">match.user_agent (substring or wildcard)</label>
+        <input id="ruleUa" class="input" type="text" placeholder="sqlmap" />
+        <label for="ruleRichness">action.change_richness (-2..2)</label>
+        <input id="ruleRichness" class="input" type="number" min="-2" max="2" placeholder="0" />
+        <label for="ruleStatus">action.force_status (optional)</label>
+        <input id="ruleStatus" class="input" type="number" min="100" max="599" placeholder="(empty)" />
+        <label for="ruleLatency">action.increase_latency ms (optional)</label>
+        <input id="ruleLatency" class="input" type="number" min="0" max="5000" placeholder="250" />
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-primary" type="button" onclick="addRule()">Add Rule</button>
+      </div>
+      <div id="rulesStatus" class="modal-hint"></div>
+      <div id="rulesList" class="muted">Loading...</div>
+      {% else %}
+      <div class="case-empty">PRO rules unavailable in core tier.</div>
+      {% endif %}
+    </div>
+  </div>
+</section>
+
+<section class="card">
+  <div class="card-head"><div class="card-title">Pro Analytics</div></div>
+  <div class="card-body">
+    {% if pro_analytics_enabled %}
+    <div class="modal-actions">
+      <button class="btn btn-outline" type="button" onclick="loadAnalytics()">Refresh Analytics</button>
+    </div>
+    <div id="analyticsStatus" class="modal-hint"></div>
+    <pre id="analyticsPreview" class="mono muted" style="white-space:pre-wrap; max-height:360px; overflow:auto;"></pre>
+    {% else %}
+    <div class="case-empty">PRO analytics unavailable in core tier.</div>
+    {% endif %}
+  </div>
+</section>
+
+<script>
+  const PRO_MODULAR_ENABLED = {{ 'true' if pro_modular_enabled else 'false' }};
+  const PRO_ANALYTICS_ENABLED = {{ 'true' if pro_analytics_enabled else 'false' }};
+  let stateCache = null;
+
+  function escapeHtml(value){
+    return String(value || '')
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#39;');
+  }
+
+  async function loadState(){
+    const statusEl = document.getElementById('cfgStatus');
+    if(statusEl){ statusEl.textContent = 'Loading state...'; }
+    try{
+      const res = await fetch('/dashboard/api-modular/state');
+      const data = await res.json();
+      stateCache = data || {};
+      renderTemplates();
+      renderEndpointConfigs();
+      if(PRO_MODULAR_ENABLED){
+        renderMutation();
+        renderRules();
+      }
+      if(statusEl){ statusEl.textContent = 'State loaded.'; }
+    }catch(err){
+      if(statusEl){ statusEl.textContent = `Failed: ${err.message || 'request_failed'}`; }
+    }
+  }
+
+  function renderTemplates(){
+    const sel = document.getElementById('tplName');
+    if(!sel) return;
+    sel.innerHTML = '';
+    const templates = (stateCache && stateCache.templates) ? stateCache.templates : {};
+    Object.keys(templates).forEach((name) => {
+      const opt = document.createElement('option');
+      opt.value = name;
+      opt.textContent = `${name} -> ${JSON.stringify(templates[name])}`;
+      sel.appendChild(opt);
+    });
+  }
+
+  function renderEndpointConfigs(){
+    const el = document.getElementById('endpointConfigs');
+    if(!el) return;
+    const rows = (stateCache && stateCache.endpoint_configs) ? stateCache.endpoint_configs : [];
+    if(!rows.length){
+      el.innerHTML = '<div class="muted">No custom endpoint config. Defaults are active.</div>';
+      return;
+    }
+    const html = rows.map((item) => {
+      const cfg = item.config || {};
+      return `
+        <div class="card" style="margin-bottom:8px; padding:10px;">
+          <div class="mono"><b>${escapeHtml(item.method)} ${escapeHtml(item.path)}</b></div>
+          <div class="tiny-text muted">${escapeHtml(JSON.stringify(cfg))}</div>
+          <div class="tiny-text muted">${escapeHtml(item.updated_ts || '')}</div>
+          <button class="btn btn-danger btn-small" type="button" onclick="deleteEndpointConfig('${encodeURIComponent(item.method)}','${encodeURIComponent(item.path)}')">Delete</button>
+        </div>
+      `;
+    }).join('');
+    el.innerHTML = html;
+  }
+
+  function renderMutation(){
+    const mutation = (stateCache && stateCache.mutation) ? stateCache.mutation : {};
+    const policy = document.getElementById('mutationPolicy');
+    const intensity = document.getElementById('mutationIntensity');
+    if(policy){ policy.value = mutation.mutation_policy || 'none'; }
+    if(intensity){ intensity.value = mutation.mutation_intensity || 0; }
+  }
+
+  function renderRules(){
+    const el = document.getElementById('rulesList');
+    if(!el) return;
+    const rows = (stateCache && stateCache.rules) ? stateCache.rules : [];
+    if(!rows.length){
+      el.innerHTML = '<div class="muted">No rules configured.</div>';
+      return;
+    }
+    el.innerHTML = rows.map((rule) => `
+      <div class="card" style="margin-bottom:8px; padding:10px;">
+        <div class="mono"><b>#${rule.id}</b> ${escapeHtml(JSON.stringify(rule.match || {}))}</div>
+        <div class="tiny-text muted">${escapeHtml(JSON.stringify(rule.action || {}))}</div>
+        <button class="btn btn-danger btn-small" type="button" onclick="deleteRule(${rule.id})">Delete</button>
+      </div>
+    `).join('');
+  }
+
+  async function saveEndpointConfig(){
+    const statusEl = document.getElementById('cfgStatus');
+    const payload = {
+      path: (document.getElementById('cfgPath') || {}).value || '',
+      method: (document.getElementById('cfgMethod') || {}).value || '*',
+      config: {
+        enabled: ((document.getElementById('cfgEnabled') || {}).value || 'true') === 'true',
+        response_mode: (document.getElementById('cfgMode') || {}).value || 'normal',
+        fixed_status: (document.getElementById('cfgFixedStatus') || {}).value || null,
+        richness_level: Number((document.getElementById('cfgRichness') || {}).value || 2),
+      },
+    };
+    if(payload.config.fixed_status === ''){ payload.config.fixed_status = null; }
+    if(statusEl){ statusEl.textContent = 'Saving...'; }
+    try{
+      const res = await fetch('/dashboard/api-modular/config', {
+        method: 'POST',
+        headers: {'content-type': 'application/json'},
+        body: JSON.stringify(payload),
+      });
+      const text = await res.text();
+      if(!res.ok){
+        if(statusEl){ statusEl.textContent = `Save failed: ${text}`; }
+        return;
+      }
+      if(statusEl){ statusEl.textContent = 'Saved.'; }
+      await loadState();
+    }catch(err){
+      if(statusEl){ statusEl.textContent = `Save failed: ${err.message || 'request_failed'}`; }
+    }
+  }
+
+  async function deleteEndpointConfig(methodEncoded, pathEncoded){
+    const method = decodeURIComponent(methodEncoded || '');
+    const path = decodeURIComponent(pathEncoded || '');
+    const statusEl = document.getElementById('cfgStatus');
+    if(statusEl){ statusEl.textContent = `Deleting ${method} ${path}...`; }
+    try{
+      const res = await fetch('/dashboard/api-modular/config/delete', {
+        method: 'POST',
+        headers: {'content-type': 'application/json'},
+        body: JSON.stringify({method, path}),
+      });
+      const text = await res.text();
+      if(!res.ok){
+        if(statusEl){ statusEl.textContent = `Delete failed: ${text}`; }
+        return;
+      }
+      if(statusEl){ statusEl.textContent = 'Deleted.'; }
+      await loadState();
+    }catch(err){
+      if(statusEl){ statusEl.textContent = `Delete failed: ${err.message || 'request_failed'}`; }
+    }
+  }
+
+  async function applyTemplate(){
+    const statusEl = document.getElementById('cfgStatus');
+    const payload = {
+      template_name: (document.getElementById('tplName') || {}).value || '',
+      path: (document.getElementById('tplPath') || {}).value || '',
+      method: (document.getElementById('tplMethod') || {}).value || '*',
+    };
+    if(statusEl){ statusEl.textContent = 'Applying template...'; }
+    try{
+      const res = await fetch('/dashboard/api-modular/template/apply', {
+        method: 'POST',
+        headers: {'content-type': 'application/json'},
+        body: JSON.stringify(payload),
+      });
+      const text = await res.text();
+      if(!res.ok){
+        if(statusEl){ statusEl.textContent = `Template failed: ${text}`; }
+        return;
+      }
+      if(statusEl){ statusEl.textContent = 'Template applied.'; }
+      await loadState();
+    }catch(err){
+      if(statusEl){ statusEl.textContent = `Template failed: ${err.message || 'request_failed'}`; }
+    }
+  }
+
+  async function saveMutation(){
+    if(!PRO_MODULAR_ENABLED){ return; }
+    const statusEl = document.getElementById('mutationStatus');
+    const payload = {
+      mutation_policy: (document.getElementById('mutationPolicy') || {}).value || 'none',
+      mutation_intensity: Number((document.getElementById('mutationIntensity') || {}).value || 0),
+    };
+    if(statusEl){ statusEl.textContent = 'Saving mutation...'; }
+    try{
+      const res = await fetch('/dashboard/api-modular/mutation', {
+        method: 'POST',
+        headers: {'content-type': 'application/json'},
+        body: JSON.stringify(payload),
+      });
+      const text = await res.text();
+      if(!res.ok){
+        if(statusEl){ statusEl.textContent = `Save failed: ${text}`; }
+        return;
+      }
+      if(statusEl){ statusEl.textContent = 'Mutation saved.'; }
+      await loadState();
+    }catch(err){
+      if(statusEl){ statusEl.textContent = `Save failed: ${err.message || 'request_failed'}`; }
+    }
+  }
+
+  async function addRule(){
+    if(!PRO_MODULAR_ENABLED){ return; }
+    const statusEl = document.getElementById('rulesStatus');
+    const payload = {
+      match: {
+        path: (document.getElementById('rulePath') || {}).value || '',
+        method: (document.getElementById('ruleMethod') || {}).value || '*',
+        user_agent: (document.getElementById('ruleUa') || {}).value || '',
+      },
+      action: {
+        change_richness: (document.getElementById('ruleRichness') || {}).value || null,
+        force_status: (document.getElementById('ruleStatus') || {}).value || null,
+        increase_latency: (document.getElementById('ruleLatency') || {}).value || null,
+      },
+    };
+    if(statusEl){ statusEl.textContent = 'Adding rule...'; }
+    try{
+      const res = await fetch('/dashboard/api-modular/rules', {
+        method: 'POST',
+        headers: {'content-type': 'application/json'},
+        body: JSON.stringify(payload),
+      });
+      const text = await res.text();
+      if(!res.ok){
+        if(statusEl){ statusEl.textContent = `Rule failed: ${text}`; }
+        return;
+      }
+      if(statusEl){ statusEl.textContent = 'Rule added.'; }
+      await loadState();
+    }catch(err){
+      if(statusEl){ statusEl.textContent = `Rule failed: ${err.message || 'request_failed'}`; }
+    }
+  }
+
+  async function deleteRule(id){
+    const statusEl = document.getElementById('rulesStatus');
+    if(statusEl){ statusEl.textContent = `Deleting rule #${id}...`; }
+    try{
+      const res = await fetch('/dashboard/api-modular/rules/delete', {
+        method: 'POST',
+        headers: {'content-type': 'application/json'},
+        body: JSON.stringify({id}),
+      });
+      const text = await res.text();
+      if(!res.ok){
+        if(statusEl){ statusEl.textContent = `Delete failed: ${text}`; }
+        return;
+      }
+      if(statusEl){ statusEl.textContent = 'Rule deleted.'; }
+      await loadState();
+    }catch(err){
+      if(statusEl){ statusEl.textContent = `Delete failed: ${err.message || 'request_failed'}`; }
+    }
+  }
+
+  async function loadAnalytics(){
+    if(!PRO_ANALYTICS_ENABLED){ return; }
+    const statusEl = document.getElementById('analyticsStatus');
+    const previewEl = document.getElementById('analyticsPreview');
+    if(statusEl){ statusEl.textContent = 'Loading analytics...'; }
+    try{
+      const res = await fetch('/dashboard/api-modular/analytics?hours=24');
+      const text = await res.text();
+      if(!res.ok){
+        if(statusEl){ statusEl.textContent = `Analytics failed: ${text}`; }
+        return;
+      }
+      const data = JSON.parse(text || '{}');
+      if(previewEl){ previewEl.textContent = JSON.stringify(data, null, 2); }
+      if(statusEl){ statusEl.textContent = 'Analytics loaded.'; }
+    }catch(err){
+      if(statusEl){ statusEl.textContent = `Analytics failed: ${err.message || 'request_failed'}`; }
+    }
+  }
+
+  loadState();
+  if(PRO_ANALYTICS_ENABLED){
+    loadAnalytics();
+  }
+</script>
+{% endblock %}

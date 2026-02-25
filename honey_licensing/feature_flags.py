@@ -15,6 +15,8 @@ class Feature(str, Enum):
     REPLAY = "replay"
     ADVANCED_SCORING = "advanced_scoring"
     FILE_PIPELINE = "file_pipeline"
+    API_MUTATION = "api_mutation"
+    ANALYTICS = "analytics"
 
 
 _CORE_FEATURES: Set[str] = set()
@@ -24,6 +26,8 @@ _PRO_FEATURES: Set[str] = {
     Feature.REPLAY.value,
     Feature.ADVANCED_SCORING.value,
     Feature.FILE_PIPELINE.value,
+    Feature.API_MUTATION.value,
+    Feature.ANALYTICS.value,
 }
 
 _PRO_ENABLED_PROVIDER: Optional[Callable[[], bool]] = None

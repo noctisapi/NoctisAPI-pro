@@ -23,6 +23,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from app import licensing
 from app import pro_license
 from app import pro_ops
+from app import api_modular
 
 APP_TITLE = os.getenv("HP_API_TITLE", "Account Service API")
 APP_VERSION = os.getenv("HP_API_VERSION", "1.0.0")
@@ -95,6 +96,8 @@ tags_metadata = [
     {"name": "Account", "description": "Account operations"},
     {"name": "Admin", "description": "Administrative operations"},
     {"name": "Export", "description": "Export jobs"},
+    {"name": "Modular", "description": "Modular endpoint behavior controls"},
+    {"name": "Analytics", "description": "PRO analytics and fingerprinting"},
 ]
 
 app = FastAPI(
@@ -220,6 +223,10 @@ def _has_feature(feature: licensing.Feature, *, action: str = "public_api") -> b
 def _require_feature(feature: licensing.Feature, *, action: str = "public_api") -> None:
     if not _has_feature(feature, action=action):
         raise HTTPException(status_code=404, detail="Not found")
+
+
+def _has_modular_pro() -> bool:
+    return _has_feature(licensing.Feature.API_MUTATION, action="public_api_modular")
 
 
 def _actor_id_from_request(req: Request) -> str:
@@ -1173,6 +1180,78 @@ async def _read_json_or_form(request: Request) -> Dict[str, Any]:
         return {}
     return {}
 
+
+def _load_json_from_response(response: Any) -> Optional[Any]:
+    ctype = str(getattr(response, "media_type", "") or response.headers.get("content-type") or "").lower()
+    if "json" not in ctype:
+        return None
+    body = getattr(response, "body", b"")
+    if body is None:
+        body = b""
+    if isinstance(body, memoryview):
+        body = body.tobytes()
+    if isinstance(body, str):
+        raw = body
+    else:
+        raw = bytes(body).decode("utf-8", errors="ignore")
+    raw = raw.strip()
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except Exception:
+        return None
+
+
+def _apply_modular_response_policy(request: Request, response: Any, policy: Dict[str, Any]) -> Any:
+    endpoint_cfg = dict(policy.get("endpoint_config") or {})
+    mutation_cfg = dict(policy.get("mutation") or {})
+    rules = dict(policy.get("rules") or {})
+    path = request.url.path
+    method = request.method
+    actor_id = _actor_id_from_request(request)
+
+    final_status = api_modular.compute_status(
+        original_status=int(getattr(response, "status_code", 200) or 200),
+        response_mode=str(endpoint_cfg.get("response_mode") or "normal"),
+        fixed_status=endpoint_cfg.get("fixed_status"),
+        mutation_policy=str(mutation_cfg.get("mutation_policy") or "none"),
+        mutation_intensity=int(mutation_cfg.get("mutation_intensity") or 0),
+        path=path,
+        method=method,
+        actor_id=actor_id,
+    )
+
+    extra_headers = api_modular.mutation_headers(
+        mutation_policy=str(mutation_cfg.get("mutation_policy") or "none"),
+        mutation_intensity=int(mutation_cfg.get("mutation_intensity") or 0),
+        matched_rule_ids=list(rules.get("matched_rule_ids") or []),
+        path=path,
+        method=method,
+        actor_id=actor_id,
+    )
+
+    body_json = _load_json_from_response(response)
+    if body_json is not None:
+        transformed = api_modular.mutate_json_payload(
+            body_json,
+            response_mode=str(endpoint_cfg.get("response_mode") or "normal"),
+            richness_level=int(endpoint_cfg.get("richness_level") or 2),
+            mutation_policy=str(mutation_cfg.get("mutation_policy") or "none"),
+            mutation_intensity=int(mutation_cfg.get("mutation_intensity") or 0),
+            path=path,
+            method=method,
+            actor_id=actor_id,
+        )
+        headers = {k: v for k, v in response.headers.items() if k.lower() not in {"content-length"}}
+        headers.update(extra_headers)
+        return JSONResponse(status_code=final_status, content=transformed, headers=headers)
+
+    response.status_code = int(final_status)
+    for key, value in extra_headers.items():
+        response.headers[key] = value
+    return response
+
 @app.middleware("http")
 async def log_all_requests(request: Request, call_next):
     body = await request.body()
@@ -1181,8 +1260,56 @@ async def log_all_requests(request: Request, call_next):
     response = None
     exc = None
     skip_log = False
+    skip_policy = request.url.path.startswith("/static/") or _is_monitor(request)
+    modular_policy: Dict[str, Any] = {
+        "endpoint_config": dict(api_modular.DEFAULT_ENDPOINT_CONFIG),
+        "endpoint_match_type": "default",
+        "rules": {"matched_rule_ids": [], "richness_delta": 0, "extra_latency_ms": 0, "force_status": None},
+        "latency_ms": 0,
+        "mutation": {"mutation_policy": "none", "mutation_intensity": 0},
+        "pro_enabled": False,
+    }
+
+    if not skip_policy:
+        conn_policy = _db()
+        try:
+            _ensure_schema(conn_policy)
+            modular_policy = api_modular.resolve_request_policy(
+                conn_policy,
+                path=request.url.path,
+                method=request.method,
+                user_agent=_user_agent(request),
+                pro_enabled=_has_modular_pro(),
+            )
+        except Exception:
+            modular_policy = {
+                "endpoint_config": dict(api_modular.DEFAULT_ENDPOINT_CONFIG),
+                "endpoint_match_type": "default",
+                "rules": {"matched_rule_ids": [], "richness_delta": 0, "extra_latency_ms": 0, "force_status": None},
+                "latency_ms": 0,
+                "mutation": {"mutation_policy": "none", "mutation_intensity": 0},
+                "pro_enabled": False,
+            }
+        finally:
+            conn_policy.close()
+        request.state.api_modular_policy = modular_policy
+
     try:
-        response = await call_next(request)
+        endpoint_cfg = dict(modular_policy.get("endpoint_config") or {})
+        extra_latency_ms = int(modular_policy.get("latency_ms") or 0)
+        if not skip_policy and extra_latency_ms > 0:
+            await asyncio.sleep(float(extra_latency_ms) / 1000.0)
+
+        if not skip_policy and not bool(endpoint_cfg.get("enabled", True)):
+            status = endpoint_cfg.get("fixed_status")
+            response = JSONResponse(
+                status_code=int(status or 404),
+                content={"detail": "Not found"},
+            )
+        else:
+            response = await call_next(request)
+            if not skip_policy:
+                response = _apply_modular_response_policy(request, response, modular_policy)
     except Exception as e:
         exc = e
         raise
@@ -1283,6 +1410,14 @@ async def log_all_requests(request: Request, call_next):
                         "headers": req_headers,
                         "geo": geo,
                         "token_valid": token_valid,
+                        "modular": {
+                            "match_type": modular_policy.get("endpoint_match_type"),
+                            "response_mode": (modular_policy.get("endpoint_config") or {}).get("response_mode"),
+                            "richness_level": (modular_policy.get("endpoint_config") or {}).get("richness_level"),
+                            "rule_hits": len(((modular_policy.get("rules") or {}).get("matched_rule_ids") or [])),
+                            "mutation_policy": (modular_policy.get("mutation") or {}).get("mutation_policy"),
+                            "mutation_intensity": (modular_policy.get("mutation") or {}).get("mutation_intensity"),
+                        },
                         **(hp_event.get("extra") if hp_event else {}),
                     },
                 )
@@ -2837,6 +2972,97 @@ async def root_console(request: Request, r: str = Depends(require_root_token)):
         conn.close()
 
     return payload
+
+
+@app.get("/pro/analytics/endpoints", tags=["Analytics"], response_class=JSONResponse)
+async def pro_analytics_endpoints(
+    request: Request,
+    hours: int = 24,
+    limit: int = 25,
+    adm: str = Depends(require_admin_secret),
+):
+    _require_feature(licensing.Feature.ANALYTICS, action="pro_analytics")
+    conn = _db()
+    try:
+        _ensure_schema(conn)
+        api_modular.ensure_tables(conn)
+        items = api_modular.analytics_endpoint_metrics(
+            conn,
+            window_hours=max(1, min(int(hours), 168)),
+            limit=max(1, min(int(limit), 100)),
+        )
+    finally:
+        conn.close()
+    return {"window_hours": max(1, min(int(hours), 168)), "items": items}
+
+
+@app.get("/pro/analytics/interest", tags=["Analytics"], response_class=JSONResponse)
+async def pro_analytics_interest(
+    request: Request,
+    hours: int = 24,
+    limit: int = 25,
+    adm: str = Depends(require_admin_secret),
+):
+    _require_feature(licensing.Feature.ANALYTICS, action="pro_analytics")
+    conn = _db()
+    try:
+        _ensure_schema(conn)
+        api_modular.ensure_tables(conn)
+        items = api_modular.analytics_interest_scoring(
+            conn,
+            window_hours=max(1, min(int(hours), 168)),
+            limit=max(1, min(int(limit), 100)),
+        )
+    finally:
+        conn.close()
+    return {"window_hours": max(1, min(int(hours), 168)), "items": items}
+
+
+@app.get("/pro/analytics/fingerprinting", tags=["Analytics"], response_class=JSONResponse)
+async def pro_analytics_fingerprinting(
+    request: Request,
+    hours: int = 24,
+    limit: int = 25,
+    adm: str = Depends(require_admin_secret),
+):
+    _require_feature(licensing.Feature.ANALYTICS, action="pro_analytics")
+    conn = _db()
+    try:
+        _ensure_schema(conn)
+        api_modular.ensure_tables(conn)
+        items = api_modular.analytics_fingerprinting(
+            conn,
+            window_hours=max(1, min(int(hours), 168)),
+            limit=max(1, min(int(limit), 100)),
+        )
+    finally:
+        conn.close()
+    return {"window_hours": max(1, min(int(hours), 168)), "items": items}
+
+
+@app.get("/pro/analytics/overview", tags=["Analytics"], response_class=JSONResponse)
+async def pro_analytics_overview(
+    request: Request,
+    hours: int = 24,
+    adm: str = Depends(require_admin_secret),
+):
+    _require_feature(licensing.Feature.ANALYTICS, action="pro_analytics")
+    window_hours = max(1, min(int(hours), 168))
+    conn = _db()
+    try:
+        _ensure_schema(conn)
+        api_modular.ensure_tables(conn)
+        endpoints = api_modular.analytics_endpoint_metrics(conn, window_hours=window_hours, limit=20)
+        interest = api_modular.analytics_interest_scoring(conn, window_hours=window_hours, limit=20)
+        fingerprinting = api_modular.analytics_fingerprinting(conn, window_hours=window_hours, limit=20)
+    finally:
+        conn.close()
+    return {
+        "window_hours": window_hours,
+        "endpoints": endpoints,
+        "interest": interest,
+        "fingerprinting": fingerprinting,
+    }
 
 
 # --- Legacy endpoints (hidden) ---
