@@ -16,7 +16,7 @@ from typing import Optional, Dict, Any, Tuple, List
 import sys
 
 from fastapi import FastAPI, Request, HTTPException, Depends, Security
-from fastapi.responses import JSONResponse, PlainTextResponse, HTMLResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, HTMLResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
@@ -209,6 +209,10 @@ def _normalize_ua(ua: str) -> str:
 
 def _is_monitor(req: Request) -> bool:
     return (req.headers.get("x-internal-monitor") or "").strip() == "1"
+
+
+def _modular_debug(req: Request) -> bool:
+    return (req.headers.get("x-hp-debug") or "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def _has_feature(feature: licensing.Feature, *, action: str = "public_api") -> bool:
@@ -1179,19 +1183,70 @@ async def _read_json_or_form(request: Request) -> Dict[str, Any]:
     return {}
 
 
-def _load_json_from_response(response: Any) -> Optional[Any]:
-    ctype = str(getattr(response, "media_type", "") or response.headers.get("content-type") or "").lower()
-    if "json" not in ctype:
-        return None
-    body = getattr(response, "body", b"")
+def _response_content_type(response: Any) -> str:
+    return str(getattr(response, "media_type", "") or response.headers.get("content-type") or "").lower()
+
+
+def _response_body_to_text(body: Any) -> str:
     if body is None:
-        body = b""
+        return ""
     if isinstance(body, memoryview):
         body = body.tobytes()
     if isinstance(body, str):
-        raw = body
-    else:
-        raw = bytes(body).decode("utf-8", errors="ignore")
+        return body
+    if isinstance(body, (bytes, bytearray)):
+        return bytes(body).decode("utf-8", errors="ignore")
+    try:
+        return bytes(body).decode("utf-8", errors="ignore")
+    except Exception:
+        return ""
+
+
+async def _read_response_body(response: Any) -> bytes:
+    body = getattr(response, "body", None)
+    if body is not None:
+        if isinstance(body, memoryview):
+            body = body.tobytes()
+        if isinstance(body, str):
+            encoded = body.encode("utf-8", errors="ignore")
+            if encoded:
+                return encoded
+        elif isinstance(body, (bytes, bytearray)):
+            encoded = bytes(body)
+            if encoded:
+                return encoded
+        else:
+            try:
+                encoded = bytes(body)
+                if encoded:
+                    return encoded
+            except Exception:
+                pass
+
+    body_iter = getattr(response, "body_iterator", None)
+    if body_iter is None:
+        return b""
+    chunks: List[bytes] = []
+    async for chunk in body_iter:
+        if isinstance(chunk, memoryview):
+            chunks.append(chunk.tobytes())
+        elif isinstance(chunk, str):
+            chunks.append(chunk.encode("utf-8", errors="ignore"))
+        elif isinstance(chunk, (bytes, bytearray)):
+            chunks.append(bytes(chunk))
+        else:
+            try:
+                chunks.append(bytes(chunk))
+            except Exception:
+                continue
+    return b"".join(chunks)
+
+
+def _load_json_from_response(response: Any, body: Any = None) -> Optional[Any]:
+    ctype = _response_content_type(response)
+    if "json" not in ctype:
+        return None
+    raw = _response_body_to_text(body if body is not None else getattr(response, "body", b""))
     raw = raw.strip()
     if not raw:
         return None
@@ -1201,19 +1256,11 @@ def _load_json_from_response(response: Any) -> Optional[Any]:
         return None
 
 
-def _load_text_from_response(response: Any) -> Optional[str]:
-    ctype = str(getattr(response, "media_type", "") or response.headers.get("content-type") or "").lower()
+def _load_text_from_response(response: Any, body: Any = None) -> Optional[str]:
+    ctype = _response_content_type(response)
     if "text/plain" not in ctype:
         return None
-    body = getattr(response, "body", b"")
-    if body is None:
-        return None
-    if isinstance(body, memoryview):
-        body = body.tobytes()
-    if isinstance(body, str):
-        raw = body
-    else:
-        raw = bytes(body).decode("utf-8", errors="ignore")
+    raw = _response_body_to_text(body if body is not None else getattr(response, "body", b""))
     return raw
 
 
@@ -1234,7 +1281,18 @@ def _mutate_text_payload(payload: str, *, response_mode: str, richness_level: in
     return "\n".join(lines[:5]) + "\n"
 
 
-def _apply_modular_response_policy(request: Request, response: Any, policy: Dict[str, Any]) -> Any:
+def _int_with_default(value: Any, default: int) -> int:
+    if value is None:
+        return int(default)
+    if isinstance(value, str) and str(value).strip() == "":
+        return int(default)
+    try:
+        return int(value)
+    except Exception:
+        return int(default)
+
+
+async def _apply_modular_response_policy(request: Request, response: Any, policy: Dict[str, Any]) -> Any:
     endpoint_cfg = dict(policy.get("endpoint_config") or {})
     mutation_cfg = dict(policy.get("mutation") or {})
     rules = dict(policy.get("rules") or {})
@@ -1247,7 +1305,7 @@ def _apply_modular_response_policy(request: Request, response: Any, policy: Dict
         response_mode=str(endpoint_cfg.get("response_mode") or "normal"),
         fixed_status=endpoint_cfg.get("fixed_status"),
         mutation_policy=str(mutation_cfg.get("mutation_policy") or "none"),
-        mutation_intensity=int(mutation_cfg.get("mutation_intensity") or 0),
+        mutation_intensity=_int_with_default(mutation_cfg.get("mutation_intensity"), 0),
         path=path,
         method=method,
         actor_id=actor_id,
@@ -1255,21 +1313,34 @@ def _apply_modular_response_policy(request: Request, response: Any, policy: Dict
 
     extra_headers = api_modular.mutation_headers(
         mutation_policy=str(mutation_cfg.get("mutation_policy") or "none"),
-        mutation_intensity=int(mutation_cfg.get("mutation_intensity") or 0),
+        mutation_intensity=_int_with_default(mutation_cfg.get("mutation_intensity"), 0),
         matched_rule_ids=list(rules.get("matched_rule_ids") or []),
         path=path,
         method=method,
         actor_id=actor_id,
     )
+    if _modular_debug(request):
+        extra_headers["x-hp-modular-match"] = str(policy.get("endpoint_match_type") or "default")
+        extra_headers["x-hp-modular-enabled"] = "1" if bool(endpoint_cfg.get("enabled", True)) else "0"
+        extra_headers["x-hp-modular-mode"] = str(endpoint_cfg.get("response_mode") or "normal")
+        fixed_status = endpoint_cfg.get("fixed_status")
+        extra_headers["x-hp-modular-fixed-status"] = "" if fixed_status is None else str(int(fixed_status))
+        extra_headers["x-hp-modular-rule-hits"] = str(len(list(rules.get("matched_rule_ids") or [])))
 
-    body_json = _load_json_from_response(response)
+    ctype = _response_content_type(response)
+    may_transform_body = ("json" in ctype) or ("text/plain" in ctype)
+    raw_body: Optional[bytes] = None
+    if may_transform_body:
+        raw_body = await _read_response_body(response)
+
+    body_json = _load_json_from_response(response, raw_body if raw_body is not None else None)
     if body_json is not None:
         transformed = api_modular.mutate_json_payload(
             body_json,
             response_mode=str(endpoint_cfg.get("response_mode") or "normal"),
-            richness_level=int(endpoint_cfg.get("richness_level") or 2),
+            richness_level=_int_with_default(endpoint_cfg.get("richness_level"), 2),
             mutation_policy=str(mutation_cfg.get("mutation_policy") or "none"),
-            mutation_intensity=int(mutation_cfg.get("mutation_intensity") or 0),
+            mutation_intensity=_int_with_default(mutation_cfg.get("mutation_intensity"), 0),
             path=path,
             method=method,
             actor_id=actor_id,
@@ -1278,16 +1349,26 @@ def _apply_modular_response_policy(request: Request, response: Any, policy: Dict
         headers.update(extra_headers)
         return JSONResponse(status_code=final_status, content=transformed, headers=headers)
 
-    body_text = _load_text_from_response(response)
+    body_text = _load_text_from_response(response, raw_body if raw_body is not None else None)
     if body_text is not None:
         transformed_text = _mutate_text_payload(
             body_text,
             response_mode=str(endpoint_cfg.get("response_mode") or "normal"),
-            richness_level=int(endpoint_cfg.get("richness_level") or 2),
+            richness_level=_int_with_default(endpoint_cfg.get("richness_level"), 2),
         )
         headers = {k: v for k, v in response.headers.items() if k.lower() not in {"content-length"}}
         headers.update(extra_headers)
         return PlainTextResponse(status_code=final_status, content=transformed_text, headers=headers)
+
+    if raw_body is not None:
+        headers = {k: v for k, v in response.headers.items() if k.lower() not in {"content-length"}}
+        headers.update(extra_headers)
+        return Response(
+            status_code=final_status,
+            content=raw_body,
+            headers=headers,
+            media_type=getattr(response, "media_type", None),
+        )
 
     response.status_code = int(final_status)
     for key, value in extra_headers.items():
@@ -1344,14 +1425,26 @@ async def log_all_requests(request: Request, call_next):
 
         if not skip_policy and not bool(endpoint_cfg.get("enabled", True)):
             status = endpoint_cfg.get("fixed_status")
+            debug_headers: Dict[str, str] = {}
+            if _modular_debug(request):
+                debug_headers = {
+                    "x-hp-modular-match": str(modular_policy.get("endpoint_match_type") or "default"),
+                    "x-hp-modular-enabled": "0",
+                    "x-hp-modular-mode": str(endpoint_cfg.get("response_mode") or "normal"),
+                    "x-hp-modular-fixed-status": "" if status is None else str(int(status)),
+                    "x-hp-modular-rule-hits": str(
+                        len(list(((modular_policy.get("rules") or {}).get("matched_rule_ids") or [])))
+                    ),
+                }
             response = JSONResponse(
                 status_code=int(status or 404),
                 content={"detail": "Not found"},
+                headers=debug_headers,
             )
         else:
             response = await call_next(request)
             if not skip_policy:
-                response = _apply_modular_response_policy(request, response, modular_policy)
+                response = await _apply_modular_response_policy(request, response, modular_policy)
     except Exception as e:
         exc = e
         raise

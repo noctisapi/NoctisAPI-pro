@@ -29,6 +29,8 @@ APP_NAME = "noctisapi-panel"
 DB_PATH = os.getenv("HP_DB_PATH", "/data/honeypot.db")
 HP_GEOIP_DB = os.getenv("HP_GEOIP_DB", "/data/GeoLite2-Country.mmdb")
 HP_PUBLIC_BASE_URL = (os.getenv("HP_PUBLIC_BASE_URL") or "").strip().rstrip("/")
+API_CATALOG_LOCK = threading.Lock()
+API_CATALOG_CACHE: dict[str, object] = {"ts": 0, "catalog": [], "source": "none", "error": ""}
 
 app = FastAPI(title=APP_NAME)
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -1399,7 +1401,16 @@ def _normalize_catalog_path(path: str) -> str:
     return raw
 
 
-def _honeypot_public_endpoint_catalog() -> list[dict]:
+def _honeypot_public_endpoint_catalog() -> tuple[list[dict], str, str]:
+    now = int(time.time())
+    with API_CATALOG_LOCK:
+        ts = int(API_CATALOG_CACHE.get("ts") or 0)
+        cached = API_CATALOG_CACHE.get("catalog")
+        if ts > 0 and (now - ts) < 60 and isinstance(cached, list):
+            source = str(API_CATALOG_CACHE.get("source") or "cache")
+            err = str(API_CATALOG_CACHE.get("error") or "")
+            return list(cached), source, err
+
     def _catalog_from_openapi_doc(doc: dict) -> list[dict]:
         paths = doc.get("paths") if isinstance(doc, dict) else {}
         if not isinstance(paths, dict):
@@ -1422,6 +1433,8 @@ def _honeypot_public_endpoint_catalog() -> list[dict]:
         out.sort(key=lambda item: (item.get("path") or "", item.get("method") or ""))
         return out
 
+    source = "none"
+    last_error = ""
     if HP_PUBLIC_BASE_URL:
         url = f"{HP_PUBLIC_BASE_URL}/openapi.json"
         try:
@@ -1431,11 +1444,15 @@ def _honeypot_public_endpoint_catalog() -> list[dict]:
             parsed = json.loads(raw.decode("utf-8", errors="ignore") or "{}")
             remote_catalog = _catalog_from_openapi_doc(parsed)
             if remote_catalog:
-                return remote_catalog
-        except Exception:
-            pass
-        # In production, enforce catalog from the configured public docs source only.
-        return []
+                with API_CATALOG_LOCK:
+                    API_CATALOG_CACHE["ts"] = now
+                    API_CATALOG_CACHE["catalog"] = list(remote_catalog)
+                    API_CATALOG_CACHE["source"] = "remote_openapi"
+                    API_CATALOG_CACHE["error"] = ""
+                return remote_catalog, "remote_openapi", ""
+        except Exception as exc:
+            last_error = f"remote_openapi_failed:{exc.__class__.__name__}"
+            source = "remote_openapi_failed"
 
     # Fallback to local app OpenAPI only when no explicit public base URL is configured.
     try:
@@ -1443,10 +1460,21 @@ def _honeypot_public_endpoint_catalog() -> list[dict]:
         local_doc = public_api.openapi()
         local_catalog = _catalog_from_openapi_doc(local_doc if isinstance(local_doc, dict) else {})
         if local_catalog:
-            return local_catalog
+            with API_CATALOG_LOCK:
+                API_CATALOG_CACHE["ts"] = now
+                API_CATALOG_CACHE["catalog"] = list(local_catalog)
+                API_CATALOG_CACHE["source"] = "local_openapi"
+                API_CATALOG_CACHE["error"] = last_error
+            return local_catalog, "local_openapi", last_error
     except Exception:
-        pass
-    return []
+        if not last_error:
+            last_error = "local_openapi_failed"
+    with API_CATALOG_LOCK:
+        API_CATALOG_CACHE["ts"] = now
+        API_CATALOG_CACHE["catalog"] = []
+        API_CATALOG_CACHE["source"] = source or "none"
+        API_CATALOG_CACHE["error"] = last_error
+    return [], (source or "none"), last_error
 
 
 def _is_real_honeypot_endpoint(path: str, method: str, catalog: list[dict]) -> bool:
@@ -1465,7 +1493,8 @@ def _is_real_honeypot_endpoint(path: str, method: str, catalog: list[dict]) -> b
 def _api_modular_endpoint_catalog(conn: sqlite3.Connection, limit: int = 400) -> list[dict]:
     _ = conn
     _ = limit
-    return _honeypot_public_endpoint_catalog()
+    catalog, _source, _err = _honeypot_public_endpoint_catalog()
+    return catalog
 
 
 @app.get("/dashboard/api-modular/state", response_class=JSONResponse)
@@ -1488,6 +1517,7 @@ def dashboard_api_modular_state():
         rules = api_modular.list_rules(conn) if modular_ok else []
         mutation = api_modular.get_mutation_config(conn) if modular_ok else {"mutation_policy": "none", "mutation_intensity": 0}
         endpoint_catalog = _api_modular_endpoint_catalog(conn, limit=600)
+        _cat, catalog_source, catalog_error = _honeypot_public_endpoint_catalog()
     finally:
         conn.close()
     return {
@@ -1496,6 +1526,8 @@ def dashboard_api_modular_state():
         "mutation": mutation,
         "rules": rules,
         "endpoint_catalog": endpoint_catalog,
+        "endpoint_catalog_source": catalog_source,
+        "endpoint_catalog_error": catalog_error,
         "pro_modular_visible": modular_visible,
         "pro_modular_enabled": modular_ok,
         "pro_modular_reason": modular_reason,
@@ -1520,7 +1552,7 @@ def dashboard_api_modular_save_config(payload: dict = Body(default={})):
     try:
         ensure_schema(conn)
         api_modular.ensure_tables(conn)
-        route_catalog = _honeypot_public_endpoint_catalog()
+        route_catalog, _catalog_source, _catalog_error = _honeypot_public_endpoint_catalog()
         if not _is_real_honeypot_endpoint(path, method, route_catalog):
             raise HTTPException(status_code=400, detail="unknown_honeypot_endpoint")
         saved = api_modular.upsert_endpoint_config(conn, path=path, method=method, config=config_raw)
@@ -1562,7 +1594,7 @@ def dashboard_api_modular_apply_template(payload: dict = Body(default={})):
     try:
         ensure_schema(conn)
         api_modular.ensure_tables(conn)
-        route_catalog = _honeypot_public_endpoint_catalog()
+        route_catalog, _catalog_source, _catalog_error = _honeypot_public_endpoint_catalog()
         if not _is_real_honeypot_endpoint(path, method, route_catalog):
             raise HTTPException(status_code=400, detail="unknown_honeypot_endpoint")
         try:

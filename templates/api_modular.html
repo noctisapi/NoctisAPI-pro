@@ -232,12 +232,16 @@
     const anaEnabled = !!state.pro_analytics_enabled;
     const modReason = state.pro_modular_reason || INITIAL_PRO_MODULAR_REASON || "";
     const anaReason = state.pro_analytics_reason || INITIAL_PRO_ANALYTICS_REASON || "";
+    const catalogSource = String(state.endpoint_catalog_source || "unknown");
+    const catalogError = String(state.endpoint_catalog_error || "");
 
     if(summary){
-      summary.textContent = `modular_visible=${modVisible} enabled=${modEnabled} (${modReason || "n/a"}) | analytics_visible=${anaVisible} enabled=${anaEnabled} (${anaReason || "n/a"})`;
+      summary.textContent = `modular_visible=${modVisible} enabled=${modEnabled} (${modReason || "n/a"}) | analytics_visible=${anaVisible} enabled=${anaEnabled} (${anaReason || "n/a"}) | catalog=${catalogSource}`;
     }
     if(detail){
-      detail.textContent = "Core is always available. PRO sections require valid pro authz for each feature.";
+      detail.textContent = catalogError
+        ? `Core is always available. PRO sections require valid pro authz for each feature. Catalog error: ${catalogError}`
+        : "Core is always available. PRO sections require valid pro authz for each feature.";
     }
   }
 
