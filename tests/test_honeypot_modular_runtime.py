@@ -139,7 +139,42 @@ class TestHoneypotModularRuntime(unittest.TestCase):
                 self.assertEqual(response.status_code, 418)
                 self.assertEqual(response.headers.get("x-hp-modular-fixed-status"), "418")
                 self.assertEqual(response.headers.get("x-hp-modular-mode"), "minimal")
+                self.assertEqual(response.headers.get("x-hp-modular-policy-source"), "ok")
+                self.assertEqual(response.headers.get("x-hp-modular-db-path"), str(db_path))
                 self.assertEqual(response.json(), {"ok": True})
+            finally:
+                honeypot_public.DB_PATH = old_db_path
+                if old_seed is None:
+                    os.environ.pop("HP_SEED", None)
+                else:
+                    os.environ["HP_SEED"] = old_seed
+                if old_require_seed is None:
+                    os.environ.pop("HP_REQUIRE_SEED", None)
+                else:
+                    os.environ["HP_REQUIRE_SEED"] = old_require_seed
+
+    def test_debug_resolve_endpoint_reports_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "honeypot.db"
+            _prepare_runtime_db(db_path)
+
+            old_db_path = honeypot_public.DB_PATH
+            old_seed = os.environ.get("HP_SEED")
+            old_require_seed = os.environ.get("HP_REQUIRE_SEED")
+            try:
+                honeypot_public.DB_PATH = str(db_path)
+                os.environ["HP_SEED"] = "unit-test-seed"
+                os.environ["HP_REQUIRE_SEED"] = "0"
+                with TestClient(honeypot_public.app) as client:
+                    response = client.get("/__debug/modular/resolve", params={"path": "/config.json", "method": "GET"})
+                self.assertEqual(response.status_code, 200)
+                payload = response.json()
+                self.assertEqual(payload.get("db_path"), str(db_path))
+                resolved = payload.get("resolved") or {}
+                self.assertEqual(resolved.get("match_type"), "exact")
+                cfg = resolved.get("config") or {}
+                self.assertEqual(cfg.get("response_mode"), "minimal")
+                self.assertEqual(cfg.get("fixed_status"), 418)
             finally:
                 honeypot_public.DB_PATH = old_db_path
                 if old_seed is None:

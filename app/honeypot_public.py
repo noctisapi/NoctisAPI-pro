@@ -130,6 +130,15 @@ async def _startup_checks() -> None:
     licensing.set_pro_enabled_provider(pro_license.is_pro_enabled)
     pro_license.get_backend_license_snapshot(force_refresh=True)
     pro_ops.clear_cache()
+    conn = _db()
+    try:
+        _ensure_schema(conn)
+        api_modular.ensure_tables(conn)
+    except Exception as exc:
+        # Modular schema initialization is best-effort at startup; request path keeps CORE-safe fallback.
+        print(f"[WARNING] api_modular startup init failed: {exc}", file=sys.stderr)
+    finally:
+        conn.close()
 
 
 @app.on_event("shutdown")
@@ -144,8 +153,19 @@ def _utc_now_iso() -> str:
 
 
 def _db() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=5.0)
     conn.row_factory = sqlite3.Row
+    pragma_statements = (
+        "PRAGMA journal_mode=WAL;",
+        "PRAGMA synchronous=NORMAL;",
+        "PRAGMA busy_timeout=5000;",
+        "PRAGMA temp_store=MEMORY;",
+    )
+    for stmt in pragma_statements:
+        try:
+            conn.execute(stmt)
+        except Exception:
+            continue
     return conn
 
 
@@ -1268,10 +1288,17 @@ def _mutate_text_payload(payload: str, *, response_mode: str, richness_level: in
     text = str(payload or "")
     mode = str(response_mode or "normal").strip().lower()
     richness = max(0, min(2, int(richness_level or 0)))
-    if mode != "minimal":
-        return text
 
     lines = [ln for ln in text.splitlines() if ln.strip()]
+    if mode != "minimal":
+        if richness <= 0:
+            return (lines[0] + "\n") if lines else text
+        if richness == 1:
+            if not lines:
+                return text
+            return "\n".join(lines[:5]) + "\n"
+        return text
+
     if richness <= 0:
         return "status=ok\n"
     if richness == 1:
@@ -1290,6 +1317,68 @@ def _int_with_default(value: Any, default: int) -> int:
         return int(value)
     except Exception:
         return int(default)
+
+
+def _default_modular_policy(*, source: str = "ok", error: str = "") -> Dict[str, Any]:
+    return {
+        "endpoint_config": dict(api_modular.DEFAULT_ENDPOINT_CONFIG),
+        "endpoint_match_type": "default",
+        "rules": {"matched_rule_ids": [], "richness_delta": 0, "extra_latency_ms": 0, "force_status": None},
+        "latency_ms": 0,
+        "mutation": {"mutation_policy": "none", "mutation_intensity": 0},
+        "pro_enabled": False,
+        "source": str(source or "ok"),
+        "error": str(error or ""),
+    }
+
+
+def _short_error(exc: Exception) -> str:
+    msg = f"{exc.__class__.__name__}:{str(exc or '').strip()}"
+    return msg[:120] if msg else "policy_resolve_failed"
+
+
+def _is_sqlite_lock_error(exc: Exception) -> bool:
+    msg = str(exc or "").strip().lower()
+    return (
+        "database is locked" in msg
+        or "database schema is locked" in msg
+        or "database table is locked" in msg
+    )
+
+
+async def _resolve_modular_policy_with_retry(request: Request) -> Dict[str, Any]:
+    pro_enabled = _has_modular_pro()
+    delays = (0.0, 0.025, 0.075, 0.150)
+    last_exc: Optional[Exception] = None
+
+    for idx, base_delay in enumerate(delays):
+        if idx > 0:
+            await asyncio.sleep(base_delay + random.uniform(0.0, 0.02))
+        conn_policy = _db()
+        try:
+            _ensure_schema(conn_policy)
+            resolved = api_modular.resolve_request_policy(
+                conn_policy,
+                path=request.url.path,
+                method=request.method,
+                user_agent=_user_agent(request),
+                pro_enabled=pro_enabled,
+                ensure_schema=False,
+            )
+            policy = dict(resolved or {})
+            policy["source"] = "ok"
+            policy["error"] = ""
+            return policy
+        except Exception as exc:
+            last_exc = exc
+            if not _is_sqlite_lock_error(exc):
+                break
+        finally:
+            conn_policy.close()
+
+    if last_exc is not None:
+        return _default_modular_policy(source="fallback", error=_short_error(last_exc))
+    return _default_modular_policy(source="fallback", error="policy_resolve_failed")
 
 
 async def _apply_modular_response_policy(request: Request, response: Any, policy: Dict[str, Any]) -> Any:
@@ -1326,9 +1415,10 @@ async def _apply_modular_response_policy(request: Request, response: Any, policy
         fixed_status = endpoint_cfg.get("fixed_status")
         extra_headers["x-hp-modular-fixed-status"] = "" if fixed_status is None else str(int(fixed_status))
         extra_headers["x-hp-modular-rule-hits"] = str(len(list(rules.get("matched_rule_ids") or [])))
-        policy_error = str(policy.get("error") or "").strip()
-        if policy_error:
-            extra_headers["x-hp-modular-error"] = policy_error[:120]
+        extra_headers["x-hp-modular-db-path"] = DB_PATH
+        extra_headers["x-hp-modular-policy-source"] = str(policy.get("source") or "ok")
+        policy_error = str(policy.get("error") or "none").strip()
+        extra_headers["x-hp-modular-error"] = (policy_error or "none")[:120]
 
     ctype = _response_content_type(response)
     may_transform_body = ("json" in ctype) or ("text/plain" in ctype)
@@ -1388,39 +1478,11 @@ async def log_all_requests(request: Request, call_next):
     skip_log = False
     is_monitor = _is_monitor(request)
     skip_policy = request.url.path.startswith("/static/")
-    modular_policy: Dict[str, Any] = {
-        "endpoint_config": dict(api_modular.DEFAULT_ENDPOINT_CONFIG),
-        "endpoint_match_type": "default",
-        "rules": {"matched_rule_ids": [], "richness_delta": 0, "extra_latency_ms": 0, "force_status": None},
-        "latency_ms": 0,
-        "mutation": {"mutation_policy": "none", "mutation_intensity": 0},
-        "pro_enabled": False,
-        "error": "",
-    }
+    modular_policy: Dict[str, Any] = _default_modular_policy(source="ok", error="")
 
     if not skip_policy:
-        conn_policy = _db()
-        try:
-            api_modular.ensure_tables(conn_policy)
-            modular_policy = api_modular.resolve_request_policy(
-                conn_policy,
-                path=request.url.path,
-                method=request.method,
-                user_agent=_user_agent(request),
-                pro_enabled=_has_modular_pro(),
-            )
-        except Exception:
-            modular_policy = {
-                "endpoint_config": dict(api_modular.DEFAULT_ENDPOINT_CONFIG),
-                "endpoint_match_type": "default",
-                "rules": {"matched_rule_ids": [], "richness_delta": 0, "extra_latency_ms": 0, "force_status": None},
-                "latency_ms": 0,
-                "mutation": {"mutation_policy": "none", "mutation_intensity": 0},
-                "pro_enabled": False,
-                "error": "policy_resolve_failed",
-            }
-        finally:
-            conn_policy.close()
+        # Do not run ensure_tables/DDL in hot path; startup initializes modular tables once.
+        modular_policy = await _resolve_modular_policy_with_retry(request)
         request.state.api_modular_policy = modular_policy
 
     try:
@@ -1441,10 +1503,11 @@ async def log_all_requests(request: Request, call_next):
                     "x-hp-modular-rule-hits": str(
                         len(list(((modular_policy.get("rules") or {}).get("matched_rule_ids") or [])))
                     ),
+                    "x-hp-modular-db-path": DB_PATH,
+                    "x-hp-modular-policy-source": str(modular_policy.get("source") or "ok"),
                 }
-                policy_error = str(modular_policy.get("error") or "").strip()
-                if policy_error:
-                    debug_headers["x-hp-modular-error"] = policy_error[:120]
+                policy_error = str(modular_policy.get("error") or "none").strip()
+                debug_headers["x-hp-modular-error"] = (policy_error or "none")[:120]
             response = JSONResponse(
                 status_code=int(status or 404),
                 content={"detail": "Not found"},
@@ -1599,6 +1662,37 @@ async def log_all_requests(request: Request, call_next):
     if response is None:
         response = JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
     return response
+
+
+@app.get("/__debug/modular/resolve", include_in_schema=False, response_class=JSONResponse)
+async def debug_modular_resolve(path: str = "/", method: str = "GET"):
+    conn = _db()
+    try:
+        _ensure_schema(conn)
+        resolved = api_modular.resolve_endpoint_config(
+            conn,
+            path=path,
+            method=method,
+            ensure_schema=False,
+        )
+        return {
+            "db_path": DB_PATH,
+            "path": str(path or "/"),
+            "method": str(method or "GET").upper(),
+            "resolved": resolved,
+        }
+    except Exception as exc:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "db_path": DB_PATH,
+                "path": str(path or "/"),
+                "method": str(method or "GET").upper(),
+                "error": _short_error(exc),
+            },
+        )
+    finally:
+        conn.close()
 
 
 @app.get("/health", tags=["Health"], response_class=JSONResponse)

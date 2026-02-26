@@ -69,6 +69,40 @@ class TestHoneypotModularResponse(unittest.TestCase):
         self.assertEqual(out.status_code, 200)
         self.assertEqual((out.body or b"").decode("utf-8", errors="ignore"), "status=ok\n")
 
+    def test_streaming_text_normal_mode_respects_richness(self):
+        async def body():
+            yield b"L1\nL2\nL3\nL4\nL5\nL6\n"
+
+        base_policy = {
+            "endpoint_config": {
+                "enabled": True,
+                "response_mode": "normal",
+                "fixed_status": None,
+                "richness_level": 2,
+            },
+            "endpoint_match_type": "exact",
+            "rules": {"matched_rule_ids": []},
+            "mutation": {"mutation_policy": "none", "mutation_intensity": 0},
+        }
+
+        response_full = StreamingResponse(body(), media_type="text/plain", status_code=200)
+        out_full = asyncio.run(_apply_modular_response_policy(_request(path="/.env"), response_full, base_policy))
+        self.assertEqual((out_full.body or b"").decode("utf-8", errors="ignore"), "L1\nL2\nL3\nL4\nL5\nL6\n")
+
+        policy_mid = dict(base_policy)
+        policy_mid["endpoint_config"] = dict(base_policy["endpoint_config"])
+        policy_mid["endpoint_config"]["richness_level"] = 1
+        response_mid = StreamingResponse(body(), media_type="text/plain", status_code=200)
+        out_mid = asyncio.run(_apply_modular_response_policy(_request(path="/.env"), response_mid, policy_mid))
+        self.assertEqual((out_mid.body or b"").decode("utf-8", errors="ignore"), "L1\nL2\nL3\nL4\nL5\n")
+
+        policy_low = dict(base_policy)
+        policy_low["endpoint_config"] = dict(base_policy["endpoint_config"])
+        policy_low["endpoint_config"]["richness_level"] = 0
+        response_low = StreamingResponse(body(), media_type="text/plain", status_code=200)
+        out_low = asyncio.run(_apply_modular_response_policy(_request(path="/.env"), response_low, policy_low))
+        self.assertEqual((out_low.body or b"").decode("utf-8", errors="ignore"), "L1\n")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -380,8 +380,15 @@ def apply_template(
     return upsert_endpoint_config(conn, path=path, method=method, config=template)
 
 
-def resolve_endpoint_config(conn: sqlite3.Connection, *, path: str, method: str) -> Dict[str, Any]:
-    ensure_tables(conn)
+def resolve_endpoint_config(
+    conn: sqlite3.Connection,
+    *,
+    path: str,
+    method: str,
+    ensure_schema: bool = True,
+) -> Dict[str, Any]:
+    if ensure_schema:
+        ensure_tables(conn)
     normalized_path = _normalize_path(path)
     normalized_method = _normalize_method(method)
     rows = conn.execute(
@@ -432,8 +439,9 @@ def resolve_endpoint_config(conn: sqlite3.Connection, *, path: str, method: str)
     }
 
 
-def get_mutation_config(conn: sqlite3.Connection) -> Dict[str, Any]:
-    ensure_tables(conn)
+def get_mutation_config(conn: sqlite3.Connection, *, ensure_schema: bool = True) -> Dict[str, Any]:
+    if ensure_schema:
+        ensure_tables(conn)
     row = conn.execute(
         """
         SELECT mutation_policy, mutation_intensity, updated_ts
@@ -512,8 +520,9 @@ def _sanitize_rule(rule: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def list_rules(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
-    ensure_tables(conn)
+def list_rules(conn: sqlite3.Connection, *, ensure_schema: bool = True) -> List[Dict[str, Any]]:
+    if ensure_schema:
+        ensure_tables(conn)
     rows = conn.execute(
         """
         SELECT id, enabled, match_path, match_method, match_user_agent,
@@ -666,9 +675,11 @@ def resolve_request_policy(
     method: str,
     user_agent: str,
     pro_enabled: bool,
+    ensure_schema: bool = True,
 ) -> Dict[str, Any]:
-    ensure_tables(conn)
-    base = resolve_endpoint_config(conn, path=path, method=method)
+    if ensure_schema:
+        ensure_tables(conn)
+    base = resolve_endpoint_config(conn, path=path, method=method, ensure_schema=False)
     effective = dict(base["config"])
     rules_eval = {
         "matched_rule_ids": [],
@@ -680,7 +691,7 @@ def resolve_request_policy(
 
     if pro_enabled:
         try:
-            current_rules = list_rules(conn)
+            current_rules = list_rules(conn, ensure_schema=False)
             rules_eval = evaluate_rules(
                 current_rules,
                 path=path,
@@ -697,7 +708,7 @@ def resolve_request_policy(
                 )
             if rules_eval["force_status"] is not None and effective.get("fixed_status") is None:
                 effective["fixed_status"] = int(rules_eval["force_status"])
-            mutation = get_mutation_config(conn)
+            mutation = get_mutation_config(conn, ensure_schema=False)
         except Exception:
             # Never lose CORE behavior because of a PRO rules/mutation read failure.
             rules_eval = {
