@@ -1326,6 +1326,9 @@ async def _apply_modular_response_policy(request: Request, response: Any, policy
         fixed_status = endpoint_cfg.get("fixed_status")
         extra_headers["x-hp-modular-fixed-status"] = "" if fixed_status is None else str(int(fixed_status))
         extra_headers["x-hp-modular-rule-hits"] = str(len(list(rules.get("matched_rule_ids") or [])))
+        policy_error = str(policy.get("error") or "").strip()
+        if policy_error:
+            extra_headers["x-hp-modular-error"] = policy_error[:120]
 
     ctype = _response_content_type(response)
     may_transform_body = ("json" in ctype) or ("text/plain" in ctype)
@@ -1383,7 +1386,8 @@ async def log_all_requests(request: Request, call_next):
     response = None
     exc = None
     skip_log = False
-    skip_policy = request.url.path.startswith("/static/") or _is_monitor(request)
+    is_monitor = _is_monitor(request)
+    skip_policy = request.url.path.startswith("/static/")
     modular_policy: Dict[str, Any] = {
         "endpoint_config": dict(api_modular.DEFAULT_ENDPOINT_CONFIG),
         "endpoint_match_type": "default",
@@ -1391,12 +1395,13 @@ async def log_all_requests(request: Request, call_next):
         "latency_ms": 0,
         "mutation": {"mutation_policy": "none", "mutation_intensity": 0},
         "pro_enabled": False,
+        "error": "",
     }
 
     if not skip_policy:
         conn_policy = _db()
         try:
-            _ensure_schema(conn_policy)
+            api_modular.ensure_tables(conn_policy)
             modular_policy = api_modular.resolve_request_policy(
                 conn_policy,
                 path=request.url.path,
@@ -1412,6 +1417,7 @@ async def log_all_requests(request: Request, call_next):
                 "latency_ms": 0,
                 "mutation": {"mutation_policy": "none", "mutation_intensity": 0},
                 "pro_enabled": False,
+                "error": "policy_resolve_failed",
             }
         finally:
             conn_policy.close()
@@ -1436,6 +1442,9 @@ async def log_all_requests(request: Request, call_next):
                         len(list(((modular_policy.get("rules") or {}).get("matched_rule_ids") or [])))
                     ),
                 }
+                policy_error = str(modular_policy.get("error") or "").strip()
+                if policy_error:
+                    debug_headers["x-hp-modular-error"] = policy_error[:120]
             response = JSONResponse(
                 status_code=int(status or 404),
                 content={"detail": "Not found"},
@@ -1451,7 +1460,7 @@ async def log_all_requests(request: Request, call_next):
     finally:
         if request.url.path.startswith("/static/"):
             skip_log = True
-        if _is_monitor(request):
+        if is_monitor:
             skip_log = True
 
         if not skip_log:
@@ -1552,6 +1561,7 @@ async def log_all_requests(request: Request, call_next):
                             "rule_hits": len(((modular_policy.get("rules") or {}).get("matched_rule_ids") or [])),
                             "mutation_policy": (modular_policy.get("mutation") or {}).get("mutation_policy"),
                             "mutation_intensity": (modular_policy.get("mutation") or {}).get("mutation_intensity"),
+                            "error": modular_policy.get("error"),
                         },
                         **(hp_event.get("extra") if hp_event else {}),
                     },
