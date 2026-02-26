@@ -119,6 +119,82 @@ class TestApiModular(unittest.TestCase):
         self.assertIsInstance(out, dict)
         self.assertIn("_variant", out)
 
+    def test_response_mode_and_richness_generate_distinct_shapes(self):
+        payload = {
+            "service": "platform-api",
+            "region": "eu-west-1",
+            "auth": {"issuer": "x", "audience": "y"},
+            "features": {"webhooks": True},
+            "contact": {"support": "ops@example.com"},
+        }
+        normal_2 = api_modular.mutate_json_payload(
+            payload,
+            response_mode="normal",
+            richness_level=2,
+            mutation_policy="none",
+            mutation_intensity=0,
+            path="/config.json",
+            method="GET",
+            actor_id="actor",
+        )
+        normal_1 = api_modular.mutate_json_payload(
+            payload,
+            response_mode="normal",
+            richness_level=1,
+            mutation_policy="none",
+            mutation_intensity=0,
+            path="/config.json",
+            method="GET",
+            actor_id="actor",
+        )
+        normal_0 = api_modular.mutate_json_payload(
+            payload,
+            response_mode="normal",
+            richness_level=0,
+            mutation_policy="none",
+            mutation_intensity=0,
+            path="/config.json",
+            method="GET",
+            actor_id="actor",
+        )
+        minimal_2 = api_modular.mutate_json_payload(
+            payload,
+            response_mode="minimal",
+            richness_level=2,
+            mutation_policy="none",
+            mutation_intensity=0,
+            path="/config.json",
+            method="GET",
+            actor_id="actor",
+        )
+        minimal_1 = api_modular.mutate_json_payload(
+            payload,
+            response_mode="minimal",
+            richness_level=1,
+            mutation_policy="none",
+            mutation_intensity=0,
+            path="/config.json",
+            method="GET",
+            actor_id="actor",
+        )
+        minimal_0 = api_modular.mutate_json_payload(
+            payload,
+            response_mode="minimal",
+            richness_level=0,
+            mutation_policy="none",
+            mutation_intensity=0,
+            path="/config.json",
+            method="GET",
+            actor_id="actor",
+        )
+
+        self.assertEqual(len(normal_2.keys()), 5)
+        self.assertEqual(len(normal_1.keys()), 3)
+        self.assertEqual(len(normal_0.keys()), 1)
+        self.assertEqual(len(minimal_2.keys()), 3)
+        self.assertEqual(len(minimal_1.keys()), 1)
+        self.assertEqual(minimal_0, {"ok": True})
+
     def test_analytics_functions(self):
         rows = [
             ("2026-02-25T10:00:00Z", "actor1", "recon_openapi", "/openapi.json", "GET", "1.1.1.1", "ua-a", 200, '{"latency_ms":120}'),

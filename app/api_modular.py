@@ -768,15 +768,16 @@ def _reduce_dict_richness(payload: Dict[str, Any], richness_level: int) -> Dict[
         if key in payload:
             out[key] = payload[key]
     if richness_level == 1:
-        if len(out) < 5:
+        if len(out) < 3:
             for key, value in payload.items():
                 if key not in out:
                     out[key] = value
-                if len(out) >= 5:
+                if len(out) >= 3:
                     break
         return out or dict(payload)
     if out:
-        return out
+        one = next(iter(out.items()))
+        return {one[0]: one[1]}
     first_key = next(iter(payload.keys()), None)
     if first_key is not None:
         return {first_key: payload[first_key]}
@@ -791,10 +792,14 @@ def _minimize_payload(payload: Any, richness_level: int) -> Any:
             if "detail" in payload:
                 return {"detail": payload.get("detail")}
             return {"ok": True}
-        return _reduce_dict_richness(payload, min(1, int(richness_level)))
+        if int(richness_level) == 1:
+            return _reduce_dict_richness(payload, 0)
+        return _reduce_dict_richness(payload, 1)
     if isinstance(payload, list):
         if richness_level <= 0:
             return {"count": len(payload)}
+        if int(richness_level) == 1:
+            return payload[: min(len(payload), 1)]
         return payload[: min(len(payload), 3)]
     return payload
 
