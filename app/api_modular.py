@@ -149,6 +149,31 @@ def _normalize_policy(value: Any) -> str:
     return raw
 
 
+def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    try:
+        rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    except Exception:
+        return set()
+    out: set[str] = set()
+    for row in rows:
+        try:
+            out.add(str(row["name"]))
+        except Exception:
+            try:
+                out.add(str(row[1]))
+            except Exception:
+                continue
+    return out
+
+
+def _ensure_columns(conn: sqlite3.Connection, table: str, expected: Dict[str, str]) -> None:
+    existing = _table_columns(conn, table)
+    for column, ddl in expected.items():
+        if column in existing:
+            continue
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+
+
 def ensure_tables(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
@@ -164,6 +189,19 @@ def ensure_tables(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    _ensure_columns(
+        conn,
+        "api_endpoint_configs",
+        {
+            "method": "TEXT NOT NULL DEFAULT '*'",
+            "path": "TEXT NOT NULL DEFAULT '/'",
+            "enabled": "INTEGER NOT NULL DEFAULT 1",
+            "response_mode": "TEXT NOT NULL DEFAULT 'normal'",
+            "fixed_status": "INTEGER",
+            "richness_level": "INTEGER NOT NULL DEFAULT 2",
+            "updated_ts": "TEXT NOT NULL DEFAULT ''",
+        },
+    )
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS api_mutation_settings (
@@ -173,6 +211,16 @@ def ensure_tables(conn: sqlite3.Connection) -> None:
           updated_ts TEXT NOT NULL
         )
         """
+    )
+    _ensure_columns(
+        conn,
+        "api_mutation_settings",
+        {
+            "singleton_id": "INTEGER",
+            "mutation_policy": "TEXT NOT NULL DEFAULT 'none'",
+            "mutation_intensity": "INTEGER NOT NULL DEFAULT 0",
+            "updated_ts": "TEXT NOT NULL DEFAULT ''",
+        },
     )
     conn.execute(
         """
@@ -189,6 +237,22 @@ def ensure_tables(conn: sqlite3.Connection) -> None:
           updated_ts TEXT NOT NULL
         )
         """
+    )
+    _ensure_columns(
+        conn,
+        "api_rules",
+        {
+            "id": "INTEGER",
+            "enabled": "INTEGER NOT NULL DEFAULT 1",
+            "match_path": "TEXT",
+            "match_method": "TEXT",
+            "match_user_agent": "TEXT",
+            "action_change_richness": "INTEGER",
+            "action_force_status": "INTEGER",
+            "action_increase_latency": "INTEGER",
+            "created_ts": "TEXT NOT NULL DEFAULT ''",
+            "updated_ts": "TEXT NOT NULL DEFAULT ''",
+        },
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_api_rules_enabled ON api_rules(enabled, id)")
     conn.execute(
@@ -255,27 +319,38 @@ def upsert_endpoint_config(conn: sqlite3.Connection, *, path: str, method: str =
     normalized_method = _normalize_method(method)
     cfg = sanitize_endpoint_config(config)
     now = _utc_now_iso()
-    conn.execute(
+    cur = conn.execute(
         """
-        INSERT INTO api_endpoint_configs(method, path, enabled, response_mode, fixed_status, richness_level, updated_ts)
-        VALUES(?,?,?,?,?,?,?)
-        ON CONFLICT(method, path) DO UPDATE SET
-          enabled=excluded.enabled,
-          response_mode=excluded.response_mode,
-          fixed_status=excluded.fixed_status,
-          richness_level=excluded.richness_level,
-          updated_ts=excluded.updated_ts
+        UPDATE api_endpoint_configs
+        SET enabled=?, response_mode=?, fixed_status=?, richness_level=?, updated_ts=?
+        WHERE method=? AND path=?
         """,
         (
-            normalized_method,
-            normalized_path,
             1 if cfg["enabled"] else 0,
             cfg["response_mode"],
             cfg["fixed_status"],
             int(cfg["richness_level"]),
             now,
+            normalized_method,
+            normalized_path,
         ),
     )
+    if int(cur.rowcount or 0) <= 0:
+        conn.execute(
+            """
+            INSERT INTO api_endpoint_configs(method, path, enabled, response_mode, fixed_status, richness_level, updated_ts)
+            VALUES(?,?,?,?,?,?,?)
+            """,
+            (
+                normalized_method,
+                normalized_path,
+                1 if cfg["enabled"] else 0,
+                cfg["response_mode"],
+                cfg["fixed_status"],
+                int(cfg["richness_level"]),
+                now,
+            ),
+        )
     conn.commit()
     return {"method": normalized_method, "path": normalized_path, "config": cfg, "updated_ts": now}
 
@@ -604,23 +679,34 @@ def resolve_request_policy(
     mutation = {"mutation_policy": "none", "mutation_intensity": 0}
 
     if pro_enabled:
-        current_rules = list_rules(conn)
-        rules_eval = evaluate_rules(
-            current_rules,
-            path=path,
-            method=method,
-            user_agent=user_agent,
-        )
-        if rules_eval["richness_delta"]:
-            effective["richness_level"] = _clamp_int(
-                int(effective.get("richness_level") or 2) + int(rules_eval["richness_delta"]),
-                0,
-                2,
-                2,
+        try:
+            current_rules = list_rules(conn)
+            rules_eval = evaluate_rules(
+                current_rules,
+                path=path,
+                method=method,
+                user_agent=user_agent,
             )
-        if rules_eval["force_status"] is not None and effective.get("fixed_status") is None:
-            effective["fixed_status"] = int(rules_eval["force_status"])
-        mutation = get_mutation_config(conn)
+            if rules_eval["richness_delta"]:
+                base_richness = _clamp_int(effective.get("richness_level"), 0, 2, 2)
+                effective["richness_level"] = _clamp_int(
+                    int(base_richness) + int(rules_eval["richness_delta"]),
+                    0,
+                    2,
+                    2,
+                )
+            if rules_eval["force_status"] is not None and effective.get("fixed_status") is None:
+                effective["fixed_status"] = int(rules_eval["force_status"])
+            mutation = get_mutation_config(conn)
+        except Exception:
+            # Never lose CORE behavior because of a PRO rules/mutation read failure.
+            rules_eval = {
+                "matched_rule_ids": [],
+                "richness_delta": 0,
+                "extra_latency_ms": 0,
+                "force_status": None,
+            }
+            mutation = {"mutation_policy": "none", "mutation_intensity": 0}
 
     return {
         "endpoint_config": sanitize_endpoint_config(effective),

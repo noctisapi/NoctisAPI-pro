@@ -1,5 +1,6 @@
 import sqlite3
 import unittest
+from unittest.mock import patch
 
 from app import api_modular
 
@@ -140,6 +141,76 @@ class TestApiModular(unittest.TestCase):
         self.assertTrue(interest)
         fingerprints = api_modular.analytics_fingerprinting(self.conn, window_hours=2000, limit=10)
         self.assertTrue(fingerprints)
+
+    def test_ensure_tables_repairs_legacy_modular_schema(self):
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.execute(
+                """
+                CREATE TABLE api_endpoint_configs (
+                  method TEXT,
+                  path TEXT,
+                  enabled INTEGER
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE api_mutation_settings (
+                  singleton_id INTEGER PRIMARY KEY
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE api_rules (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  enabled INTEGER
+                )
+                """
+            )
+            api_modular.ensure_tables(conn)
+
+            saved = api_modular.upsert_endpoint_config(
+                conn,
+                path="/config.json",
+                method="GET",
+                config={"enabled": True, "response_mode": "minimal", "fixed_status": 418, "richness_level": 0},
+            )
+            self.assertEqual(saved["config"]["response_mode"], "minimal")
+            policy = api_modular.resolve_request_policy(
+                conn,
+                path="/config.json",
+                method="GET",
+                user_agent="unit-test",
+                pro_enabled=True,
+            )
+            self.assertEqual(policy["endpoint_config"]["response_mode"], "minimal")
+            self.assertEqual(policy["endpoint_config"]["fixed_status"], 418)
+            self.assertEqual(policy["endpoint_config"]["richness_level"], 0)
+        finally:
+            conn.close()
+
+    def test_pro_failure_does_not_break_core_policy(self):
+        api_modular.upsert_endpoint_config(
+            self.conn,
+            path="/config.json",
+            method="GET",
+            config={"enabled": True, "response_mode": "minimal", "fixed_status": 451, "richness_level": 0},
+        )
+        with patch("app.api_modular.list_rules", side_effect=sqlite3.OperationalError("broken_rules")):
+            policy = api_modular.resolve_request_policy(
+                self.conn,
+                path="/config.json",
+                method="GET",
+                user_agent="unit-test",
+                pro_enabled=True,
+            )
+        self.assertEqual(policy["endpoint_config"]["response_mode"], "minimal")
+        self.assertEqual(policy["endpoint_config"]["fixed_status"], 451)
+        self.assertEqual(policy["endpoint_config"]["richness_level"], 0)
+        self.assertEqual(policy["rules"]["matched_rule_ids"], [])
 
 
 if __name__ == "__main__":
