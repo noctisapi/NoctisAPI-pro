@@ -22,35 +22,16 @@
       <div class="card-subtitle">Override behaviour for a specific endpoint.</div>
     </div>
     <div class="card-body">
-      <!-- Edit mode banner -->
-      <div id="editModeBanner" style="display:none; align-items:center; gap:10px; background:var(--surface2,#f0f4ff); border:1px solid var(--accent,#4f7cff); border-radius:6px; padding:8px 12px; margin-bottom:12px;">
-        <span style="flex:1; font-size:0.82rem;">Editing: <b id="editModeLabel" class="mono"></b> — path &amp; method are locked.</span>
-        <button class="btn btn-outline btn-small" type="button" onclick="clearConfigForm()">Cancel</button>
-      </div>
-
       <div class="modal-form">
-        <label for="cfgPathSelect">Path catalog</label>
+        <label for="cfgPathSelect">Endpoint</label>
         <select id="cfgPathSelect" class="input">
-          <option value="">Select discovered endpoint...</option>
-        </select>
-
-        <label for="cfgPath">Path</label>
-        <input id="cfgPath" class="input mono" type="text" placeholder="/api/v1/users" />
-
-        <label for="cfgMethod">Method</label>
-        <select id="cfgMethod" class="input">
-          <option value="*">* (any)</option>
-          <option value="GET">GET</option>
-          <option value="POST">POST</option>
-          <option value="PUT">PUT</option>
-          <option value="DELETE">DELETE</option>
-          <option value="PATCH">PATCH</option>
+          <option value="">— select an endpoint —</option>
         </select>
 
         <label for="cfgEnabled">enabled</label>
         <select id="cfgEnabled" class="input">
           <option value="true">true — respond normally</option>
-          <option value="false">false — drop / 404</option>
+          <option value="false">false — return 404</option>
         </select>
 
         <label for="cfgMode">response_mode</label>
@@ -60,14 +41,15 @@
           <option value="error_bias">error_bias — prefer 4xx/5xx responses</option>
         </select>
 
-        <label for="cfgFixedStatus">fixed_status <span class="muted">(optional override)</span></label>
+        <label for="cfgFixedStatus">fixed_status <span style="font-weight:400; color:var(--text-muted,#888);">(optional override)</span></label>
         <input id="cfgFixedStatus" class="input" type="number" min="100" max="599" placeholder="empty = no override" />
 
-        <label for="cfgRichness">richness_level <span class="muted">(0 = minimal, 2 = full)</span></label>
+        <label for="cfgRichness">richness_level <span style="font-weight:400; color:var(--text-muted,#888);">(0 = minimal · 2 = full)</span></label>
         <input id="cfgRichness" class="input" type="number" min="0" max="2" value="2" />
       </div>
       <div class="modal-actions">
         <button class="btn btn-primary" type="button" onclick="saveEndpointConfig()">Save Config</button>
+        <button class="btn btn-outline" type="button" onclick="resetConfigForm()">Clear</button>
       </div>
       <div id="cfgStatus" class="modal-hint"></div>
 
@@ -79,22 +61,9 @@
         <label for="tplName">Template</label>
         <select id="tplName" class="input"></select>
 
-        <label for="tplPathSelect">Path catalog</label>
+        <label for="tplPathSelect">Endpoint</label>
         <select id="tplPathSelect" class="input">
-          <option value="">Select discovered endpoint...</option>
-        </select>
-
-        <label for="tplPath">Path</label>
-        <input id="tplPath" class="input mono" type="text" placeholder="/api/v1/reports/123" />
-
-        <label for="tplMethod">Method</label>
-        <select id="tplMethod" class="input">
-          <option value="*">* (any)</option>
-          <option value="GET">GET</option>
-          <option value="POST">POST</option>
-          <option value="PUT">PUT</option>
-          <option value="DELETE">DELETE</option>
-          <option value="PATCH">PATCH</option>
+          <option value="">— select an endpoint —</option>
         </select>
       </div>
       <div class="modal-actions">
@@ -124,7 +93,7 @@
     <div class="card-body">
       {% if pro_modular_visible %}
       {% if pro_modular_enabled %}
-      <div id="mutationCurrentState" class="tiny-text muted" style="margin-bottom:10px;"></div>
+      <div id="mutationCurrentState" style="font-size:0.82rem; color:var(--text-muted,#666); margin-bottom:10px;"></div>
       <div class="modal-form">
         <label for="mutationPolicy">mutation_policy</label>
         <select id="mutationPolicy" class="input">
@@ -132,7 +101,7 @@
           <option value="daily">daily — rotate responses each day</option>
           <option value="weekly">weekly — rotate responses each week</option>
         </select>
-        <label for="mutationIntensity">mutation_intensity <span class="muted">(0 = off, 3 = aggressive)</span></label>
+        <label for="mutationIntensity">mutation_intensity <span style="font-weight:400; color:var(--text-muted,#888);">(0 = off · 3 = aggressive)</span></label>
         <input id="mutationIntensity" class="input" type="number" min="0" max="3" value="0" />
       </div>
       <div class="modal-actions">
@@ -140,7 +109,7 @@
       </div>
       <div id="mutationStatus" class="modal-hint"></div>
       {% else %}
-      <div class="case-empty">PRO mutation requires a valid Pro licence.<br><span class="muted tiny-text">{{ pro_modular_reason or "not_available" }}</span></div>
+      <div class="case-empty">PRO mutation requires a valid Pro licence.<br><span style="font-size:0.8rem; color:var(--text-muted,#666);">{{ pro_modular_reason or "not_available" }}</span></div>
       {% endif %}
       {% else %}
       <div class="case-empty">Not available on this tier.</div>
@@ -151,18 +120,13 @@
   <div class="card">
     <div class="card-head">
       <div class="card-title">Pro — Rules</div>
-      <div class="card-subtitle">Conditional overrides based on path, method or UA.</div>
+      <div class="card-subtitle">Conditional overrides by path pattern, method or UA.</div>
     </div>
     <div class="card-body">
       {% if pro_modular_visible %}
       {% if pro_modular_enabled %}
       <div class="modal-form">
-        <label for="rulePathSelect">Path catalog</label>
-        <select id="rulePathSelect" class="input">
-          <option value="">Select discovered endpoint...</option>
-        </select>
-
-        <label for="rulePath">match.path <span class="muted">(* wildcard)</span></label>
+        <label for="rulePath">match.path <span style="font-weight:400; color:var(--text-muted,#888);">(* wildcard supported)</span></label>
         <input id="rulePath" class="input mono" type="text" placeholder="/admin/*" />
 
         <label for="ruleMethod">match.method</label>
@@ -175,25 +139,25 @@
           <option value="PATCH">PATCH</option>
         </select>
 
-        <label for="ruleUa">match.user_agent <span class="muted">(substring, * = any)</span></label>
+        <label for="ruleUa">match.user_agent <span style="font-weight:400; color:var(--text-muted,#888);">(substring · * = any)</span></label>
         <input id="ruleUa" class="input" type="text" placeholder="sqlmap" />
 
-        <label for="ruleRichness">action.change_richness <span class="muted">(-2 to +2, 0 = no change)</span></label>
+        <label for="ruleRichness">action.change_richness <span style="font-weight:400; color:var(--text-muted,#888);">(-2 to +2 · 0 = no change)</span></label>
         <input id="ruleRichness" class="input" type="number" min="-2" max="2" placeholder="0" />
 
-        <label for="ruleStatus">action.force_status <span class="muted">(optional)</span></label>
+        <label for="ruleStatus">action.force_status <span style="font-weight:400; color:var(--text-muted,#888);">(optional)</span></label>
         <input id="ruleStatus" class="input" type="number" min="100" max="599" placeholder="empty" />
 
-        <label for="ruleLatency">action.increase_latency ms <span class="muted">(optional, 0–5000)</span></label>
+        <label for="ruleLatency">action.increase_latency ms <span style="font-weight:400; color:var(--text-muted,#888);">(optional · 0–5000)</span></label>
         <input id="ruleLatency" class="input" type="number" min="0" max="5000" placeholder="250" />
       </div>
       <div class="modal-actions">
         <button class="btn btn-primary" type="button" onclick="addRule()">Add Rule</button>
       </div>
       <div id="rulesStatus" class="modal-hint"></div>
-      <div id="rulesList" class="muted" style="margin-top:12px;">Loading...</div>
+      <div id="rulesList" style="margin-top:12px; color:var(--text-muted,#666);">Loading...</div>
       {% else %}
-      <div class="case-empty">PRO rules require a valid Pro licence.<br><span class="muted tiny-text">{{ pro_modular_reason or "not_available" }}</span></div>
+      <div class="case-empty">PRO rules require a valid Pro licence.<br><span style="font-size:0.8rem; color:var(--text-muted,#666);">{{ pro_modular_reason or "not_available" }}</span></div>
       {% endif %}
       {% else %}
       <div class="case-empty">Not available on this tier.</div>
@@ -225,7 +189,7 @@
     <div id="analyticsStatus" class="modal-hint" style="margin-bottom:8px;"></div>
     <div id="analyticsContent"></div>
     {% else %}
-    <div class="case-empty">PRO analytics require a valid Pro licence.<br><span class="muted tiny-text">{{ pro_analytics_reason or "not_available" }}</span></div>
+    <div class="case-empty">PRO analytics require a valid Pro licence.<br><span style="font-size:0.8rem; color:var(--text-muted,#666);">{{ pro_analytics_reason or "not_available" }}</span></div>
     {% endif %}
     {% else %}
     <div class="case-empty">Not available on this tier.</div>
@@ -271,10 +235,8 @@
   const INITIAL_PRO_ANALYTICS_REASON = {{ (pro_analytics_reason|default(''))|tojson }};
 
   let stateCache = null;
-  // editMode: null = creating new, {method, path} = editing existing (path+method locked)
-  let editMode = null;
 
-  // ── Helpers ───────────────────────────────────────────────────────────────
+  // ── Helpers ────────────────────────────────────────────────────────────────
   function escapeHtml(value) {
     return String(value == null ? "" : value)
       .replaceAll("&", "&amp;").replaceAll("<", "&lt;")
@@ -288,11 +250,20 @@
     return isNaN(n) ? null : Math.trunc(n);
   }
 
-  function badge(text, color) {
-    return `<span style="display:inline-block; padding:1px 6px; border-radius:4px; font-size:0.75rem; background:${color}20; color:${color}; font-weight:600;">${escapeHtml(text)}</span>`;
+  // Parse a catalog dropdown value "METHOD /path" → {method, path}
+  function parseCatalogValue(val) {
+    const v = (val || "").trim();
+    const sp = v.indexOf(" ");
+    if (sp <= 0) return null;
+    return {method: v.slice(0, sp), path: v.slice(sp + 1)};
   }
 
-  // ── Feature status bar ────────────────────────────────────────────────────
+  // Badge with proper rgba() background so it always shows text
+  function badge(text, r, g, b) {
+    return `<span style="display:inline-block; padding:1px 7px; border-radius:4px; font-size:0.75rem; font-weight:600; background:rgba(${r},${g},${b},0.12); color:rgb(${r},${g},${b}); border:1px solid rgba(${r},${g},${b},0.3);">${escapeHtml(text)}</span>`;
+  }
+
+  // ── Feature status bar ─────────────────────────────────────────────────────
   function renderFeatureStatus() {
     const summary = document.getElementById("tierSummary");
     const detail = document.getElementById("featureStatus");
@@ -302,9 +273,7 @@
     const catalogSource = String(state.endpoint_catalog_source || "unknown");
     const catalogError = String(state.endpoint_catalog_error || "");
     if (summary) {
-      const mBadge = modEnabled ? "PRO: on" : "PRO: off";
-      const aBadge = anaEnabled ? "Analytics: on" : "Analytics: off";
-      summary.textContent = `${mBadge} | ${aBadge} | catalog: ${catalogSource}`;
+      summary.textContent = `PRO: ${modEnabled ? "on" : "off"} | Analytics: ${anaEnabled ? "on" : "off"} | catalog: ${catalogSource}`;
     }
     if (detail) {
       detail.textContent = catalogError
@@ -313,51 +282,33 @@
     }
   }
 
-  // ── Catalog dropdowns ─────────────────────────────────────────────────────
-  function applyCatalogSelection(selectEl, pathInputEl, methodSelectEl) {
-    if (!selectEl || !pathInputEl) return;
-    const val = selectEl.value || "";
-    if (!val) return;
-    const split = val.indexOf(" ");
-    if (split <= 0) return;
-    const method = val.slice(0, split);
-    const path = val.slice(split + 1);
-    if (!pathInputEl.readOnly) pathInputEl.value = path;
-    if (methodSelectEl && method && !methodSelectEl.disabled
-        && methodSelectEl.querySelector(`option[value="${method}"]`)) {
-      methodSelectEl.value = method;
-    }
-  }
-
+  // ── Catalog dropdowns ──────────────────────────────────────────────────────
   function renderEndpointCatalog() {
     const catalog = (stateCache && Array.isArray(stateCache.endpoint_catalog)) ? stateCache.endpoint_catalog : [];
-    const selects = [
-      document.getElementById("cfgPathSelect"),
-      document.getElementById("tplPathSelect"),
-      document.getElementById("rulePathSelect"),
-    ];
-    selects.forEach((sel) => {
+    const ids = ["cfgPathSelect", "tplPathSelect"];
+    ids.forEach((id) => {
+      const sel = document.getElementById(id);
       if (!sel) return;
       const current = sel.value;
-      sel.innerHTML = '<option value="">Select discovered endpoint...</option>';
+      sel.innerHTML = '<option value="">— select an endpoint —</option>';
       catalog.forEach((item) => {
         const method = String(item.method || "*").trim().toUpperCase() || "*";
         const path = String(item.path || "/").trim() || "/";
         const opt = document.createElement("option");
         opt.value = `${method} ${path}`;
-        opt.textContent = `${method} ${path}`;
+        opt.textContent = `${method}  ${path}`;
         sel.appendChild(opt);
       });
       if (current) sel.value = current;
     });
   }
 
-  // ── Templates dropdown ────────────────────────────────────────────────────
+  // ── Templates dropdown ─────────────────────────────────────────────────────
   const TEMPLATE_DESCRIPTIONS = {
-    balanced:   "Realistic full response (normal mode, richness 2)",
-    minimal:    "Stripped-down response (minimal mode, richness 0)",
-    error_trap: "Prefer error responses (error_bias mode, richness 1)",
-    disabled:   "Block endpoint with 404",
+    balanced:   "balanced — realistic full response (normal, richness 2)",
+    minimal:    "minimal — stripped-down response (minimal, richness 0)",
+    error_trap: "error_trap — prefer error responses (error_bias, richness 1)",
+    disabled:   "disabled — block with 404",
   };
 
   function renderTemplates() {
@@ -368,18 +319,18 @@
     Object.keys(templates).forEach((name) => {
       const opt = document.createElement("option");
       opt.value = name;
-      opt.textContent = TEMPLATE_DESCRIPTIONS[name] ? `${name} — ${TEMPLATE_DESCRIPTIONS[name]}` : name;
+      opt.textContent = TEMPLATE_DESCRIPTIONS[name] || name;
       sel.appendChild(opt);
     });
   }
 
-  // ── Current configs list ──────────────────────────────────────────────────
+  // ── Current configs list ───────────────────────────────────────────────────
   function renderEndpointConfigs() {
     const el = document.getElementById("endpointConfigs");
     if (!el) return;
     const rows = (stateCache && Array.isArray(stateCache.endpoint_configs)) ? stateCache.endpoint_configs : [];
     if (!rows.length) {
-      el.innerHTML = '<div class="muted">No custom endpoint configs. Default behaviour is active for all endpoints.</div>';
+      el.innerHTML = '<div style="color:var(--text-muted,#666);">No custom endpoint configs. Default behaviour is active for all endpoints.</div>';
       return;
     }
     const html = rows.map((item) => {
@@ -387,18 +338,23 @@
       const safeMethod = encodeURIComponent(item.method || "*");
       const safePath = encodeURIComponent(item.path || "/");
       const safeCfg = encodeURIComponent(JSON.stringify(cfg || {}));
-      const modeColor = cfg.response_mode === "error_bias" ? "#e05" : cfg.response_mode === "minimal" ? "#888" : "#48a";
-      const enabledColor = cfg.enabled ? "#2a8" : "#c44";
+      const enabledBadge = cfg.enabled
+        ? badge("enabled", 34, 160, 90)
+        : badge("disabled", 180, 50, 50);
+      const modeBadge = cfg.response_mode === "error_bias"
+        ? badge("error_bias", 200, 60, 60)
+        : cfg.response_mode === "minimal"
+          ? badge("minimal", 100, 100, 120)
+          : badge("normal", 60, 130, 160);
+      const statusBadge = cfg.fixed_status != null ? badge("→" + cfg.fixed_status, 200, 120, 30) : "";
+      const richBadge = badge("richness " + (cfg.richness_level ?? 2), 90, 90, 110);
       return `
         <div style="border:1px solid var(--stroke); border-radius:6px; padding:10px 12px; margin-bottom:8px;">
           <div class="mono" style="font-size:0.9rem; font-weight:600;">${escapeHtml(item.method)} ${escapeHtml(item.path)}</div>
-          <div style="margin:4px 0; display:flex; gap:6px; flex-wrap:wrap;">
-            ${badge(cfg.enabled ? "enabled" : "disabled", enabledColor)}
-            ${badge(cfg.response_mode || "normal", modeColor)}
-            ${cfg.fixed_status != null ? badge("→" + cfg.fixed_status, "#f80") : ""}
-            ${badge("richness " + (cfg.richness_level ?? 2), "#666")}
+          <div style="margin:5px 0; display:flex; gap:5px; flex-wrap:wrap;">
+            ${enabledBadge} ${modeBadge} ${statusBadge} ${richBadge}
           </div>
-          <div class="tiny-text muted">${escapeHtml(item.updated_ts || "")}</div>
+          <div style="font-size:0.75rem; color:var(--text-muted,#888);">${escapeHtml(item.updated_ts || "")}</div>
           <div class="modal-actions" style="margin-top:8px;">
             <button class="btn btn-outline btn-small" type="button" onclick="loadConfigToEditor('${safeMethod}','${safePath}','${safeCfg}')">Edit</button>
             <button class="btn btn-danger btn-small" type="button" onclick="deleteEndpointConfig('${safeMethod}','${safePath}')">Delete</button>
@@ -409,7 +365,51 @@
     el.innerHTML = html;
   }
 
-  // ── Mutation panel ────────────────────────────────────────────────────────
+  // Load an existing config into the form (selects the endpoint in the dropdown)
+  function loadConfigToEditor(methodEncoded, pathEncoded, cfgEncoded) {
+    const method = decodeURIComponent(methodEncoded || "");
+    const path = decodeURIComponent(pathEncoded || "");
+    let cfg = {};
+    try { cfg = JSON.parse(decodeURIComponent(cfgEncoded || "")); } catch (_e) {}
+
+    const pathSel = document.getElementById("cfgPathSelect");
+    if (pathSel) {
+      const target = `${method} ${path}`;
+      const found = Array.from(pathSel.options).some(o => o.value === target);
+      if (found) pathSel.value = target;
+    }
+
+    const enabledSel = document.getElementById("cfgEnabled");
+    const modeSel = document.getElementById("cfgMode");
+    const fixedInput = document.getElementById("cfgFixedStatus");
+    const richInput = document.getElementById("cfgRichness");
+    if (enabledSel) enabledSel.value = cfg.enabled ? "true" : "false";
+    if (modeSel && cfg.response_mode) modeSel.value = cfg.response_mode;
+    if (fixedInput) fixedInput.value = cfg.fixed_status == null ? "" : String(cfg.fixed_status);
+    if (richInput) richInput.value = cfg.richness_level == null ? "2" : String(cfg.richness_level);
+
+    const statusEl = document.getElementById("cfgStatus");
+    if (statusEl) statusEl.textContent = `Loaded ${method} ${path} — adjust and save.`;
+
+    window.scrollTo({top: 0, behavior: "smooth"});
+  }
+
+  function resetConfigForm() {
+    const pathSel = document.getElementById("cfgPathSelect");
+    const enabledSel = document.getElementById("cfgEnabled");
+    const modeSel = document.getElementById("cfgMode");
+    const fixedInput = document.getElementById("cfgFixedStatus");
+    const richInput = document.getElementById("cfgRichness");
+    if (pathSel) pathSel.value = "";
+    if (enabledSel) enabledSel.value = "true";
+    if (modeSel) modeSel.value = "normal";
+    if (fixedInput) fixedInput.value = "";
+    if (richInput) richInput.value = "2";
+    const statusEl = document.getElementById("cfgStatus");
+    if (statusEl) statusEl.textContent = "";
+  }
+
+  // ── Mutation panel ─────────────────────────────────────────────────────────
   function renderMutation() {
     const mutation = (stateCache && stateCache.mutation) ? stateCache.mutation : {};
     const policy = document.getElementById("mutationPolicy");
@@ -420,32 +420,32 @@
     if (current) {
       const p = mutation.mutation_policy || "none";
       const i = mutation.mutation_intensity ?? 0;
-      current.textContent = `Active: policy = ${p}, intensity = ${i}${i === 0 ? " (disabled)" : ""}`;
+      current.textContent = `Active: policy = ${p}, intensity = ${i}${i === 0 ? " (mutations off)" : ""}`;
     }
   }
 
-  // ── Rules list ────────────────────────────────────────────────────────────
+  // ── Rules list ─────────────────────────────────────────────────────────────
   function formatRule(rule) {
     const m = rule.match || {};
     const a = rule.action || {};
-    const parts = [];
-    const method = m.method && m.method !== "*" ? m.method : "*";
+    const method = (m.method && m.method !== "*") ? m.method : "*";
     const path = m.path || "*";
-    parts.push(`<span class="mono">${escapeHtml(method)} ${escapeHtml(path)}</span>`);
-    if (m.user_agent && m.user_agent !== "*") parts.push(`UA contains <b>${escapeHtml(m.user_agent)}</b>`);
+    const ua = (m.user_agent && m.user_agent !== "*") ? ` · UA contains "${escapeHtml(m.user_agent)}"` : "";
+
     const actions = [];
-    if (a.force_status != null) actions.push(`→ status <b>${escapeHtml(a.force_status)}</b>`);
+    if (a.force_status != null) actions.push(`→ status ${escapeHtml(a.force_status)}`);
     if (a.change_richness != null && a.change_richness !== 0) actions.push(`richness ${a.change_richness > 0 ? "+" : ""}${a.change_richness}`);
-    if (a.increase_latency != null && a.increase_latency > 0) actions.push(`+${escapeHtml(a.increase_latency)}ms delay`);
+    if (a.increase_latency != null && a.increase_latency > 0) actions.push(`+${escapeHtml(a.increase_latency)} ms delay`);
     const actionStr = actions.length ? actions.join(", ") : "no action";
+
     return `<div style="border:1px solid var(--stroke); border-radius:6px; padding:8px 12px; margin-bottom:6px;">
       <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px;">
         <div>
-          <span class="tiny-text muted" style="margin-right:6px;">#${rule.id}</span>
-          ${parts.join(" · ")}
-          <div class="tiny-text" style="margin-top:3px; color:var(--accent,#4f7cff);">${actionStr}</div>
+          <span style="font-size:0.78rem; color:var(--text-muted,#888); margin-right:6px;">#${escapeHtml(rule.id)}</span>
+          <span class="mono" style="font-size:0.85rem;">${escapeHtml(method)} ${escapeHtml(path)}</span>${ua}
+          <div style="margin-top:4px; font-size:0.8rem; font-weight:600; color:var(--text,#222);">${actionStr}</div>
         </div>
-        <button class="btn btn-danger btn-small" type="button" onclick="deleteRule(${rule.id})" style="flex-shrink:0;">Delete</button>
+        <button class="btn btn-danger btn-small" type="button" onclick="deleteRule(${escapeHtml(rule.id)})" style="flex-shrink:0;">Delete</button>
       </div>
     </div>`;
   }
@@ -455,34 +455,41 @@
     if (!el) return;
     const rows = (stateCache && Array.isArray(stateCache.rules)) ? stateCache.rules : [];
     if (!rows.length) {
-      el.innerHTML = '<div class="muted">No rules configured.</div>';
+      el.innerHTML = '<div style="color:var(--text-muted,#666);">No rules configured.</div>';
       return;
     }
     el.innerHTML = rows.map(formatRule).join("");
   }
 
-  // ── Analytics tables ──────────────────────────────────────────────────────
+  // ── Analytics tables ───────────────────────────────────────────────────────
   function renderAnalytics(data) {
     const el = document.getElementById("analyticsContent");
     if (!el) return;
-    if (!data || typeof data !== "object") { el.innerHTML = '<div class="muted">No data.</div>'; return; }
+    if (!data || typeof data !== "object") {
+      el.innerHTML = '<div style="color:var(--text-muted,#666);">No data.</div>';
+      return;
+    }
 
     function makeTable(title, rows, cols) {
-      if (!rows || !rows.length) return `<div style="margin-bottom:16px;"><b>${escapeHtml(title)}</b> <span class="muted tiny-text">(no data)</span></div>`;
-      const head = cols.map(c => `<th style="text-align:left; padding:4px 8px; border-bottom:1px solid var(--stroke); white-space:nowrap;">${escapeHtml(c.label)}</th>`).join("");
+      if (!rows || !rows.length) {
+        return `<div style="margin-bottom:16px;"><b>${escapeHtml(title)}</b> <span style="color:var(--text-muted,#888); font-size:0.8rem;">(no data)</span></div>`;
+      }
+      const thStyle = "text-align:left; padding:5px 10px; border-bottom:2px solid var(--stroke); font-size:0.8rem; white-space:nowrap; color:var(--text,#222);";
+      const tdStyle = "padding:4px 10px; border-bottom:1px solid var(--stroke); font-size:0.81rem; color:var(--text,#222); white-space:nowrap;";
+      const head = cols.map(c => `<th style="${thStyle}">${escapeHtml(c.label)}</th>`).join("");
       const body = rows.map(row => {
         const cells = cols.map(c => {
           let val = row[c.key];
           if (val == null) val = "—";
-          if (c.format) val = c.format(val, row);
-          return `<td style="padding:4px 8px; border-bottom:1px solid var(--stroke); ${c.mono ? "font-family:monospace;" : ""} white-space:nowrap;">${escapeHtml(String(val))}</td>`;
+          else if (c.format) val = c.format(val, row);
+          return `<td style="${tdStyle}${c.mono ? " font-family:monospace;" : ""}">${escapeHtml(String(val))}</td>`;
         }).join("");
         return `<tr>${cells}</tr>`;
       }).join("");
       return `<div style="margin-bottom:20px;">
-        <div style="font-weight:600; font-size:0.85rem; margin-bottom:6px;">${escapeHtml(title)}</div>
-        <div style="overflow-x:auto;">
-          <table style="width:100%; border-collapse:collapse; font-size:0.82rem;">
+        <div style="font-weight:600; font-size:0.85rem; margin-bottom:6px; color:var(--text,#222);">${escapeHtml(title)}</div>
+        <div style="overflow-x:auto; border:1px solid var(--stroke); border-radius:6px;">
+          <table style="width:100%; border-collapse:collapse;">
             <thead><tr>${head}</tr></thead>
             <tbody>${body}</tbody>
           </table>
@@ -490,121 +497,39 @@
       </div>`;
     }
 
-    const pct = (v) => v != null ? (Number(v) * 100).toFixed(1) + "%" : "—";
-    const num = (v) => v != null ? Number(v).toFixed(0) : "—";
+    const pct = v => v != null ? (Number(v) * 100).toFixed(1) + "%" : "—";
+    const ms  = v => v != null ? Number(v).toFixed(0) + " ms" : "—";
+    const f2  = v => v != null ? Number(v).toFixed(2) : "—";
 
-    const endpointTable = makeTable("Endpoint Metrics", data.endpoints || [], [
-      {key: "method", label: "Method"},
-      {key: "path", label: "Path", mono: true},
-      {key: "hits", label: "Hits"},
-      {key: "errors", label: "Errors"},
-      {key: "error_rate", label: "Error %", format: pct},
-      {key: "avg_status", label: "Avg Status", format: num},
-      {key: "avg_latency_ms", label: "Avg Latency", format: (v) => v != null ? num(v) + " ms" : "—"},
-    ]);
-
-    const interestTable = makeTable("Interest Scoring (suspicious endpoints)", data.interest || [], [
-      {key: "path", label: "Path", mono: true},
-      {key: "score", label: "Score", format: (v) => v != null ? Number(v).toFixed(2) : "—"},
-      {key: "hits", label: "Hits"},
-      {key: "actor_count", label: "Actors"},
-      {key: "error_rate", label: "Error %", format: pct},
-      {key: "is_sensitive", label: "Sensitive", format: (v) => v ? "yes" : "no"},
-    ]);
-
-    const fpTable = makeTable("Actor Fingerprinting", data.fingerprinting || [], [
-      {key: "actor_id", label: "Actor ID", mono: true},
-      {key: "score", label: "Score", format: (v) => v != null ? Number(v).toFixed(2) : "—"},
-      {key: "paths_count", label: "Paths"},
-      {key: "ua_count", label: "UAs"},
-      {key: "error_rate", label: "Error %", format: pct},
-    ]);
-
-    el.innerHTML = `<div class="tiny-text muted" style="margin-bottom:10px;">Window: last ${escapeHtml(data.window_hours)} h</div>` + endpointTable + interestTable + fpTable;
+    el.innerHTML =
+      `<div style="font-size:0.8rem; color:var(--text-muted,#888); margin-bottom:12px;">Window: last ${escapeHtml(data.window_hours)} h</div>` +
+      makeTable("Endpoint Metrics", data.endpoints || [], [
+        {key: "method",        label: "Method"},
+        {key: "path",          label: "Path", mono: true},
+        {key: "hits",          label: "Hits"},
+        {key: "errors",        label: "Errors"},
+        {key: "error_rate",    label: "Error %", format: pct},
+        {key: "avg_status",    label: "Avg Status"},
+        {key: "avg_latency_ms",label: "Avg Latency", format: ms},
+      ]) +
+      makeTable("Interest Scoring — suspicious endpoints", data.interest || [], [
+        {key: "path",       label: "Path", mono: true},
+        {key: "score",      label: "Score", format: f2},
+        {key: "hits",       label: "Hits"},
+        {key: "actor_count",label: "Actors"},
+        {key: "error_rate", label: "Error %", format: pct},
+        {key: "is_sensitive",label: "Sensitive", format: v => v ? "yes" : "no"},
+      ]) +
+      makeTable("Actor Fingerprinting", data.fingerprinting || [], [
+        {key: "actor_id",   label: "Actor ID", mono: true},
+        {key: "score",      label: "Score", format: f2},
+        {key: "paths_count",label: "Paths"},
+        {key: "ua_count",   label: "UAs"},
+        {key: "error_rate", label: "Error %", format: pct},
+      ]);
   }
 
-  // ── Edit mode management ──────────────────────────────────────────────────
-  function _setPathMethodLock(locked) {
-    const pathInput = document.getElementById("cfgPath");
-    const methodSel = document.getElementById("cfgMethod");
-    const pathSel = document.getElementById("cfgPathSelect");
-    if (pathInput) {
-      pathInput.readOnly = locked;
-      pathInput.style.opacity = locked ? "0.65" : "";
-      pathInput.style.cursor = locked ? "not-allowed" : "";
-    }
-    if (methodSel) {
-      methodSel.disabled = locked;
-      methodSel.style.opacity = locked ? "0.65" : "";
-    }
-    if (pathSel) {
-      pathSel.disabled = locked;
-      pathSel.style.opacity = locked ? "0.65" : "";
-    }
-  }
-
-  function loadConfigToEditor(methodEncoded, pathEncoded, cfgEncoded) {
-    const method = decodeURIComponent(methodEncoded || "");
-    const path = decodeURIComponent(pathEncoded || "");
-    let cfg = {};
-    try { cfg = JSON.parse(decodeURIComponent(cfgEncoded || "")); } catch (_e) {}
-
-    editMode = {method, path};
-
-    const pathInput = document.getElementById("cfgPath");
-    const methodSel = document.getElementById("cfgMethod");
-    const enabledSel = document.getElementById("cfgEnabled");
-    const modeSel = document.getElementById("cfgMode");
-    const fixedInput = document.getElementById("cfgFixedStatus");
-    const richInput = document.getElementById("cfgRichness");
-
-    if (pathInput) pathInput.value = path;
-    if (methodSel) methodSel.value = method;
-    if (enabledSel) enabledSel.value = cfg.enabled ? "true" : "false";
-    if (modeSel && cfg.response_mode) modeSel.value = cfg.response_mode;
-    if (fixedInput) fixedInput.value = cfg.fixed_status == null ? "" : String(cfg.fixed_status);
-    if (richInput) richInput.value = cfg.richness_level == null ? "2" : String(cfg.richness_level);
-
-    _setPathMethodLock(true);
-
-    const banner = document.getElementById("editModeBanner");
-    const label = document.getElementById("editModeLabel");
-    if (label) label.textContent = `${method} ${path}`;
-    if (banner) banner.style.display = "flex";
-
-    // Scroll form into view
-    banner && banner.scrollIntoView({behavior: "smooth", block: "nearest"});
-    const statusEl = document.getElementById("cfgStatus");
-    if (statusEl) statusEl.textContent = "";
-  }
-
-  function clearConfigForm() {
-    editMode = null;
-    _setPathMethodLock(false);
-
-    const pathInput = document.getElementById("cfgPath");
-    const methodSel = document.getElementById("cfgMethod");
-    const enabledSel = document.getElementById("cfgEnabled");
-    const modeSel = document.getElementById("cfgMode");
-    const fixedInput = document.getElementById("cfgFixedStatus");
-    const richInput = document.getElementById("cfgRichness");
-    const pathSel = document.getElementById("cfgPathSelect");
-
-    if (pathInput) pathInput.value = "";
-    if (methodSel) methodSel.value = "*";
-    if (enabledSel) enabledSel.value = "true";
-    if (modeSel) modeSel.value = "normal";
-    if (fixedInput) fixedInput.value = "";
-    if (richInput) richInput.value = "2";
-    if (pathSel) pathSel.value = "";
-
-    const banner = document.getElementById("editModeBanner");
-    if (banner) banner.style.display = "none";
-    const statusEl = document.getElementById("cfgStatus");
-    if (statusEl) statusEl.textContent = "";
-  }
-
-  // ── State load ────────────────────────────────────────────────────────────
+  // ── State load ─────────────────────────────────────────────────────────────
   async function loadState() {
     try {
       const res = await fetch("/dashboard/api-modular/state");
@@ -624,12 +549,18 @@
     }
   }
 
-  // ── Config save / delete ──────────────────────────────────────────────────
+  // ── Config save / delete ───────────────────────────────────────────────────
   async function saveEndpointConfig() {
     const statusEl = document.getElementById("cfgStatus");
+    const catalogVal = (document.getElementById("cfgPathSelect") || {}).value || "";
+    const ep = parseCatalogValue(catalogVal);
+    if (!ep) {
+      if (statusEl) statusEl.textContent = "Select an endpoint from the catalog first.";
+      return;
+    }
     const payload = {
-      path: (document.getElementById("cfgPath") || {}).value || "",
-      method: (document.getElementById("cfgMethod") || {}).value || "*",
+      path: ep.path,
+      method: ep.method,
       config: {
         enabled: ((document.getElementById("cfgEnabled") || {}).value || "true") === "true",
         response_mode: (document.getElementById("cfgMode") || {}).value || "normal",
@@ -637,10 +568,6 @@
         richness_level: Number((document.getElementById("cfgRichness") || {}).value ?? 2),
       },
     };
-    if (!payload.path) {
-      if (statusEl) statusEl.textContent = "Path is required.";
-      return;
-    }
     if (statusEl) statusEl.textContent = "Saving...";
     try {
       const res = await fetch("/dashboard/api-modular/config", {
@@ -653,8 +580,7 @@
         if (statusEl) statusEl.textContent = `Save failed: ${text}`;
         return;
       }
-      if (statusEl) statusEl.textContent = editMode ? `Updated ${editMode.method} ${editMode.path}.` : "Saved.";
-      clearConfigForm();
+      if (statusEl) statusEl.textContent = `Saved ${ep.method} ${ep.path}.`;
       await loadState();
     } catch (err) {
       if (statusEl) statusEl.textContent = `Save failed: ${err.message || "request_failed"}`;
@@ -667,8 +593,6 @@
     if (!confirm(`Delete config for ${method} ${path}?`)) return;
     const statusEl = document.getElementById("cfgStatus");
     if (statusEl) statusEl.textContent = `Deleting ${method} ${path}...`;
-    // If we were editing this same entry, clear the form
-    if (editMode && editMode.method === method && editMode.path === path) clearConfigForm();
     try {
       const res = await fetch("/dashboard/api-modular/config/delete", {
         method: "POST",
@@ -687,16 +611,22 @@
     }
   }
 
-  // ── Template apply ────────────────────────────────────────────────────────
+  // ── Template apply ─────────────────────────────────────────────────────────
   async function applyTemplate() {
     const statusEl = document.getElementById("cfgStatus");
+    const catalogVal = (document.getElementById("tplPathSelect") || {}).value || "";
+    const ep = parseCatalogValue(catalogVal);
+    if (!ep) {
+      if (statusEl) statusEl.textContent = "Select an endpoint from the catalog first.";
+      return;
+    }
     const payload = {
       template_name: (document.getElementById("tplName") || {}).value || "",
-      path: (document.getElementById("tplPath") || {}).value || "",
-      method: (document.getElementById("tplMethod") || {}).value || "*",
+      path: ep.path,
+      method: ep.method,
     };
-    if (!payload.path) {
-      if (statusEl) statusEl.textContent = "Path is required.";
+    if (!payload.template_name) {
+      if (statusEl) statusEl.textContent = "Select a template first.";
       return;
     }
     if (statusEl) statusEl.textContent = "Applying template...";
@@ -711,21 +641,21 @@
         if (statusEl) statusEl.textContent = `Template failed: ${text}`;
         return;
       }
-      if (statusEl) statusEl.textContent = `Template '${payload.template_name}' applied to ${payload.method} ${payload.path}.`;
+      if (statusEl) statusEl.textContent = `Template '${payload.template_name}' applied to ${ep.method} ${ep.path}.`;
       await loadState();
     } catch (err) {
       if (statusEl) statusEl.textContent = `Template failed: ${err.message || "request_failed"}`;
     }
   }
 
-  // ── Mutation save ─────────────────────────────────────────────────────────
+  // ── Mutation save ──────────────────────────────────────────────────────────
   async function saveMutation() {
     const statusEl = document.getElementById("mutationStatus");
     const payload = {
       mutation_policy: (document.getElementById("mutationPolicy") || {}).value || "none",
       mutation_intensity: Number((document.getElementById("mutationIntensity") || {}).value || 0),
     };
-    if (statusEl) statusEl.textContent = "Saving mutation...";
+    if (statusEl) statusEl.textContent = "Saving...";
     try {
       const res = await fetch("/dashboard/api-modular/mutation", {
         method: "POST",
@@ -744,12 +674,17 @@
     }
   }
 
-  // ── Rules ─────────────────────────────────────────────────────────────────
+  // ── Rules ──────────────────────────────────────────────────────────────────
   async function addRule() {
     const statusEl = document.getElementById("rulesStatus");
+    const rPath = (document.getElementById("rulePath") || {}).value || "";
+    if (!rPath) {
+      if (statusEl) statusEl.textContent = "match.path is required.";
+      return;
+    }
     const payload = {
       match: {
-        path: (document.getElementById("rulePath") || {}).value || "",
+        path: rPath,
         method: (document.getElementById("ruleMethod") || {}).value || "*",
         user_agent: (document.getElementById("ruleUa") || {}).value || "",
       },
@@ -759,10 +694,6 @@
         increase_latency: valueOrNullInt((document.getElementById("ruleLatency") || {}).value),
       },
     };
-    if (!payload.match.path) {
-      if (statusEl) statusEl.textContent = "match.path is required.";
-      return;
-    }
     if (statusEl) statusEl.textContent = "Adding rule...";
     try {
       const res = await fetch("/dashboard/api-modular/rules", {
@@ -776,10 +707,9 @@
         return;
       }
       if (statusEl) statusEl.textContent = "Rule added.";
-      // Clear rule form fields
       ["rulePath", "ruleUa", "ruleRichness", "ruleStatus", "ruleLatency"].forEach(id => {
         const el = document.getElementById(id);
-        if (el) el.value = id === "ruleRichness" ? "0" : "";
+        if (el) el.value = "";
       });
       const rm = document.getElementById("ruleMethod");
       if (rm) rm.value = "*";
@@ -810,7 +740,7 @@
     }
   }
 
-  // ── Analytics ─────────────────────────────────────────────────────────────
+  // ── Analytics ──────────────────────────────────────────────────────────────
   async function loadAnalytics() {
     const statusEl = document.getElementById("analyticsStatus");
     const hoursSel = document.getElementById("analyticsHours");
@@ -823,19 +753,18 @@
         if (statusEl) statusEl.textContent = `Analytics failed: ${text}`;
         return;
       }
-      const data = JSON.parse(text || "{}");
-      renderAnalytics(data);
+      renderAnalytics(JSON.parse(text || "{}"));
       if (statusEl) statusEl.textContent = "";
     } catch (err) {
       if (statusEl) statusEl.textContent = `Analytics failed: ${err.message || "request_failed"}`;
     }
   }
 
-  // ── Resolve config ────────────────────────────────────────────────────────
+  // ── Resolve config ─────────────────────────────────────────────────────────
   async function resolveConfig() {
     const statusEl = document.getElementById("resolveStatus");
     const outputEl = document.getElementById("resolveOutput");
-    const path = (document.getElementById("resolvePath") || {}).value || "/";
+    const path   = (document.getElementById("resolvePath")   || {}).value || "/";
     const method = (document.getElementById("resolveMethod") || {}).value || "GET";
     if (statusEl) statusEl.textContent = "Resolving...";
     if (outputEl) outputEl.innerHTML = "";
@@ -847,39 +776,31 @@
         return;
       }
       const data = JSON.parse(text || "{}");
-      const r = data.resolved || {};
+      const r   = data.resolved || {};
       const cfg = r.config || {};
       if (statusEl) statusEl.textContent = "";
       if (outputEl) {
         const rows = [
-          ["match_type", escapeHtml(r.match_type || "default")],
-          ["enabled", escapeHtml(cfg.enabled)],
+          ["match_type",    escapeHtml(r.match_type || "default")],
+          ["enabled",       escapeHtml(cfg.enabled)],
           ["response_mode", escapeHtml(cfg.response_mode)],
-          ["fixed_status", cfg.fixed_status != null ? escapeHtml(cfg.fixed_status) : "—"],
-          ["richness_level", escapeHtml(cfg.richness_level)],
+          ["fixed_status",  cfg.fixed_status != null ? escapeHtml(cfg.fixed_status) : "—"],
+          ["richness_level",escapeHtml(cfg.richness_level)],
         ];
         const trs = rows.map(([k, v]) =>
-          `<tr><td style="padding:3px 10px 3px 0; font-weight:600; white-space:nowrap;">${k}</td><td class="mono" style="padding:3px 0;">${v}</td></tr>`
+          `<tr>
+            <td style="padding:3px 12px 3px 0; font-weight:600; font-size:0.82rem; white-space:nowrap; color:var(--text,#222);">${k}</td>
+            <td class="mono" style="padding:3px 0; font-size:0.82rem; color:var(--text,#222);">${v}</td>
+          </tr>`
         ).join("");
-        outputEl.innerHTML = `<table style="font-size:0.82rem; border-collapse:collapse;">${trs}</table>`;
+        outputEl.innerHTML = `<table style="border-collapse:collapse;">${trs}</table>`;
       }
     } catch (err) {
       if (statusEl) statusEl.textContent = `Resolve failed: ${err.message || "request_failed"}`;
     }
   }
 
-  // ── Event listeners ───────────────────────────────────────────────────────
-  document.getElementById("cfgPathSelect")?.addEventListener("change", (ev) => {
-    applyCatalogSelection(ev.target, document.getElementById("cfgPath"), document.getElementById("cfgMethod"));
-  });
-  document.getElementById("tplPathSelect")?.addEventListener("change", (ev) => {
-    applyCatalogSelection(ev.target, document.getElementById("tplPath"), document.getElementById("tplMethod"));
-  });
-  document.getElementById("rulePathSelect")?.addEventListener("change", (ev) => {
-    applyCatalogSelection(ev.target, document.getElementById("rulePath"), document.getElementById("ruleMethod"));
-  });
-
-  // ── Boot ──────────────────────────────────────────────────────────────────
+  // ── Boot ───────────────────────────────────────────────────────────────────
   renderFeatureStatus();
   loadState().then(() => {
     const state = stateCache || {};
