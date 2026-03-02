@@ -38,6 +38,8 @@ API_CATALOG_CACHE: dict[str, object] = {"ts": 0, "catalog": [], "source": "none"
 # Auto-recompute campaigns: set HP_CAMPAIGN_AUTO_RECOMPUTE_THRESHOLD > 0 to enable.
 _CAMPAIGN_AUTO_THRESHOLD = int(os.getenv("HP_CAMPAIGN_AUTO_RECOMPUTE_THRESHOLD", "0") or 0)
 _CAMPAIGN_AUTO_INTERVAL = int(os.getenv("HP_CAMPAIGN_AUTO_RECOMPUTE_INTERVAL", "3600") or 3600)
+# Used to identify internal panel→public requests so they are not logged as actors.
+_HP_MONITOR_SECRET = os.getenv("HP_MONITOR_SECRET", "").strip()
 
 app = FastAPI(title=APP_NAME)
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -1512,7 +1514,10 @@ def _honeypot_public_endpoint_catalog() -> tuple[list[dict], str, str]:
     if HP_PUBLIC_BASE_URL:
         url = f"{HP_PUBLIC_BASE_URL}/openapi.json"
         try:
-            req = urllib.request.Request(url, headers={"accept": "application/json"})
+            _fetch_headers: dict[str, str] = {"accept": "application/json"}
+            if _HP_MONITOR_SECRET:
+                _fetch_headers["x-internal-monitor"] = _HP_MONITOR_SECRET
+            req = urllib.request.Request(url, headers=_fetch_headers)
             with urllib.request.urlopen(req, timeout=3.0) as resp:
                 raw = resp.read()
             parsed = json.loads(raw.decode("utf-8", errors="ignore") or "{}")
