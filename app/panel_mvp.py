@@ -930,6 +930,11 @@ def _compute_campaigns(conn: sqlite3.Connection, config: dict) -> dict:
     cur = conn.cursor()
     cur.execute("DELETE FROM campaign_actor_links")
     cur.execute("DELETE FROM campaigns")
+    # Null out case references so no case points to a now-deleted campaign.
+    try:
+        cur.execute("UPDATE cases SET campaign_id=NULL WHERE campaign_id IS NOT NULL")
+    except Exception:
+        pass  # cases table may not exist in very old DBs
 
     cache_enabled = True
     # actor_fingerprints may not exist on older DBs
@@ -1970,9 +1975,22 @@ def dashboard_case_detail(case_id: int, request: Request):
         cur.execute("SELECT id, ref_type, ref_id, note, added_at FROM case_evidence WHERE case_id=? ORDER BY added_at DESC", (case_id,))
         evidence_rows = [dict(r) for r in cur.fetchall()]
 
-        # Campaigns list for linking
-        cur.execute("SELECT campaign_id, label FROM campaigns ORDER BY last_seen_at DESC LIMIT 200")
-        campaigns = [dict(r) for r in cur.fetchall()]
+        # Campaigns list for linking — only when the feature is licensed AND results are verified.
+        campaigns: list[dict] = []
+        campaigns_verified = False
+        if _has_feature(licensing.Feature.CAMPAIGNS, action="case_detail_campaign_list"):
+            try:
+                campaigns_pro.ensure_campaign_pro_state_table(conn)
+                campaigns_verified = campaigns_pro.can_render_verified_campaigns(
+                    conn, backend_enabled=bool(campaigns_pro.pro_backend_url())
+                )
+                if campaigns_verified:
+                    cur.execute(
+                        "SELECT campaign_id, label FROM campaigns ORDER BY last_seen_at DESC LIMIT 200"
+                    )
+                    campaigns = [dict(r) for r in cur.fetchall()]
+            except Exception:
+                campaigns_verified = False
 
         # Build case intelligence snapshot
         actor_ids = [a["actor_id"] for a in actors]
@@ -2059,6 +2077,7 @@ def dashboard_case_detail(case_id: int, request: Request):
             "replay_sessions": replay_sessions,
             "replay_steps": replay_steps,
             "campaigns": campaigns,
+            "campaigns_verified": campaigns_verified,
             "case_timeline": timeline,
             "case_endpoints": endpoints_summary.get("top_paths") or [],
             "case_stage": stage_info,
@@ -3195,6 +3214,11 @@ def delete_campaign(campaign_id: str):
         if deleted == 0:
             conn.rollback()
             raise HTTPException(status_code=404, detail="campaign not found")
+        # Null out case references to this campaign so no case is left with a stale FK.
+        try:
+            cur.execute("UPDATE cases SET campaign_id=NULL WHERE campaign_id=?", (campaign_id,))
+        except Exception:
+            pass
         conn.commit()
         return {"ok": True}
     finally:

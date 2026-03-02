@@ -32,13 +32,31 @@
       </div>
       <div>
         <label class="muted">Campaign</label>
-        <select id="caseCampaignSelect" class="input input-lg">
-          <option value="">No campaign</option>
-          {% for c in campaigns %}
-            <option value="{{ c.campaign_id }}" {% if case.campaign_id == c.campaign_id %}selected{% endif %}>{{ c.campaign_id }}{% if c.label %} — {{ c.label }}{% endif %}</option>
-          {% endfor %}
-        </select>
-        <button class="btn btn-outline btn-small" type="button" onclick="updateCaseCampaign()">Link campaign</button>
+        {% if campaigns %}
+          {# Campaigns are available and verified — show the full selector. #}
+          <select id="caseCampaignSelect" class="input input-lg">
+            <option value="">No campaign</option>
+            {% for c in campaigns %}
+              <option value="{{ c.campaign_id }}" {% if case.campaign_id == c.campaign_id %}selected{% endif %}>
+                {{ c.campaign_id }}{% if c.label %} — {{ c.label }}{% endif %}
+              </option>
+            {% endfor %}
+          </select>
+          <button class="btn btn-outline btn-small" type="button" onclick="updateCaseCampaign()">Link campaign</button>
+        {% elif case.campaign_id %}
+          {# Case has a campaign assigned but results aren't verified / campaigns not computed yet. #}
+          <div class="mono" style="font-size:0.88rem; margin-bottom:4px;">{{ case.campaign_id }}</div>
+          <div class="tiny-text" style="color:var(--text-muted,#888);">
+            Campaign results are not verified.
+            <a href="/dashboard/campaigns">Recompute</a> to update the list.
+          </div>
+        {% else %}
+          {# No campaigns at all and no assignment — friendly nudge. #}
+          <div class="tiny-text" style="color:var(--text-muted,#888);">
+            No campaigns computed yet.
+            <a href="/dashboard/campaigns">Go to campaigns</a> to run a recompute.
+          </div>
+        {% endif %}
       </div>
     </div>
   </div>
