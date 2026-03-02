@@ -1664,37 +1664,6 @@ async def log_all_requests(request: Request, call_next):
     return response
 
 
-@app.get("/__debug/modular/resolve", include_in_schema=False, response_class=JSONResponse)
-async def debug_modular_resolve(path: str = "/", method: str = "GET"):
-    conn = _db()
-    try:
-        _ensure_schema(conn)
-        resolved = api_modular.resolve_endpoint_config(
-            conn,
-            path=path,
-            method=method,
-            ensure_schema=False,
-        )
-        return {
-            "db_path": DB_PATH,
-            "path": str(path or "/"),
-            "method": str(method or "GET").upper(),
-            "resolved": resolved,
-        }
-    except Exception as exc:
-        return JSONResponse(
-            status_code=500,
-            content={
-                "db_path": DB_PATH,
-                "path": str(path or "/"),
-                "method": str(method or "GET").upper(),
-                "error": _short_error(exc),
-            },
-        )
-    finally:
-        conn.close()
-
-
 @app.get("/health", tags=["Health"], response_class=JSONResponse)
 async def health(request: Request):
     """Decoy health endpoint – returns fabricated status and never leaks real readiness data."""

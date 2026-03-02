@@ -1681,6 +1681,29 @@ def dashboard_api_modular_analytics(hours: int = 24):
     }
 
 
+@app.get("/dashboard/api-modular/resolve", response_class=JSONResponse)
+def dashboard_api_modular_resolve(path: str = "/", method: str = "GET"):
+    conn = db()
+    try:
+        ensure_schema(conn)
+        api_modular.ensure_tables(conn)
+        resolved = api_modular.resolve_endpoint_config(
+            conn,
+            path=path,
+            method=method,
+            ensure_schema=False,
+        )
+        return {
+            "path": str(path or "/"),
+            "method": str(method or "GET").upper(),
+            "resolved": resolved,
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)[:200])
+    finally:
+        conn.close()
+
+
 @app.get("/dashboard/actors", response_class=HTMLResponse)
 def dashboard(request: Request):
     conn = db()

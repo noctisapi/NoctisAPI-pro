@@ -217,9 +217,11 @@
       .replaceAll("'", "&#39;");
   }
 
-  function valueOrNull(raw){
+  function valueOrNullInt(raw){
     const txt = String(raw ?? "").trim();
-    return txt === "" ? null : txt;
+    if(txt === "") return null;
+    const n = Number(txt);
+    return isNaN(n) ? null : Math.trunc(n);
   }
 
   function renderFeatureStatus(){
@@ -405,7 +407,7 @@
       config: {
         enabled: ((document.getElementById("cfgEnabled") || {}).value || "true") === "true",
         response_mode: (document.getElementById("cfgMode") || {}).value || "normal",
-        fixed_status: valueOrNull((document.getElementById("cfgFixedStatus") || {}).value),
+        fixed_status: valueOrNullInt((document.getElementById("cfgFixedStatus") || {}).value),
         richness_level: Number((document.getElementById("cfgRichness") || {}).value || 2),
       },
     };
@@ -511,9 +513,9 @@
         user_agent: (document.getElementById("ruleUa") || {}).value || "",
       },
       action: {
-        change_richness: valueOrNull((document.getElementById("ruleRichness") || {}).value),
-        force_status: valueOrNull((document.getElementById("ruleStatus") || {}).value),
-        increase_latency: valueOrNull((document.getElementById("ruleLatency") || {}).value),
+        change_richness: valueOrNullInt((document.getElementById("ruleRichness") || {}).value),
+        force_status: valueOrNullInt((document.getElementById("ruleStatus") || {}).value),
+        increase_latency: valueOrNullInt((document.getElementById("ruleLatency") || {}).value),
       },
     };
     if(statusEl){ statusEl.textContent = "Adding rule..."; }
