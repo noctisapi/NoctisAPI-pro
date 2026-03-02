@@ -32,11 +32,6 @@ Recommended configuration:
 
 Advanced behavior:
 - `INSTANCE_FINGERPRINT_SHA256` or `HP_HOST_MACHINE_ID_PATH` for stable fingerprint
-- `HP_ENFORCE_LICENSE=1` – completely prohibit core when license fails
-- `HP_LICENSE_DENY_BEHAVIOUR` (exit|warn|none)
-- `HP_LICENSE_LIMITED_BEHAVIOUR` (core|pro)
-- `LICENSING_HTTP_TIMEOUT_SECONDS`, `LICENSING_MIN_RENEW_SECONDS` for backend timing
-- `PRO_RESULTS_PUBLIC_KEY_PATH` to verify signed campaign/lease results
 
 Other environment knobs exist (actor UA mode, monitor UA, etc.) – see
 `.env.prod.example` for a complete list.

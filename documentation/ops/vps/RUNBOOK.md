@@ -59,9 +59,13 @@ This runbook covers:
     - `HP_ACTOR_UA_MODE=family` (recommended; `ip` or `full` also supported)
     - `PRO_BACKEND_URL=https://pro-backend.example.com` (required for PRO validation)
     - `LICENSE_KEY=sk_live_...` (end-user input)
+    - `LICENSING_URL=https://license.unkwn0wn.com` (alternate backend)
     - `LICENSING_PINNED_PUBLIC_KEY_PATH=/app/app/licensing_server_public_key.pem` (pinned RSA public key PEM)
     - `INSTANCE_ID_PATH=/var/lib/myapp/instance_id` (default)
     - `HP_PRO_LEASE_CACHE_PATH=/var/lib/myapp/pro_lease_cache.json`
+    - `HP_LICENSE_REPORT_TO_SERVER=0` (0/1, default 0)
+    - `HP_LICENSE_REPORT_URL=https://license.unkwn0wn.com`
+    - `INSTANCE_FINGERPRINT_SHA256=<fingerprint>`
     - `HP_PUBLIC_RATELIMIT_AVG=120` / `HP_PUBLIC_RATELIMIT_BURST=240` (optional; Traefik rate limit)
 
 ## Phase 4: Certificates (Traefik + ACME)
