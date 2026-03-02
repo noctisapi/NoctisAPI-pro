@@ -51,6 +51,9 @@ Edit `.env.prod` and set:
 - `ACME_EMAIL=<you@example.com>`
 - `HP_SEED` to a long random secret.
 - `HP_GEOIP_DB=/app/data/GeoLite2-Country.mmdb` (keep default unless you move it).
+- Optional campaign tuning:
+  - `HP_CAMPAIGN_AUTO_RECOMPUTE_THRESHOLD` (>0 to enable)
+  - `HP_CAMPAIGN_AUTO_RECOMPUTE_INTERVAL` (seconds)
 
 ## 4. TLS (Traefik + ACME)
 

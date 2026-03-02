@@ -172,6 +172,9 @@ Steps:
    - `HP_CAMPAIGN_PATH_NGRAM_TOP_K=12`
    - `HP_CAMPAIGN_PATH_TOP_K=10`
    - `HP_CAMPAIGN_ACTOR_LIMIT=200`
+   - `HP_CAMPAIGN_AUTO_RECOMPUTE_THRESHOLD` (default 0, >0 to enable automatic
+     campaign recompute when that many new actors are seen)
+   - `HP_CAMPAIGN_AUTO_RECOMPUTE_INTERVAL` (seconds between background checks)
 2. Ensure `.env.prod` includes `HP_PUBLIC_HOST` and `ACME_EMAIL` for Traefik.
 3. Run:
 
