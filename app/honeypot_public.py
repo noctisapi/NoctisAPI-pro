@@ -1535,6 +1535,15 @@ async def log_all_requests(request: Request, call_next):
             skip_log = True
         if is_monitor:
             skip_log = True
+        # Skip internal probes identified by User-Agent (e.g. Docker healthchecks).
+        # HONEYPOT_MONITOR_UA can be a comma-separated list of substrings.
+        if not skip_log and HONEYPOT_MONITOR_UA:
+            req_ua_lower = _user_agent(request).lower()
+            for _mua in HONEYPOT_MONITOR_UA.split(","):
+                _mua = _mua.strip().lower()
+                if _mua and _mua in req_ua_lower:
+                    skip_log = True
+                    break
 
         if not skip_log:
             latency_ms = int((time.perf_counter() - t0) * 1000.0)
