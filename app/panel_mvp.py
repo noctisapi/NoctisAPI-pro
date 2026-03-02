@@ -1,4 +1,5 @@
 # panel_mvp.py (sin auth, solo protegido por SSH tunnel)
+import logging
 import os
 import time
 import threading
@@ -8,6 +9,8 @@ import urllib.request
 from collections import Counter
 from statistics import median
 from datetime import datetime, timezone
+
+_logger = logging.getLogger(__name__)
 
 from fastapi import FastAPI, Request, HTTPException, Body
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
@@ -31,6 +34,10 @@ HP_GEOIP_DB = os.getenv("HP_GEOIP_DB", "/data/GeoLite2-Country.mmdb")
 HP_PUBLIC_BASE_URL = (os.getenv("HP_PUBLIC_BASE_URL") or "").strip().rstrip("/")
 API_CATALOG_LOCK = threading.Lock()
 API_CATALOG_CACHE: dict[str, object] = {"ts": 0, "catalog": [], "source": "none", "error": ""}
+
+# Auto-recompute campaigns: set HP_CAMPAIGN_AUTO_RECOMPUTE_THRESHOLD > 0 to enable.
+_CAMPAIGN_AUTO_THRESHOLD = int(os.getenv("HP_CAMPAIGN_AUTO_RECOMPUTE_THRESHOLD", "0") or 0)
+_CAMPAIGN_AUTO_INTERVAL = int(os.getenv("HP_CAMPAIGN_AUTO_RECOMPUTE_INTERVAL", "3600") or 3600)
 
 app = FastAPI(title=APP_NAME)
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -204,11 +211,13 @@ def _env_float(name: str, default: float, min_value: Optional[float] = None) -> 
 
 
 def _is_cache_fresh(cache_ts: str, last_seen: str) -> bool:
+    """Cache is fresh when it was written after (or at) the actor's last activity."""
     cache_dt = _parse_iso(cache_ts)
     last_dt = _parse_iso(last_seen)
+    # If last_seen is unknown we can't safely use the cache.
     if not cache_dt or not last_dt:
         return False
-    return cache_dt >= last_dt
+    return cache_dt > last_dt
 
 
 def db() -> sqlite3.Connection:
@@ -232,12 +241,77 @@ honeypot_monitor = HoneypotAvailabilityMonitor(db)
 # --- Internal Health Endpoints -------------------------------------------------
 
 
+def _auto_recompute_campaigns_worker() -> None:
+    """Background thread: triggers campaign recompute when enough new events arrive."""
+    _logger.info(
+        "Campaign auto-recompute enabled: threshold=%d events, interval=%ds",
+        _CAMPAIGN_AUTO_THRESHOLD,
+        _CAMPAIGN_AUTO_INTERVAL,
+    )
+    while True:
+        try:
+            time.sleep(_CAMPAIGN_AUTO_INTERVAL)
+            if not _has_feature(licensing.Feature.CAMPAIGNS, action="auto_recompute"):
+                continue
+            conn = db()
+            try:
+                if not _campaign_jobs_table_exists(conn):
+                    continue
+                cur = conn.cursor()
+                # Check if any job is already running or queued
+                running = cur.execute(
+                    "SELECT 1 FROM campaign_jobs WHERE status IN ('queued','running') LIMIT 1"
+                ).fetchone()
+                if running:
+                    continue
+                # Count events since last completed job
+                last_finished = cur.execute(
+                    "SELECT finished_at FROM campaign_jobs WHERE status='completed' ORDER BY finished_at DESC LIMIT 1"
+                ).fetchone()
+                since_ts = last_finished["finished_at"] if last_finished else "1970-01-01T00:00:00Z"
+                new_events = cur.execute(
+                    "SELECT COUNT(*) FROM events WHERE ts > ?", (since_ts,)
+                ).fetchone()[0]
+                if new_events < _CAMPAIGN_AUTO_THRESHOLD:
+                    continue
+                # Trigger recompute
+                config = campaigns_pro.campaign_config_from_env()
+                job_id = os.urandom(8).hex()
+                now = _utc_now_iso()
+                cur.execute(
+                    "INSERT INTO campaign_jobs(job_id, status, created_at, params_json) VALUES(?,?,?,?)",
+                    (job_id, "queued", now, json.dumps({"config": config}, ensure_ascii=False)),
+                )
+                conn.commit()
+                campaigns_pro.clear_campaign_tables(conn)
+                campaigns_pro.mark_campaign_status(
+                    conn, status=campaigns_pro.PRO_STATUS_PENDING, job_id=job_id, snapshot_hash=""
+                )
+                _logger.info(
+                    "Auto-recompute triggered: job_id=%s new_events=%d", job_id, new_events
+                )
+                threading.Thread(
+                    target=_run_campaign_job, args=(job_id, config), daemon=True,
+                    name=f"campaign-auto-{job_id}"
+                ).start()
+            except Exception as exc:
+                _logger.warning("Auto-recompute check error: %s", exc)
+            finally:
+                conn.close()
+        except Exception as exc:
+            _logger.warning("Auto-recompute worker error: %s", exc)
+
+
 @app.on_event("startup")
 def _start_background_tasks():
     honeypot_monitor.start()
     licensing.set_pro_enabled_provider(pro_license.is_pro_enabled)
     pro_license.get_backend_license_snapshot(force_refresh=True)
     pro_ops.clear_cache()
+    if _CAMPAIGN_AUTO_THRESHOLD > 0:
+        threading.Thread(
+            target=_auto_recompute_campaigns_worker, daemon=True, name="campaign-auto-recompute"
+        ).start()
 
 
 @app.on_event("shutdown")
@@ -1019,7 +1093,7 @@ def _compute_campaigns(conn: sqlite3.Connection, config: dict) -> dict:
             }
             cur.execute(
                 "INSERT OR REPLACE INTO actor_fingerprints(actor_id, fp_json, updated_at) VALUES(?,?,?)",
-                (actor, json.dumps(cache_payload, ensure_ascii=False), last_seen or _utc_now_iso()),
+                (actor, json.dumps(cache_payload, ensure_ascii=False), _utc_now_iso()),
             )
 
     campaigns_created = []
@@ -1817,14 +1891,58 @@ def dashboard(request: Request):
 @app.get("/dashboard/cases", response_class=HTMLResponse)
 def dashboard_cases(request: Request):
     _require_feature(licensing.Feature.CASES)
+    q = (request.query_params.get("q") or "").strip()
+    status_filter = (request.query_params.get("status") or "").strip()
+    severity_filter = (request.query_params.get("severity") or "").strip()
+    try:
+        page = max(1, int(request.query_params.get("page") or 1))
+    except (ValueError, TypeError):
+        page = 1
+    try:
+        per_page = min(200, max(1, int(request.query_params.get("per_page") or 50)))
+    except (ValueError, TypeError):
+        per_page = 50
+
+    conditions: list = []
+    params: list = []
+    if q:
+        conditions.append("title LIKE ?")
+        params.append(f"%{q}%")
+    if status_filter:
+        conditions.append("status = ?")
+        params.append(status_filter)
+    if severity_filter:
+        conditions.append("severity = ?")
+        params.append(severity_filter)
+
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+    offset = (page - 1) * per_page
+
     conn = db()
     try:
         ensure_schema(conn)
         cur = conn.cursor()
-        cur.execute("SELECT id, title, severity, status, created_at, updated_at FROM cases ORDER BY updated_at DESC LIMIT 200")
+        total = cur.execute(f"SELECT COUNT(*) FROM cases {where}", params).fetchone()[0]
+        cur.execute(
+            f"SELECT id, title, severity, status, created_at, updated_at FROM cases {where} ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+            params + [per_page, offset],
+        )
         cases = [dict(r) for r in cur.fetchall()]
+        total_pages = max(1, (total + per_page - 1) // per_page)
         return templates.TemplateResponse(
-            "cases.html", {"request": request, "cases": cases, **_license_context()}
+            "cases.html",
+            {
+                "request": request,
+                "cases": cases,
+                "total": total,
+                "page": page,
+                "per_page": per_page,
+                "total_pages": total_pages,
+                "q": q,
+                "status_filter": status_filter,
+                "severity_filter": severity_filter,
+                **_license_context(),
+            },
         )
     finally:
         conn.close()
@@ -2130,10 +2248,10 @@ def add_case_evidence_entry(case_id: int, request: Request):
                 "ts": step_row["ts"],
                 "method": step_row["method"],
                 "path": step_row["path"],
-                "headers": _safe_json_loads(step_row["headers_json"], step_row["headers_json"]),
-                "body": _safe_json_loads(step_row["body_json"], step_row["body_json"]),
+                "headers": _safe_json_loads(step_row["headers_json"], {}),
+                "body": _safe_json_loads(step_row["body_json"], None),
                 "response_status": step_row["response_status"],
-                "response_json": _safe_json_loads(step_row["response_json"], step_row["response_json"]),
+                "response_json": _safe_json_loads(step_row["response_json"], None),
                 "stage_before": step_row["stage_before"],
                 "stage_after": step_row["stage_after"],
                 "actor_id": step_row["actor_id"],
@@ -2265,7 +2383,7 @@ def _case_export_payload(cur: sqlite3.Cursor, case_id: int) -> dict:
     )
     evidences = [dict(r) for r in cur.fetchall()]
     for ev in evidences:
-        ev["evidence_json"] = _safe_json_loads(ev.get("evidence_json"), ev.get("evidence_json"))
+        ev["evidence_json"] = _safe_json_loads(ev.get("evidence_json"), None)
 
     payload = {
         "case": case,
@@ -2284,41 +2402,106 @@ def _case_export_payload(cur: sqlite3.Cursor, case_id: int) -> dict:
 
 def _case_export_markdown(payload: dict) -> str:
     case = payload.get("case") or {}
+    stage_info = payload.get("stage_progression") or {}
     lines = [
         f"# Case #{case.get('id')} — {case.get('title')}",
         "",
-        f"Status: **{case.get('status')}**",
-        f"Severity: **{case.get('severity') or 'n/a'}**",
-        f"Campaign: `{payload.get('campaign_id') or '-'}`",
-        f"Created: {case.get('created_at')}",
-        f"Updated: {case.get('updated_at')}",
+        f"**Status:** {case.get('status')}  ",
+        f"**Severity:** {case.get('severity') or 'n/a'}  ",
+        f"**Campaign:** `{payload.get('campaign_id') or '-'}`  ",
+        f"**Created:** {case.get('created_at')}  ",
+        f"**Updated:** {case.get('updated_at')}  ",
+    ]
+    if case.get("description"):
+        lines += ["", f"> {case.get('description')}"]
+
+    # Summary
+    lines += [
         "",
         "## Summary",
-        f"- Risk score: **{payload.get('risk_score')}**",
-        f"- Techniques: {', '.join(payload.get('techniques') or []) or '-'}",
-        f"- Top endpoints: {', '.join(payload.get('endpoints') or []) or '-'}",
         "",
-        "## Actors",
+        f"| Field | Value |",
+        f"|-------|-------|",
+        f"| Risk score | **{payload.get('risk_score')}** |",
+        f"| Max stage reached | {stage_info.get('max_stage') or 0} |",
+        f"| Stage flow | `{stage_info.get('stage_flow') or '-'}` |",
+        f"| Techniques | {', '.join(payload.get('techniques') or []) or '-'} |",
+        f"| Top endpoints | {', '.join(payload.get('endpoints') or []) or '-'} |",
+        f"| Actors | {len(payload.get('actors') or [])} |",
+        f"| Evidence items | {len(payload.get('evidence') or [])} |",
     ]
-    for a in payload.get("actors") or []:
-        lines.append(f"- `{a.get('actor_id')}` ({a.get('role') or 'related'})")
 
-    lines += ["", "## Timeline (recent)"]
-    for item in payload.get("timeline") or []:
-        ts = item.get("ts")
-        if item.get("type") == "step":
-            lines.append(f"- {ts} {item.get('method') or ''} {item.get('path') or ''} stage={item.get('stage')} status={item.get('status')}")
-        else:
-            lines.append(f"- {ts} {item.get('kind') or 'event'} {item.get('path') or ''} status={item.get('status')}")
+    # Actors
+    lines += ["", "## Actors", ""]
+    actors = payload.get("actors") or []
+    if actors:
+        lines.append("| Actor ID | Role | Added |")
+        lines.append("|----------|------|-------|")
+        for a in actors:
+            lines.append(f"| `{a.get('actor_id')}` | {a.get('role') or 'related'} | {a.get('added_at') or '-'} |")
+    else:
+        lines.append("_No actors linked._")
 
-    lines += ["", "## Evidence"]
-    for ev in payload.get("evidence") or []:
-        lines.append(f"- [{ev.get('ref_type')}] {ev.get('ref_id')} — {ev.get('note') or ''}")
+    # Stage progression detail
+    stage_counts = stage_info.get("stage_counts") or []
+    if stage_counts:
+        lines += ["", "## Stage Progression", ""]
+        lines.append("| Stage | Count |")
+        lines.append("|-------|-------|")
+        for sc in stage_counts:
+            lines.append(f"| {sc.get('stage')} | {sc.get('count')} |")
 
+    # Timeline grouped by session
+    timeline = payload.get("timeline") or []
+    if timeline:
+        lines += ["", "## Timeline", ""]
+        current_session = None
+        for item in timeline:
+            sess = item.get("session_id") or item.get("actor_id") or "unknown"
+            if sess != current_session:
+                current_session = sess
+                lines.append(f"**Session `{sess}`**")
+            ts = item.get("ts") or ""
+            if item.get("type") == "step":
+                lines.append(
+                    f"- `{ts}` {item.get('method') or ''} `{item.get('path') or ''}` "
+                    f"→ {item.get('status') or '-'} (stage {item.get('stage') or '-'})"
+                )
+            else:
+                lines.append(
+                    f"- `{ts}` **{item.get('kind') or 'event'}** `{item.get('path') or ''}` "
+                    f"→ {item.get('status') or '-'}"
+                )
+
+    # Evidence breakdown grouped by actor
+    evidences = payload.get("evidence") or []
+    if evidences:
+        lines += ["", "## Evidence", ""]
+        by_actor: dict = {}
+        for ev in evidences:
+            aid = ev.get("actor_id") or "unknown"
+            by_actor.setdefault(aid, []).append(ev)
+        for aid, evs in by_actor.items():
+            lines.append(f"**Actor `{aid}`**")
+            for ev in evs:
+                note = f" — {ev.get('note')}" if ev.get("note") else ""
+                lines.append(
+                    f"- [{ev.get('ref_type')}] `{ev.get('ref_id')}`"
+                    f" {ev.get('source_method') or ''} `{ev.get('source_path') or ''}`"
+                    f" stage={ev.get('source_stage') or '-'} status={ev.get('source_status') or '-'}"
+                    f"{note}"
+                )
+
+    # Similar cases
     if payload.get("similar_cases"):
-        lines += ["", "## Similar Cases"]
+        lines += ["", "## Similar Cases", ""]
+        lines.append("| Case | Score | Shared Actors | Shared Endpoints |")
+        lines.append("|------|-------|---------------|-----------------|")
         for sc in payload.get("similar_cases"):
-            lines.append(f"- Case #{sc.get('case_id')} (score {sc.get('score')}, shared actors {sc.get('shared_actors')})")
+            lines.append(
+                f"| [Case #{sc.get('case_id')}](/dashboard/cases/{sc.get('case_id')}) "
+                f"| {sc.get('score')} | {sc.get('shared_actors')} | {sc.get('shared_endpoints') or '-'} |"
+            )
 
     return "\n".join(lines).strip() + "\n"
 
@@ -2877,6 +3060,138 @@ def campaign_detail(campaign_id: str, request: Request):
             "campaign_detail.html",
             {"request": request, "campaign": camp, "links": links, "cases": cases, **_license_context()},
         )
+    finally:
+        conn.close()
+
+
+def _campaign_export_payload(cur: sqlite3.Cursor, campaign_id: str) -> dict:
+    cur.execute("SELECT * FROM campaigns WHERE campaign_id=?", (campaign_id,))
+    row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="campaign not found")
+    camp = dict(row)
+    try:
+        camp["summary"] = json.loads(camp.get("features_summary_json") or "{}")
+    except Exception:
+        camp["summary"] = {}
+    camp["activity"] = _safe_json_loads(camp.get("activity_json"), {})
+    camp["timeline"] = _safe_json_loads(camp.get("timeline_json"), {})
+    camp["techniques"] = _safe_json_loads(camp.get("techniques_json"), [])
+    camp["endpoints"] = _safe_json_loads(camp.get("endpoints_json"), [])
+    cur.execute(
+        "SELECT actor_id, confidence, reasons_json, linked_at FROM campaign_actor_links WHERE campaign_id=? ORDER BY confidence DESC",
+        (campaign_id,),
+    )
+    links = []
+    for r in cur.fetchall():
+        link = dict(r)
+        link["reasons"] = _safe_json_loads(link.get("reasons_json"), [])
+        links.append(link)
+    cur.execute(
+        "SELECT id, title, status, severity, updated_at FROM cases WHERE campaign_id=? ORDER BY updated_at DESC",
+        (campaign_id,),
+    )
+    cases = [dict(r) for r in cur.fetchall()]
+    return {"campaign": camp, "actors": links, "cases": cases}
+
+
+def _campaign_export_markdown(payload: dict) -> str:
+    camp = payload.get("campaign") or {}
+    summary = camp.get("summary") or {}
+    lines = [
+        f"# Campaign `{camp.get('campaign_id')}` — {camp.get('label') or 'Unnamed'}",
+        "",
+        f"**Score:** {camp.get('score_det') or 0}  ",
+        f"**First seen:** {camp.get('first_seen_at') or '-'}  ",
+        f"**Last seen:** {camp.get('last_seen_at') or '-'}  ",
+        f"**Created:** {camp.get('created_at')}  ",
+        "",
+        "## Summary",
+        "",
+        f"| Field | Value |",
+        f"|-------|-------|",
+        f"| Group size | {summary.get('group_size') or len(payload.get('actors') or [])} |",
+        f"| Seed actor | `{summary.get('seed_actor') or '-'}` |",
+        f"| Stage flow | `{summary.get('stage_flow') or '-'}` |",
+        f"| Timing | {summary.get('timing') or '-'} |",
+        f"| Techniques | {', '.join(camp.get('techniques') or []) or '-'} |",
+        f"| Top endpoints | {', '.join(camp.get('endpoints') or []) or '-'} |",
+        f"| Linked cases | {len(payload.get('cases') or [])} |",
+    ]
+
+    # Actors
+    actors = payload.get("actors") or []
+    lines += ["", "## Actors", ""]
+    if actors:
+        lines.append("| Actor ID | Confidence | Reasons |")
+        lines.append("|----------|------------|---------|")
+        for a in actors:
+            reasons = ", ".join(str(r) for r in (a.get("reasons") or []))
+            lines.append(f"| `{a.get('actor_id')}` | {a.get('confidence') or '-'} | {reasons or '-'} |")
+    else:
+        lines.append("_No actors linked._")
+
+    # Activity timeline
+    activity = camp.get("activity") or {}
+    if activity:
+        lines += ["", "## Activity by Day", ""]
+        lines.append("| Date | Events |")
+        lines.append("|------|--------|")
+        for date, count in sorted(activity.items()):
+            lines.append(f"| {date} | {count} |")
+
+    # Linked cases
+    cases = payload.get("cases") or []
+    if cases:
+        lines += ["", "## Linked Cases", ""]
+        lines.append("| Case | Title | Status | Severity |")
+        lines.append("|------|-------|--------|----------|")
+        for c in cases:
+            lines.append(
+                f"| [#{c.get('id')}](/dashboard/cases/{c.get('id')}) "
+                f"| {c.get('title')} | {c.get('status')} | {c.get('severity') or '-'} |"
+            )
+
+    return "\n".join(lines).strip() + "\n"
+
+
+@app.get("/dashboard/campaigns/{campaign_id}/export.json")
+def export_campaign_json(campaign_id: str):
+    _require_feature(licensing.Feature.CAMPAIGNS)
+    conn = db()
+    try:
+        cur = conn.cursor()
+        payload = _campaign_export_payload(cur, campaign_id)
+        return JSONResponse(payload)
+    finally:
+        conn.close()
+
+
+@app.get("/dashboard/campaigns/{campaign_id}/export.md", response_class=PlainTextResponse)
+def export_campaign_markdown(campaign_id: str):
+    _require_feature(licensing.Feature.CAMPAIGNS)
+    conn = db()
+    try:
+        cur = conn.cursor()
+        payload = _campaign_export_payload(cur, campaign_id)
+        return PlainTextResponse(_campaign_export_markdown(payload))
+    finally:
+        conn.close()
+
+
+@app.delete("/dashboard/campaigns/{campaign_id}")
+def delete_campaign(campaign_id: str):
+    _require_feature(licensing.Feature.CAMPAIGNS)
+    conn = db()
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM campaign_actor_links WHERE campaign_id=?", (campaign_id,))
+        deleted = cur.execute("DELETE FROM campaigns WHERE campaign_id=?", (campaign_id,)).rowcount
+        if deleted == 0:
+            conn.rollback()
+            raise HTTPException(status_code=404, detail="campaign not found")
+        conn.commit()
+        return {"ok": True}
     finally:
         conn.close()
 

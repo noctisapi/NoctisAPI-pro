@@ -43,6 +43,7 @@
             <th data-type="date">First Seen</th>
             <th data-type="date">Last Seen</th>
             <th data-type="number">Members</th>
+            <th>Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -55,6 +56,9 @@
             <td class="mono">{{ c.first_seen_at or '-' }}</td>
             <td class="mono">{{ c.last_seen_at or '-' }}</td>
             <td>{{ c.member_count }}</td>
+            <td>
+              <button class="btn btn-danger" type="button" onclick="deleteCampaign('{{ c.campaign_id }}', this)">Delete</button>
+            </td>
           </tr>
           {% endfor %}
         </tbody>
@@ -172,5 +176,24 @@
 
   renderVerification(initialVerification);
   fetchJobStatus();
+
+  async function deleteCampaign(campaignId, btn){
+    if(!confirm(`Delete campaign ${campaignId}? This cannot be undone.`)){ return; }
+    if(btn){ btn.disabled = true; }
+    try{
+      const res = await fetch(`/dashboard/campaigns/${campaignId}`, {method:'DELETE'});
+      if(res.ok){
+        const row = btn.closest('tr');
+        if(row){ row.remove(); }
+      }else{
+        const text = await res.text();
+        alert('Error deleting campaign: ' + text);
+        if(btn){ btn.disabled = false; }
+      }
+    }catch(e){
+      alert('Error: ' + e.message);
+      if(btn){ btn.disabled = false; }
+    }
+  }
 </script>
 {% endblock %}

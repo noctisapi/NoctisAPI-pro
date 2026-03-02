@@ -7,8 +7,51 @@
   </div>
 </div>
 
+<div class="card" style="margin-bottom:12px;">
+  <form method="get" action="/dashboard/cases" style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;padding:12px 16px;">
+    <div style="display:flex;flex-direction:column;gap:4px;flex:1;min-width:160px;">
+      <label class="label-sm">Search title</label>
+      <input class="input" type="text" name="q" value="{{ q or '' }}" placeholder="Filter by title...">
+    </div>
+    <div style="display:flex;flex-direction:column;gap:4px;">
+      <label class="label-sm">Status</label>
+      <select class="input" name="status">
+        <option value="">All</option>
+        {% for s in ['open','monitoring','closed','false_positive'] %}
+        <option value="{{ s }}" {% if status_filter == s %}selected{% endif %}>{{ s }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:4px;">
+      <label class="label-sm">Severity</label>
+      <select class="input" name="severity">
+        <option value="">All</option>
+        {% for sv in ['critical','high','medium','low'] %}
+        <option value="{{ sv }}" {% if severity_filter == sv %}selected{% endif %}>{{ sv }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:4px;">
+      <label class="label-sm">Per page</label>
+      <select class="input" name="per_page">
+        {% for n in [25, 50, 100, 200] %}
+        <option value="{{ n }}" {% if per_page == n %}selected{% endif %}>{{ n }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <input type="hidden" name="page" value="1">
+    <button class="btn btn-primary" type="submit">Filter</button>
+    {% if q or status_filter or severity_filter %}
+    <a class="btn" href="/dashboard/cases">Clear</a>
+    {% endif %}
+  </form>
+</div>
+
 <div class="card">
-  <div class="card-head"><div class="card-title">Cases</div></div>
+  <div class="card-head">
+    <div class="card-title">Cases</div>
+    <div class="card-sub">{{ total }} total — page {{ page }} of {{ total_pages }}</div>
+  </div>
   <div class="table-wrap">
     <table class="table table-sortable">
       <thead>
@@ -34,9 +77,28 @@
           </td>
         </tr>
         {% endfor %}
+        {% if not cases %}
+        <tr><td colspan="6" style="text-align:center;padding:24px;" class="muted">No cases found.</td></tr>
+        {% endif %}
       </tbody>
     </table>
   </div>
+  {% if total_pages > 1 %}
+  <div style="display:flex;gap:8px;align-items:center;padding:12px 16px;border-top:1px solid var(--border);">
+    {% set base_qs = '?q=' ~ (q or '') ~ '&status=' ~ (status_filter or '') ~ '&severity=' ~ (severity_filter or '') ~ '&per_page=' ~ per_page %}
+    {% if page > 1 %}
+    <a class="btn" href="{{ base_qs }}&page={{ page - 1 }}">&#8592; Prev</a>
+    {% else %}
+    <button class="btn" disabled>&#8592; Prev</button>
+    {% endif %}
+    <span class="muted" style="font-size:0.85em;">Page {{ page }} / {{ total_pages }}</span>
+    {% if page < total_pages %}
+    <a class="btn" href="{{ base_qs }}&page={{ page + 1 }}">Next &#8594;</a>
+    {% else %}
+    <button class="btn" disabled>Next &#8594;</button>
+    {% endif %}
+  </div>
+  {% endif %}
 </div>
 
 <script>
@@ -46,19 +108,15 @@
     try{
       const res = await fetch(`/dashboard/cases/${caseId}`, {method:'DELETE'});
       if(res.ok){
-        if(btn){
-          const row = btn.closest('tr');
-          if(row){ row.remove(); }
-        }else{
-          location.reload();
-        }
+        const row = btn.closest('tr');
+        if(row){ row.remove(); }
       }else{
         const text = await res.text();
         alert('Error deleting case: ' + text);
+        if(btn){ btn.disabled = false; }
       }
     }catch(e){
       alert('Error: ' + e.message);
-    }finally{
       if(btn){ btn.disabled = false; }
     }
   }

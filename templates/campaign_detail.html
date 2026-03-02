@@ -5,7 +5,25 @@
     <h1>Campaign {{ campaign.campaign_id }}</h1>
     <div class="sub">{{ campaign.label }}</div>
   </div>
+  <div style="display:flex;gap:8px;">
+    <a class="btn" href="/dashboard/campaigns/{{ campaign.campaign_id }}/export.json" target="_blank">Export JSON</a>
+    <a class="btn" href="/dashboard/campaigns/{{ campaign.campaign_id }}/export.md" target="_blank">Export Markdown</a>
+    <button class="btn btn-danger" type="button" onclick="deleteCampaign('{{ campaign.campaign_id }}')">Delete</button>
+  </div>
 </div>
+
+<script>
+  async function deleteCampaign(campaignId){
+    if(!confirm(`Delete campaign ${campaignId}? This cannot be undone.`)){ return; }
+    const res = await fetch(`/dashboard/campaigns/${campaignId}`, {method:'DELETE'});
+    if(res.ok){
+      location.href = '/dashboard/campaigns';
+    }else{
+      const text = await res.text();
+      alert('Error deleting campaign: ' + text);
+    }
+  }
+</script>
 
 <div class="card">
   <div class="card-head">
