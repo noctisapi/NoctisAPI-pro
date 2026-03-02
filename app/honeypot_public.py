@@ -1,5 +1,7 @@
 # honeypot_public.py
+import logging
 import os
+import sys
 import json
 import hashlib
 import secrets
@@ -13,7 +15,8 @@ import random
 import re
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, Tuple, List
-import sys
+
+_logger = logging.getLogger(__name__)
 
 from fastapi import FastAPI, Request, HTTPException, Depends, Security
 from fastapi.responses import JSONResponse, PlainTextResponse, HTMLResponse, Response
@@ -34,6 +37,8 @@ HP_REQUIRE_SEED = (os.getenv("HP_REQUIRE_SEED", "") or "").strip().lower() in ("
 HONEYPOT_MONITOR_UA = os.getenv("HONEYPOT_MONITOR_UA", "HealthCheck/1.0")
 HP_PUBLIC_BASE_URL = os.getenv("HP_PUBLIC_BASE_URL", "http://127.0.0.1:8080").rstrip("/")
 HP_ACTOR_UA_MODE = os.getenv("HP_ACTOR_UA_MODE", "family").strip().lower()
+# Monitor bypass requires a secret; if unset the bypass is disabled entirely.
+_HP_MONITOR_SECRET = os.getenv("HP_MONITOR_SECRET", "").strip()
 
 SAMPLE_FILE_ID = "sample"
 SAMPLE_FILE_NAME = "sample.bin"
@@ -153,7 +158,7 @@ def _utc_now_iso() -> str:
 
 
 def _db() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=5.0)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=5.0, isolation_level="IMMEDIATE")
     conn.row_factory = sqlite3.Row
     pragma_statements = (
         "PRAGMA journal_mode=WAL;",
@@ -228,7 +233,12 @@ def _normalize_ua(ua: str) -> str:
     return "other"
 
 def _is_monitor(req: Request) -> bool:
-    return (req.headers.get("x-internal-monitor") or "").strip() == "1"
+    if not _HP_MONITOR_SECRET:
+        return False
+    return secrets.compare_digest(
+        (req.headers.get("x-internal-monitor") or "").strip(),
+        _HP_MONITOR_SECRET,
+    )
 
 
 def _modular_debug(req: Request) -> bool:
@@ -517,7 +527,7 @@ def _insert_event(
     extra: Optional[Dict[str, Any]] = None,
     points_delta: Optional[int] = None,
     trap_flags: Optional[List[str]] = None,
-) -> None:
+) -> Optional[int]:
     # auto-migration for old DBs
     cols = [r[1] for r in conn.execute("PRAGMA table_info(events)").fetchall()]
     if "status" not in cols:
@@ -608,6 +618,7 @@ def _insert_event(
             """,
             (ts, actor_id, kind, path, method, ip, ua, int(status), body_sample, token, extra_json),
         )
+        event_id: Optional[int] = cur.lastrowid
 
         # insert session_step
         seq_row = cur.execute("SELECT COALESCE(MAX(seq),0) AS m FROM session_steps WHERE session_id=?", (session_id,)).fetchone()
@@ -639,14 +650,15 @@ def _insert_event(
         )
 
         conn.commit()
+        return event_id
     except Exception as e:
         # Log error but never fail the public API
-        import sys
-        print(f"[WARNING] Session bookkeeping error: {e}", file=sys.stderr)
+        _logger.warning("Session bookkeeping error: %s", e)
         try:
             conn.rollback()
         except Exception:
             pass
+    return None
 
 
 def _token_lookup(conn: sqlite3.Connection, token: str) -> Optional[sqlite3.Row]:
@@ -1415,7 +1427,6 @@ async def _apply_modular_response_policy(request: Request, response: Any, policy
         fixed_status = endpoint_cfg.get("fixed_status")
         extra_headers["x-hp-modular-fixed-status"] = "" if fixed_status is None else str(int(fixed_status))
         extra_headers["x-hp-modular-rule-hits"] = str(len(list(rules.get("matched_rule_ids") or [])))
-        extra_headers["x-hp-modular-db-path"] = DB_PATH
         extra_headers["x-hp-modular-policy-source"] = str(policy.get("source") or "ok")
         policy_error = str(policy.get("error") or "none").strip()
         extra_headers["x-hp-modular-error"] = (policy_error or "none")[:120]
@@ -1503,7 +1514,6 @@ async def log_all_requests(request: Request, call_next):
                     "x-hp-modular-rule-hits": str(
                         len(list(((modular_policy.get("rules") or {}).get("matched_rule_ids") or [])))
                     ),
-                    "x-hp-modular-db-path": DB_PATH,
                     "x-hp-modular-policy-source": str(modular_policy.get("source") or "ok"),
                 }
                 policy_error = str(modular_policy.get("error") or "none").strip()
@@ -1602,7 +1612,7 @@ async def log_all_requests(request: Request, call_next):
                 if hp_event:
                     kind = hp_event.get("kind", kind)
 
-                _insert_event(
+                inserted_event_id = _insert_event(
                     conn,
                     req=request,
                     kind=kind,
@@ -1633,27 +1643,26 @@ async def log_all_requests(request: Request, call_next):
                 _update_actor_error_counters(conn, actor_id, int(status_code))
 
                 # add counters snapshot to this event (optional, but helps dashboards)
-                row = conn.execute(
-                    "SELECT err_total, err_consecutive, last_status, last_error_ts FROM actors WHERE actor_id=?",
-                    (actor_id,),
-                ).fetchone()
-                if row:
-                    # update the just-inserted event's extra_json with counter snapshot
-                    # (keep it lightweight; do not rewrite headers)
-                    last_event_id = conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
-                    try:
-                        existing = conn.execute("SELECT extra_json FROM events WHERE id=?", (last_event_id,)).fetchone()
-                        extra_obj = json.loads(existing["extra_json"] or "{}")
-                    except Exception:
-                        extra_obj = {}
-                    extra_obj["err_total"] = int(row["err_total"] or 0)
-                    extra_obj["err_consecutive"] = int(row["err_consecutive"] or 0)
-                    extra_obj["last_status"] = row["last_status"]
-                    extra_obj["last_error_ts"] = row["last_error_ts"]
-                    conn.execute(
-                        "UPDATE events SET extra_json=? WHERE id=?",
-                        (json.dumps(extra_obj, ensure_ascii=False), int(last_event_id)),
-                    )
+                if inserted_event_id is not None:
+                    row = conn.execute(
+                        "SELECT err_total, err_consecutive, last_status, last_error_ts FROM actors WHERE actor_id=?",
+                        (actor_id,),
+                    ).fetchone()
+                    if row:
+                        # update the just-inserted event's extra_json with counter snapshot
+                        try:
+                            existing = conn.execute("SELECT extra_json FROM events WHERE id=?", (inserted_event_id,)).fetchone()
+                            extra_obj = json.loads(existing["extra_json"] or "{}")
+                        except Exception:
+                            extra_obj = {}
+                        extra_obj["err_total"] = int(row["err_total"] or 0)
+                        extra_obj["err_consecutive"] = int(row["err_consecutive"] or 0)
+                        extra_obj["last_status"] = row["last_status"]
+                        extra_obj["last_error_ts"] = row["last_error_ts"]
+                        conn.execute(
+                            "UPDATE events SET extra_json=? WHERE id=?",
+                            (json.dumps(extra_obj, ensure_ascii=False), inserted_event_id),
+                        )
 
                 conn.commit()
             finally:

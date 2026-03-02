@@ -120,30 +120,38 @@ def _prepare_runtime_db(db_path: Path) -> None:
 
 class TestHoneypotModularRuntime(unittest.TestCase):
     def test_monitor_header_does_not_bypass_modular_policy(self):
+        """Modular policy (418 + minimal mode) applies regardless of monitor header."""
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "honeypot.db"
             _prepare_runtime_db(db_path)
 
             old_db_path = honeypot_public.DB_PATH
+            old_monitor_secret = honeypot_public._HP_MONITOR_SECRET
             old_seed = os.environ.get("HP_SEED")
             old_require_seed = os.environ.get("HP_REQUIRE_SEED")
             try:
                 honeypot_public.DB_PATH = str(db_path)
+                honeypot_public._HP_MONITOR_SECRET = "test-monitor-secret"
                 os.environ["HP_SEED"] = "unit-test-seed"
                 os.environ["HP_REQUIRE_SEED"] = "0"
                 with TestClient(honeypot_public.app) as client:
                     response = client.get(
                         "/config.json",
-                        headers={"x-internal-monitor": "1", "x-hp-debug": "1"},
+                        headers={
+                            "x-internal-monitor": "test-monitor-secret",
+                            "x-hp-debug": "1",
+                        },
                     )
                 self.assertEqual(response.status_code, 418)
                 self.assertEqual(response.headers.get("x-hp-modular-fixed-status"), "418")
                 self.assertEqual(response.headers.get("x-hp-modular-mode"), "minimal")
                 self.assertEqual(response.headers.get("x-hp-modular-policy-source"), "ok")
-                self.assertEqual(response.headers.get("x-hp-modular-db-path"), str(db_path))
+                # x-hp-modular-db-path must NOT be present (security fix)
+                self.assertIsNone(response.headers.get("x-hp-modular-db-path"))
                 self.assertEqual(response.json(), {"ok": True})
             finally:
                 honeypot_public.DB_PATH = old_db_path
+                honeypot_public._HP_MONITOR_SECRET = old_monitor_secret
                 if old_seed is None:
                     os.environ.pop("HP_SEED", None)
                 else:

@@ -3,10 +3,16 @@ from __future__ import annotations
 import fnmatch
 import hashlib
 import json
+import re
 import random
 import sqlite3
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
+
+_ALLOWED_TABLES: frozenset[str] = frozenset(
+    {"api_endpoint_configs", "api_mutation_settings", "api_rules"}
+)
+_SAFE_IDENTIFIER_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
 
 RESPONSE_MODES = {"normal", "minimal", "error_bias"}
@@ -149,7 +155,14 @@ def _normalize_policy(value: Any) -> str:
     return raw
 
 
+def _assert_safe_identifier(name: str, kind: str = "identifier") -> None:
+    if not _SAFE_IDENTIFIER_RE.match(name):
+        raise ValueError(f"Unsafe SQL {kind}: {name!r}")
+
+
 def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    if table not in _ALLOWED_TABLES:
+        raise ValueError(f"Unknown table: {table!r}")
     try:
         rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
     except Exception:
@@ -167,8 +180,11 @@ def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
 
 
 def _ensure_columns(conn: sqlite3.Connection, table: str, expected: Dict[str, str]) -> None:
+    if table not in _ALLOWED_TABLES:
+        raise ValueError(f"Unknown table: {table!r}")
     existing = _table_columns(conn, table)
     for column, ddl in expected.items():
+        _assert_safe_identifier(column, "column")
         if column in existing:
             continue
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
