@@ -158,13 +158,35 @@ Steps:
 
 1. Copy/clone the repo and duplicate `.env.prod.example` to `.env.prod`, then fill in:
    - `APP_ENV=prod`
+   - `HP_IMAGE=ghcr.io/<ORG>/noctisapi-pro` (override registry/name if needed)
    - `APP_VERSION=<semver matching pushed image>`
    - `HP_DB_PATH=/data/honeypot.db`
    - `DATABASE_URL=sqlite+pysqlite:////data/honeypot.db`
    - `LOG_LEVEL=info`
    - `HP_PUBLIC_BASE_URL=<https://public-domain>` (used in download URLs exposed by the NoctisAPI honeypot API)
+   - `HP_PUBLIC_HOST=<public-domain>` (Traefik routing)
    - `HP_GEOIP_DB=/app/data/GeoLite2-Country.mmdb`
    - `HP_SEED=<long random secret>` (stable seed for actor ids + secrets)
+   - `HP_ACTOR_UA_MODE=family` (optional, controls actor identity logic)
+   - `HONEYPOT_PUBLIC_BASE_URL=https://<public-domain>`
+   - `HONEYPOT_MONITOR_BASE_URL=http://traefik:8081` (internal panel address)
+   - `HONEYPOT_MONITOR_UA=HealthCheck/1.0,curl/` (whitelist for healthcheck clients)
+   - `ACME_EMAIL=<registration email>`
+   - `LICENSE_KEY=sk_live_...`
+   - `PRO_BACKEND_URL=https://pro-backend.example.com`
+   - `LICENSING_URL=https://license.unkwn0wn.com` (alternate backend)
+   - `LICENSING_PINNED_PUBLIC_KEY_PATH=/app/app/licensing_server_public_key.pem`
+   - `INSTANCE_ID_PATH=/var/lib/myapp/instance_id`
+   - `HP_PRO_LEASE_CACHE_PATH=/var/lib/myapp/pro_lease_cache.json`
+   - `HP_LICENSE_REPORT_TO_SERVER=0` (0/1)
+   - `HP_LICENSE_REPORT_URL=https://license.unkwn0wn.com`
+   - `INSTANCE_FINGERPRINT_SHA256=<fingerprint>`
+   - `HP_ENFORCE_LICENSE=1` (strict enforcement)
+   - `HP_LICENSE_DENY_BEHAVIOUR=exit` (exit|warn|none)
+   - `HP_LICENSE_LIMITED_BEHAVIOUR=pro` (core|pro)
+   - `LICENSING_HTTP_TIMEOUT_SECONDS=10`
+   - `LICENSING_MIN_RENEW_SECONDS=30`
+   - `PRO_RESULTS_PUBLIC_KEY_PATH=/app/app/pro_results_public_key.pem`
    - `HP_CAMPAIGN_MIN_FEATURES=4`
    - `HP_CAMPAIGN_MIN_INTERSECTION=3`
    - `HP_CAMPAIGN_MIN_JACCARD=0.4`
@@ -172,9 +194,8 @@ Steps:
    - `HP_CAMPAIGN_PATH_NGRAM_TOP_K=12`
    - `HP_CAMPAIGN_PATH_TOP_K=10`
    - `HP_CAMPAIGN_ACTOR_LIMIT=200`
-   - `HP_CAMPAIGN_AUTO_RECOMPUTE_THRESHOLD` (default 0, >0 to enable automatic
-     campaign recompute when that many new actors are seen)
-   - `HP_CAMPAIGN_AUTO_RECOMPUTE_INTERVAL` (seconds between background checks)
+   - `HP_CAMPAIGN_AUTO_RECOMPUTE_THRESHOLD=0` (default 0, >0 to enable automatic campaign recompute when that many new actors are seen)
+   - `HP_CAMPAIGN_AUTO_RECOMPUTE_INTERVAL=3600` (seconds between background checks)
 2. Ensure `.env.prod` includes `HP_PUBLIC_HOST` and `ACME_EMAIL` for Traefik.
 3. Run:
 

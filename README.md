@@ -18,13 +18,28 @@ PRO licensing is enforced through the separate PRO backend.
 
 Recommended configuration:
 - `LICENSE_KEY=sk_live_...` (end-user input)
-- `PRO_BACKEND_URL=https://pro-backend.example.com`
+- `PRO_BACKEND_URL=https://pro-backend.example.com` (primary validation endpoint)
+- `LICENSING_URL` – alternate backend URL used by some tooling (optional)
 - Pin the licensing server RSA public key (PEM):
   - `LICENSING_PINNED_PUBLIC_KEY_PATH=/app/app/licensing_server_public_key.pem` (default in image)
 - Persist a stable installation identifier:
   - `INSTANCE_ID_PATH=/var/lib/myapp/instance_id` (default; mount a persistent volume at `/var/lib/myapp`)
 - Persist the signed lease cache:
   - `HP_PRO_LEASE_CACHE_PATH=/var/lib/myapp/pro_lease_cache.json`
+- Telemetry/reporting (optional):
+  - `HP_LICENSE_REPORT_TO_SERVER=1` to enable
+  - `HP_LICENSE_REPORT_URL=https://license.unkwn0wn.com`
+
+Advanced behavior:
+- `INSTANCE_FINGERPRINT_SHA256` or `HP_HOST_MACHINE_ID_PATH` for stable fingerprint
+- `HP_ENFORCE_LICENSE=1` – completely prohibit core when license fails
+- `HP_LICENSE_DENY_BEHAVIOUR` (exit|warn|none)
+- `HP_LICENSE_LIMITED_BEHAVIOUR` (core|pro)
+- `LICENSING_HTTP_TIMEOUT_SECONDS`, `LICENSING_MIN_RENEW_SECONDS` for backend timing
+- `PRO_RESULTS_PUBLIC_KEY_PATH` to verify signed campaign/lease results
+
+Other environment knobs exist (actor UA mode, monitor UA, etc.) – see
+`.env.prod.example` for a complete list.
 
 The client computes a best-effort host fingerprint and sends its SHA-256 hex (64 chars). If you want a fully stable host-locked fingerprint across container rebuilds, set `INSTANCE_FINGERPRINT_SHA256` (64 hex) or mount the host machine-id into the container (for example mount `/etc/machine-id` to `/etc/host-machine-id` and set `HP_HOST_MACHINE_ID_PATH=/etc/host-machine-id`).
 
@@ -103,4 +118,11 @@ See `documentation/ops/vps/RUNBOOK.md` for a step‑by‑step VPS deployment wit
 - Use `.env.prod` on the server and keep it out of Git.
 
 - For admin views, set `HONEYPOT_PUBLIC_BASE_URL=https://<public-domain>` and `HONEYPOT_MONITOR_BASE_URL=http://traefik:8081`.
+
+- Other common settings you'll find in `.env.prod.example`:
+  - `HP_IMAGE` to override the image registry/name
+  - `HP_PUBLIC_HOST` / `HP_PUBLIC_BASE_URL` for API routing
+  - `HP_ACTOR_UA_MODE` for actor identity logic (ip|family|full)
+  - `HONEYPOT_MONITOR_UA` to whitelist healthcheck user‑agents
+  - `HP_GEOIP_DB`, `HP_SEED`, retention/backup/auto‑recompute tuning
 
