@@ -154,6 +154,11 @@ def _fetch_backend_lease(*, force_refresh: bool) -> tuple[Optional[str], Optiona
             instance_fingerprint=instance_fingerprint,
             force_refresh=force_refresh,
         )
+    except campaigns_pro.CampaignProExplicitDeny as exc:
+        # Server explicitly denied (revoked / suspended). Surface the server's reason_code
+        # directly so callers and snapshots show the correct state.
+        meta["server_reason_code"] = exc.reason_code
+        return None, None, exc.reason_code, meta
     except campaigns_pro.CampaignProError as exc:
         return None, None, f"backend_lease_failed:{exc}", meta
     meta["lease_source"] = lease_source
@@ -250,7 +255,7 @@ def _snapshot_from_backend_result(
         "pro_enabled": bool(lease_jws),
         "valid": bool(lease_jws),
         "decision": "ALLOW" if lease_jws else "DENY",
-        "reason_code": None if lease_jws else "backend_validation_failed",
+        "reason_code": None if lease_jws else (str(meta.get("server_reason_code") or "") or "backend_validation_failed"),
         "last_error": error,
         "last_ok_at": _utc_now_iso() if lease_jws else None,
         "expires_at": exp,
@@ -343,7 +348,11 @@ def get_backend_license_snapshot(*, force_refresh: bool = False) -> dict[str, An
         if not force_refresh and checked_at > 0 and (now - checked_at) < min_refresh_seconds:
             return cached_snapshot
 
-    lease_jws, exp, error, meta = _fetch_backend_lease(force_refresh=force_refresh)
+    # Always force a lease-level server call when the snapshot cache has expired.
+    # This ensures revocation/suspension is detected within min_refresh_seconds when
+    # the client is online.  Network errors still fall back to the local lease cache
+    # (offline_grace_seconds window) so offline support is preserved.
+    lease_jws, exp, error, meta = _fetch_backend_lease(force_refresh=True)
     snapshot: dict[str, Any] = _snapshot_from_backend_result(
         lease_jws=lease_jws,
         exp=exp,

@@ -196,14 +196,15 @@ class TestProLicenseLeaseValidation(unittest.TestCase):
 
         def _fake_fetch(*, force_refresh: bool):
             calls.append(bool(force_refresh))
-            if force_refresh:
-                return "lease-jws", now + 3600, None, {"lease_tier": "pro", "lease_features": ["cases"]}
-            return None, None, "lease_missing_exp", {"lease_tier": None, "lease_features": []}
+            # Both calls are now forced (lease-level cache always bypassed on snapshot refresh).
+            return "lease-jws", now + 3600, None, {"lease_tier": "pro", "lease_features": ["cases"]}
 
         with mock.patch("app.pro_license._fetch_backend_lease", side_effect=_fake_fetch):
             snap = pro_license.get_backend_license_snapshot(force_refresh=False)
 
-        self.assertEqual(calls, [False, True])
+        # First call: always force_refresh=True (server check every 15 s).
+        # State changed vs cached → sync_on_change triggers a second force_refresh=True.
+        self.assertEqual(calls, [True, True])
         self.assertTrue(snap.get("valid"))
         self.assertEqual(snap.get("decision"), "ALLOW")
 
@@ -235,7 +236,9 @@ class TestProLicenseLeaseValidation(unittest.TestCase):
         with mock.patch("app.pro_license._fetch_backend_lease", side_effect=_fake_fetch):
             snap = pro_license.get_backend_license_snapshot(force_refresh=False)
 
-        self.assertEqual(calls, [False])
+        # Snapshot cache expired → first call is now always force_refresh=True.
+        # State unchanged (same DENY/lease_missing_exp) → no second sync_on_change call.
+        self.assertEqual(calls, [True])
         self.assertFalse(snap.get("valid"))
         self.assertEqual(snap.get("last_error"), "lease_missing_exp")
 

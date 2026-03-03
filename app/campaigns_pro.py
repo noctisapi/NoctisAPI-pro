@@ -40,6 +40,18 @@ class CampaignProError(RuntimeError):
     pass
 
 
+class CampaignProExplicitDeny(CampaignProError):
+    """Raised when the licensing server returns an explicit DENY decision (e.g. revoked, suspended).
+
+    Unlike a network or transport error, this must NOT trigger a fallback to cached leases:
+    the server has explicitly rejected the license and the client must reflect that immediately.
+    """
+
+    def __init__(self, reason_code: str) -> None:
+        super().__init__(f"explicit_deny:{reason_code}")
+        self.reason_code = str(reason_code or "DENIED").strip().upper()
+
+
 def _env_int(name: str, default: int, min_value: int | None = None, max_value: int | None = None) -> int:
     raw = os.getenv(name)
     if raw is None or raw.strip() == "":
@@ -573,6 +585,10 @@ def request_backend_lease(
         raise CampaignProError("lease_invalid_response")
     lease_jws = str(data.get("lease_jws") or "").strip()
     if not lease_jws:
+        decision = str(data.get("decision") or "").strip().upper()
+        if decision == "DENY":
+            reason_code = str(data.get("reason_code") or "DENIED").strip()
+            raise CampaignProExplicitDeny(reason_code)
         raise CampaignProError("lease_missing_jws")
     return data
 
@@ -680,6 +696,10 @@ def get_backend_lease_cached(
             instance_id=instance_id,
             instance_fingerprint=instance_fingerprint,
         )
+    except CampaignProExplicitDeny:
+        # Server explicitly denied (revoked / suspended / plan change): never fall back to a
+        # cached lease.  The client must reflect the server's decision immediately.
+        raise
     except CampaignProError as exc:
         for entry in (mem_entry, disk_entry):
             if _cache_entry_usable(

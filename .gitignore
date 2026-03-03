@@ -41,6 +41,9 @@ Thumbs.db
 .idea/
 .vscode/
 
+# Claude Code agent memory
+.claude/
+
 # Build / cache
 dist/
 build/
