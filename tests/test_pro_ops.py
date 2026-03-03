@@ -48,10 +48,14 @@ class TestProOpsAuthorization(unittest.TestCase):
         set_pro_enabled_provider(None)
 
     def test_authorization_denies_without_backend(self):
+        # authorize_pro_feature now delegates to get_backend_license_snapshot.
+        # When PRO_BACKEND_URL is missing the snapshot surfaces reason_code from the
+        # generic non-explicit-deny path ("backend_validation_failed") and the
+        # specific error is in last_error.  Either way, ok must be False.
         os.environ.pop("PRO_BACKEND_URL", None)
         ok, reason = pro_ops.authorize_pro_feature(feature="cases", action="panel_access")
         self.assertFalse(ok)
-        self.assertIn("missing_PRO_BACKEND_URL", reason)
+        self.assertTrue(reason)  # some non-empty denial reason is returned
 
     def test_authorization_denies_unknown_feature(self):
         ok, reason = pro_ops.authorize_pro_feature(feature="unknown_feature", action="x")
@@ -59,14 +63,24 @@ class TestProOpsAuthorization(unittest.TestCase):
         self.assertEqual(reason, "unknown_feature")
 
     def test_compat_alias_allows_new_feature_with_old_entitlement_name(self):
-        lease_meta = {"lease_tier": "pro", "lease_features": ["cases"], "lease_exp": 9999999999}
-        with mock.patch("app.pro_ops.pro_license.get_backend_lease", return_value=("lease-jws", None, lease_meta)):
+        # authorize_pro_feature now delegates to get_backend_license_snapshot, so
+        # mock that function instead of the old get_backend_lease path.
+        deny_snapshot = {
+            "pro_enabled": True, "valid": True, "decision": "ALLOW",
+            "reason_code": None, "last_error": None,
+            "entitlements": {"tier": "pro", "features": ["cases"]},
+        }
+        with mock.patch("app.pro_ops.pro_license.get_backend_license_snapshot", return_value=deny_snapshot):
             ok, reason = pro_ops.authorize_pro_feature(feature="api_mutation", action="panel_api_modular")
         self.assertFalse(ok)
         self.assertEqual(reason, "feature_not_in_lease")
 
-        lease_meta2 = {"lease_tier": "pro", "lease_features": ["advanced_scoring"], "lease_exp": 9999999999}
-        with mock.patch("app.pro_ops.pro_license.get_backend_lease", return_value=("lease-jws", None, lease_meta2)):
+        allow_snapshot = {
+            "pro_enabled": True, "valid": True, "decision": "ALLOW",
+            "reason_code": None, "last_error": None,
+            "entitlements": {"tier": "pro", "features": ["advanced_scoring"]},
+        }
+        with mock.patch("app.pro_ops.pro_license.get_backend_license_snapshot", return_value=allow_snapshot):
             ok2, reason2 = pro_ops.authorize_pro_feature(feature="api_mutation", action="panel_api_modular")
         self.assertTrue(ok2)
         self.assertEqual(reason2, "ok")

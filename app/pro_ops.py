@@ -43,28 +43,26 @@ def _lease_allows_feature(feature_name: str, lease_features: set[str]) -> bool:
 
 def authorize_pro_feature(*, feature: str, action: str = "access", force_refresh: bool = False) -> tuple[bool, str]:
     feature_name = _canonical_feature(feature)
-    action_name = _canonical_action(action)
+    _canonical_action(action)
     if feature_name not in _ALLOWLIST:
         return False, "unknown_feature"
 
-    now = int(time.time())
-    cache_ttl = _env_int("HP_PRO_OPS_AUTHZ_CACHE_SECONDS", 0, 0, 120)
-    cache_key = f"{feature_name}|{action_name}"
-    with _CACHE_LOCK:
-        exp_cached = int(_CACHE.get(cache_key) or 0)
-        if (not force_refresh) and cache_ttl > 0 and exp_cached > now + 2:
-            return True, "ok_cached"
+    # Use the snapshot cache so revocation/suspension is always detected within
+    # HP_BACKEND_LICENSE_STATUS_REFRESH_SECONDS (default 15 s). The snapshot forces
+    # a live server call whenever its TTL expires, so explicit DENY propagates
+    # regardless of any lower-level lease cache that might still be warm.
+    snapshot = pro_license.get_backend_license_snapshot(force_refresh=force_refresh)
+    if not snapshot.get("pro_enabled") or not snapshot.get("valid"):
+        reason = snapshot.get("reason_code") or snapshot.get("last_error") or "pro_not_enabled"
+        return False, str(reason)
 
-    lease_jws, lease_error, meta = pro_license.get_backend_lease(force_refresh=force_refresh)
-    if not lease_jws:
-        return False, lease_error or "missing_valid_lease"
-
-    tier = str(meta.get("lease_tier") or "").strip().lower()
+    ent = snapshot.get("entitlements") if isinstance(snapshot.get("entitlements"), dict) else {}
+    tier = str(ent.get("tier") or "").strip().lower() if isinstance(ent, dict) else ""
     if tier and tier != "pro":
         return False, "license_tier_not_pro"
 
-    features_raw = meta.get("lease_features")
-    features = set()
+    features_raw = ent.get("features") if isinstance(ent, dict) else []
+    features: set[str] = set()
     if isinstance(features_raw, list):
         for item in features_raw:
             name = str(item or "").strip().lower()
@@ -73,18 +71,6 @@ def authorize_pro_feature(*, feature: str, action: str = "access", force_refresh
     if features and not _lease_allows_feature(feature_name, features):
         return False, "feature_not_in_lease"
 
-    exp_raw = meta.get("lease_exp")
-    try:
-        exp = int(exp_raw) if exp_raw is not None else 0
-    except Exception:
-        exp = 0
-
-    with _CACHE_LOCK:
-        if cache_ttl > 0:
-            ttl_exp = now + cache_ttl
-            _CACHE[cache_key] = min(ttl_exp, exp) if exp > 0 else ttl_exp
-        else:
-            _CACHE[cache_key] = 0
     return True, "ok"
 
 

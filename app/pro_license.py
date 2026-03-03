@@ -385,7 +385,10 @@ def get_backend_license_snapshot(*, force_refresh: bool = False) -> dict[str, An
 
 
 def get_backend_lease(*, force_refresh: bool = False) -> tuple[Optional[str], Optional[str], dict[str, Any]]:
-    lease_jws, exp, error, meta = _fetch_backend_lease(force_refresh=force_refresh)
+    # Always force a live server call so revocation/suspension is reflected immediately.
+    # Network errors still fall back to the offline lease cache (within grace window).
+    del force_refresh  # kept in signature for call-site compatibility
+    lease_jws, exp, error, meta = _fetch_backend_lease(force_refresh=True)
     if not lease_jws:
         return None, error or "backend_lease_failed", meta
     now = int(time.time())

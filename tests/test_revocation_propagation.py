@@ -19,7 +19,7 @@ import time
 import unittest
 from unittest import mock
 
-from app import campaigns_pro, pro_license
+from app import campaigns_pro, pro_license, pro_ops
 
 
 def _make_fake_jws(payload: dict) -> str:
@@ -320,6 +320,105 @@ class _ProLicenseRevocationTests(unittest.TestCase):
 
         self.assertFalse(snapshot.get("pro_enabled"))
         self.assertEqual(snapshot.get("reason_code"), "SUSPENDED")
+
+
+class _ProOpsAuthorizeTests(unittest.TestCase):
+    """Tests that authorize_pro_feature reflects suspension/revocation immediately."""
+
+    def setUp(self) -> None:
+        self._old_env = {
+            k: os.environ.get(k)
+            for k in ("LICENSE_KEY", "HP_APP_VERSION", "PRO_BACKEND_URL",
+                      "HP_LICENSE_REPORT_TO_SERVER", "HP_PRO_LEASE_CACHE_PATH")
+        }
+        os.environ["LICENSE_KEY"] = "sk_test_123"
+        os.environ["HP_APP_VERSION"] = "1.2.3"
+        os.environ["PRO_BACKEND_URL"] = "https://pro.example.com"
+        os.environ["HP_LICENSE_REPORT_TO_SERVER"] = "0"
+        os.environ["HP_PRO_LEASE_CACHE_PATH"] = os.devnull
+        pro_license.clear_cache()
+        pro_ops.clear_cache()
+
+    def tearDown(self) -> None:
+        for k, v in self._old_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        pro_license.clear_cache()
+        pro_ops.clear_cache()
+
+    _IDENTITY = {"instance_id": "instance-1", "instance_fingerprint_sha256": "f" * 64}
+
+    # ------------------------------------------------------------------
+    # Test 8 – suspended license blocks feature authorization
+    # ------------------------------------------------------------------
+    def test_suspended_blocks_authorize_pro_feature(self) -> None:
+        """authorize_pro_feature returns False with 'SUSPENDED' when server denies."""
+        with (
+            mock.patch("app.pro_license.compute_client_identity", return_value=self._IDENTITY),
+            mock.patch(
+                "app.pro_license.campaigns_pro.get_backend_lease_cached",
+                side_effect=campaigns_pro.CampaignProExplicitDeny("SUSPENDED"),
+            ),
+        ):
+            allowed, reason = pro_ops.authorize_pro_feature(
+                feature="campaigns", force_refresh=True
+            )
+
+        self.assertFalse(allowed)
+        self.assertEqual(reason, "SUSPENDED")
+
+    # ------------------------------------------------------------------
+    # Test 9 – revoked license blocks feature authorization
+    # ------------------------------------------------------------------
+    def test_revoked_blocks_authorize_pro_feature(self) -> None:
+        """authorize_pro_feature returns False with 'REVOKED' when server denies."""
+        with (
+            mock.patch("app.pro_license.compute_client_identity", return_value=self._IDENTITY),
+            mock.patch(
+                "app.pro_license.campaigns_pro.get_backend_lease_cached",
+                side_effect=campaigns_pro.CampaignProExplicitDeny("REVOKED"),
+            ),
+        ):
+            allowed, reason = pro_ops.authorize_pro_feature(
+                feature="cases", force_refresh=True
+            )
+
+        self.assertFalse(allowed)
+        self.assertEqual(reason, "REVOKED")
+
+    # ------------------------------------------------------------------
+    # Test 10 – snapshot DENY is not masked by authorize_pro_feature
+    # ------------------------------------------------------------------
+    def test_cached_deny_not_masked_by_authorize(self) -> None:
+        """A snapshot already set to DENY (e.g. from previous revocation check)
+        is not bypassed by authorize_pro_feature — even without force_refresh."""
+        # Pre-populate the snapshot cache with a DENY state.
+        import threading
+        with pro_license._STATUS_LOCK:
+            pro_license._STATUS_CACHE["checked_at"] = int(time.time())
+            pro_license._STATUS_CACHE["snapshot"] = {
+                "pro_enabled": False,
+                "valid": False,
+                "decision": "DENY",
+                "reason_code": "SUSPENDED",
+                "last_error": "SUSPENDED",
+                "last_ok_at": None,
+                "expires_at": None,
+                "expires_in_seconds": None,
+                "recheck_after_seconds": 15,
+                "entitlements": {},
+                "source": "backend_lease",
+            }
+
+        # force_refresh=False → reads snapshot cache → must NOT fall back to cached lease
+        allowed, reason = pro_ops.authorize_pro_feature(
+            feature="campaigns", force_refresh=False
+        )
+
+        self.assertFalse(allowed)
+        self.assertEqual(reason, "SUSPENDED")
 
 
 if __name__ == "__main__":
