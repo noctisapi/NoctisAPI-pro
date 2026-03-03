@@ -195,6 +195,13 @@ def _client_ip(req: Request) -> str:
     return "0.0.0.0"
 
 
+def _is_private_ip(ip: str) -> bool:
+    try:
+        return ipaddress.ip_address(ip).is_private
+    except ValueError:
+        return False
+
+
 def _user_agent(req: Request) -> str:
     return (req.headers.get("user-agent") or "")[:400]
 
@@ -1534,6 +1541,9 @@ async def log_all_requests(request: Request, call_next):
         if request.url.path.startswith("/static/"):
             skip_log = True
         if is_monitor:
+            skip_log = True
+        # Never record actors from private/loopback addresses (Docker network, health checks).
+        if not skip_log and _is_private_ip(_client_ip(request)):
             skip_log = True
         # Skip internal probes identified by User-Agent (e.g. Docker healthchecks).
         # HONEYPOT_MONITOR_UA can be a comma-separated list of substrings.
