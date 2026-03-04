@@ -27,6 +27,15 @@ from app import licensing
 from app import pro_license
 from app import pro_ops
 from app import api_modular
+from app.trusted_proxy import resolve_client_ip
+from app.reverse_proxy import (
+    ReverseProxyMiddleware,
+    get_public_base_url,
+    get_static_public_base_url,
+)
+from app import health as _health
+from app.server_config import RequestTimeoutMiddleware, get_request_timeout
+from app.structured_logging import get_request_id, set_request_id
 
 APP_TITLE = os.getenv("HP_API_TITLE", "Account Service API")
 APP_VERSION = os.getenv("HP_API_VERSION", "1.0.0")
@@ -103,6 +112,8 @@ tags_metadata = [
     {"name": "Export", "description": "Export jobs"},
 ]
 
+_static_public_url = get_static_public_base_url()
+
 app = FastAPI(
     title=APP_TITLE,
     version=APP_VERSION,
@@ -110,6 +121,7 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc",
     openapi_url="/openapi.json",
+    servers=[{"url": _static_public_url, "description": "Public API"}] if _static_public_url else None,
 )
 
 app.add_middleware(
@@ -119,6 +131,15 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
+# Outermost middleware: rewrites scope scheme/server from X-Forwarded headers
+# (trusted proxies only) so that Starlette URL helpers use the correct
+# public URL automatically.  Must be added after CORSMiddleware so it
+# executes first (Starlette wraps in LIFO order).
+app.add_middleware(ReverseProxyMiddleware)
+# Request timeout — cancels requests that exceed REQUEST_TIMEOUT seconds.
+# Added last (executes first of all) so the clock starts before any other
+# middleware runs.
+app.add_middleware(RequestTimeoutMiddleware, timeout=get_request_timeout())
 
 
 def _warn_if_default_seed() -> None:
@@ -132,6 +153,10 @@ def _warn_if_default_seed() -> None:
 @app.on_event("startup")
 async def _startup_checks() -> None:
     _warn_if_default_seed()
+    from app.egress import check_egress_hosts
+    check_egress_hosts()
+    from app.diagnostics import run_diagnostics
+    run_diagnostics()
     licensing.set_pro_enabled_provider(pro_license.is_pro_enabled)
     pro_license.get_backend_license_snapshot(force_refresh=True)
     pro_ops.clear_cache()
@@ -184,15 +209,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
 
 
 def _client_ip(req: Request) -> str:
-    xff = req.headers.get("x-forwarded-for")
-    if xff:
-        return xff.split(",")[0].strip()
-    xrip = req.headers.get("x-real-ip")
-    if xrip:
-        return xrip.strip()
-    if req.client and req.client.host:
-        return req.client.host
-    return "0.0.0.0"
+    return resolve_client_ip(req)
 
 
 def _is_private_ip(ip: str) -> bool:
@@ -1489,6 +1506,18 @@ async def _apply_modular_response_policy(request: Request, response: Any, policy
 @app.middleware("http")
 async def log_all_requests(request: Request, call_next):
     body = await request.body()
+    # Resolve the real client IP once and cache it on request.state so that
+    # route handlers and downstream middleware can access it without re-parsing
+    # headers on every call.
+    request.state.client_ip = _client_ip(request)
+    # Resolve the effective public base URL (PUBLIC_BASE_URL > forwarded
+    # headers from trusted proxies > raw socket) and cache it on request.state.
+    request.state.public_base_url = get_public_base_url(request)
+    # Propagate or generate a per-request ID for log correlation.
+    # Honour X-Request-ID if the upstream proxy already set one.
+    _request_id = (request.headers.get("x-request-id") or "").strip() or secrets.token_hex(16)
+    set_request_id(_request_id)
+    request.state.request_id = _request_id
 
     t0 = time.perf_counter()
     response = None
@@ -1538,6 +1567,8 @@ async def log_all_requests(request: Request, call_next):
         exc = e
         raise
     finally:
+        latency_ms = int((time.perf_counter() - t0) * 1000.0)
+
         if request.url.path.startswith("/static/"):
             skip_log = True
         if is_monitor:
@@ -1555,11 +1586,35 @@ async def log_all_requests(request: Request, call_next):
                     skip_log = True
                     break
 
-        if not skip_log:
-            latency_ms = int((time.perf_counter() - t0) * 1000.0)
+        # Structured access log — emitted for every request so SIEM / syslog
+        # collectors receive a complete picture.  Monitors and health checks
+        # are logged at DEBUG so they can be filtered at the collector without
+        # losing visibility when troubleshooting.
+        _status_code = 0
+        if response is not None:
+            _status_code = getattr(response, "status_code", 0) or 0
+        elif exc is not None:
+            _status_code = 500
+        _access_log_level = logging.DEBUG if (skip_log or is_monitor) else logging.INFO
+        _logger.log(
+            _access_log_level,
+            "access",
+            extra={
+                "client_ip": _client_ip(request),
+                "method": request.method,
+                "path": request.url.path,
+                "status": _status_code,
+                "user_agent": _user_agent(request),
+                "request_id": _request_id,
+                "x_forwarded_for": (request.headers.get("x-forwarded-for") or ""),
+                "cf_connecting_ip": (request.headers.get("cf-connecting-ip") or ""),
+                "latency_ms": latency_ms,
+            },
+        )
 
+        if not skip_log:
             kind = "probe"
-            if request.url.path == "/health":
+            if request.url.path in ("/health", "/ready", "/version"):
                 kind = "health"
 
             token = None
@@ -1689,20 +1744,30 @@ async def log_all_requests(request: Request, call_next):
 
     if response is None:
         response = JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
+    # Propagate the request ID to the client so upstream proxies and callers
+    # can correlate their own logs with ours.
+    response.headers["X-Request-ID"] = _request_id
     return response
 
 
 @app.get("/health", tags=["Health"], response_class=JSONResponse)
 async def health(request: Request):
-    """Decoy health endpoint – returns fabricated status and never leaks real readiness data."""
-    actor = _actor_id_from_request(request)
-    fake_payload = {
-        "status": "ok",
-        "uptime": f"{secrets.randbelow(86400)}s",
-        "instance": actor[:12],
-        "version": f"public-{secrets.randbelow(9) + 1}.0",
-    }
-    return JSONResponse(fake_payload)
+    """Liveness check — always 200 while the process is alive."""
+    return JSONResponse(_health.liveness())
+
+
+@app.get("/ready", tags=["Health"], response_class=JSONResponse)
+async def ready(request: Request):
+    """Readiness check — verifies the database is reachable and schema is initialised."""
+    payload = _health.readiness(DB_PATH)
+    status_code = 200 if payload["status"] == "ok" else 503
+    return JSONResponse(payload, status_code=status_code)
+
+
+@app.get("/version", tags=["Health"], response_class=JSONResponse)
+async def version(request: Request):
+    """Return application version and build metadata."""
+    return JSONResponse(_health.version_info())
 
 
 @app.get("/status", tags=["Health"], response_class=JSONResponse)

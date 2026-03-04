@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import functools
 import hashlib
 import json
 import os
@@ -8,6 +9,7 @@ import platform
 import random
 import re
 import socket
+import ssl
 import threading
 import time
 import uuid
@@ -52,7 +54,7 @@ def _safe_json_loads(raw: bytes) -> Dict[str, Any]:
         return out
 
 
-def post_json(url: str, payload: Dict[str, Any], timeout: float) -> Tuple[int, Dict[str, Any]]:
+def post_json(url: str, payload: Dict[str, Any], timeout: float, ssl_context: Optional[ssl.SSLContext] = None) -> Tuple[int, Dict[str, Any]]:
     body = json.dumps(payload or {}).encode("utf-8")
     ua = (os.getenv("HP_HTTP_USER_AGENT") or "").strip()
     if not ua:
@@ -70,7 +72,7 @@ def post_json(url: str, payload: Dict[str, Any], timeout: float) -> Tuple[int, D
         },
     )
     try:
-        with urlopen(req, timeout=timeout) as resp:
+        with urlopen(req, timeout=timeout, context=ssl_context) as resp:
             raw = resp.read()
             return int(getattr(resp, "status", 0) or 0), _safe_json_loads(raw)
     except HTTPError as exc:
@@ -369,6 +371,18 @@ class LicensingManager:
         limited_behavior = (os.getenv("HP_LICENSE_LIMITED_BEHAVIOR") or "core").strip().lower()
         deny_behavior = (os.getenv("HP_LICENSE_DENY_BEHAVIOR") or "disable").strip().lower()
 
+        # Inject TLS context when running as part of the app package so that
+        # custom CA bundles (SSL_CERT_FILE, /certs) are honoured for licensing
+        # calls.  Falls back to the plain post_json (system CAs via urllib) if
+        # app.tls_config is not importable (e.g. standalone use of this module).
+        _post_json_func: Callable[[str, Dict[str, Any], float], Tuple[int, Dict[str, Any]]] = post_json
+        try:
+            from app.tls_config import get_ssl_context  # noqa: PLC0415
+            _ssl_ctx = get_ssl_context()
+            _post_json_func = functools.partial(post_json, ssl_context=_ssl_ctx)
+        except ImportError:
+            pass
+
         return LicensingManager(
             licensing_url=licensing_url,
             license_key=license_key,
@@ -381,6 +395,7 @@ class LicensingManager:
             enforce_on_startup=enforce,
             limited_behavior=limited_behavior,
             deny_behavior=deny_behavior,
+            post_json_func=_post_json_func,
         )
 
     def start(self) -> None:

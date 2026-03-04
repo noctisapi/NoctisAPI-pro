@@ -6,6 +6,7 @@ import threading
 import json
 import sqlite3
 import urllib.request
+from app.tls_config import get_ssl_context
 from collections import Counter
 from statistics import median
 from datetime import datetime, timezone
@@ -27,6 +28,7 @@ from app import license_runtime
 from app import api_modular
 from app.honeypot_monitor import HoneypotAvailabilityMonitor, get_history as hp_get_history, get_summary as hp_get_summary
 from honey_licensing.client import compute_client_identity
+from app.server_config import RequestTimeoutMiddleware, get_request_timeout
 
 APP_NAME = "noctisapi-panel"
 DB_PATH = os.getenv("HP_DB_PATH", "/data/honeypot.db")
@@ -42,6 +44,7 @@ _CAMPAIGN_AUTO_INTERVAL = int(os.getenv("HP_CAMPAIGN_AUTO_RECOMPUTE_INTERVAL", "
 _HP_MONITOR_SECRET = os.getenv("HP_MONITOR_SECRET", "").strip()
 
 app = FastAPI(title=APP_NAME)
+app.add_middleware(RequestTimeoutMiddleware, timeout=get_request_timeout())
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
@@ -306,6 +309,10 @@ def _auto_recompute_campaigns_worker() -> None:
 
 @app.on_event("startup")
 def _start_background_tasks():
+    from app.egress import check_egress_hosts
+    check_egress_hosts()
+    from app.diagnostics import run_diagnostics
+    run_diagnostics()
     honeypot_monitor.start()
     licensing.set_pro_enabled_provider(pro_license.is_pro_enabled)
     pro_license.get_backend_license_snapshot(force_refresh=True)
@@ -1523,7 +1530,7 @@ def _honeypot_public_endpoint_catalog() -> tuple[list[dict], str, str]:
             if _HP_MONITOR_SECRET:
                 _fetch_headers["x-internal-monitor"] = _HP_MONITOR_SECRET
             req = urllib.request.Request(url, headers=_fetch_headers)
-            with urllib.request.urlopen(req, timeout=3.0) as resp:
+            with urllib.request.urlopen(req, timeout=3.0, context=get_ssl_context()) as resp:
                 raw = resp.read()
             parsed = json.loads(raw.decode("utf-8", errors="ignore") or "{}")
             remote_catalog = _catalog_from_openapi_doc(parsed)

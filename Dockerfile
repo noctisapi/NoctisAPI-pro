@@ -27,4 +27,4 @@ RUN useradd -r -u 10001 -g root appuser \
 
 EXPOSE 8000
 USER appuser
-CMD ["uvicorn", "app.honeypot_public:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "main.py"]

@@ -15,6 +15,8 @@ import httpx
 
 from honey_licensing.client import verify_jws_rs256_compact
 from app import license_runtime
+from app.proxy_config import build_httpx_mounts
+from app.tls_config import get_ssl_context
 
 
 PRO_STATE_TABLE = "campaign_pro_state"
@@ -574,7 +576,7 @@ def request_backend_lease(
         "instance_fingerprint": instance_fingerprint,
     }
     try:
-        with httpx.Client(timeout=timeout_s) as client:
+        with httpx.Client(timeout=timeout_s, verify=get_ssl_context(), mounts=build_httpx_mounts(get_ssl_context())) as client:
             resp = client.post(f"{backend_url}/v1/licenses/validate", json=payload)
     except Exception as exc:
         raise CampaignProError(f"lease_transport_error:{exc.__class__.__name__}")
@@ -625,7 +627,7 @@ def report_runtime_state(
         "entitlements": [str(x or "").strip() for x in (entitlements or []) if str(x or "").strip()],
     }
     try:
-        with httpx.Client(timeout=timeout_s) as client:
+        with httpx.Client(timeout=timeout_s, verify=get_ssl_context(), mounts=build_httpx_mounts(get_ssl_context())) as client:
             resp = client.post(f"{backend_url}/v1/runtime/report", json=payload)
     except Exception as exc:
         return f"runtime_report_transport_error:{exc.__class__.__name__}"
@@ -755,7 +757,7 @@ def request_recompute_job(
     }
     headers = {"authorization": f"Bearer {lease_jws}"}
     try:
-        with httpx.Client(timeout=timeout_s) as client:
+        with httpx.Client(timeout=timeout_s, verify=get_ssl_context(), mounts=build_httpx_mounts(get_ssl_context())) as client:
             resp = client.post(f"{backend_url}/v1/pro/campaigns/recompute", json=payload, headers=headers)
     except Exception as exc:
         raise CampaignProError(f"enqueue_transport_error:{exc.__class__.__name__}")
@@ -770,7 +772,7 @@ def request_recompute_job(
 def fetch_job_status(*, backend_url: str, lease_jws: str, job_id: str, timeout_s: float = 10.0) -> dict[str, Any]:
     headers = {"authorization": f"Bearer {lease_jws}"}
     try:
-        with httpx.Client(timeout=timeout_s) as client:
+        with httpx.Client(timeout=timeout_s, verify=get_ssl_context(), mounts=build_httpx_mounts(get_ssl_context())) as client:
             resp = client.get(f"{backend_url}/v1/pro/jobs/{job_id}", headers=headers)
     except Exception as exc:
         raise CampaignProError(f"job_status_transport_error:{exc.__class__.__name__}")
@@ -785,7 +787,7 @@ def fetch_job_status(*, backend_url: str, lease_jws: str, job_id: str, timeout_s
 def fetch_job_result(*, backend_url: str, lease_jws: str, job_id: str, timeout_s: float = 12.0) -> dict[str, Any]:
     headers = {"authorization": f"Bearer {lease_jws}"}
     try:
-        with httpx.Client(timeout=timeout_s) as client:
+        with httpx.Client(timeout=timeout_s, verify=get_ssl_context(), mounts=build_httpx_mounts(get_ssl_context())) as client:
             resp = client.get(f"{backend_url}/v1/pro/jobs/{job_id}/result", headers=headers)
     except Exception as exc:
         raise CampaignProError(f"job_result_transport_error:{exc.__class__.__name__}")
