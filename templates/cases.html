@@ -1,125 +1,183 @@
 {% extends "base.html" %}
 {% block content %}
+<style>
+  .sev-critical { background:rgba(231,76,60,.15);  color:#f2a6a6; border-color:rgba(231,76,60,.4); }
+  .sev-high     { background:rgba(230,126,34,.15); color:#f0b06a; border-color:rgba(230,126,34,.4); }
+  .sev-medium   { background:rgba(255,179,0,.15);  color:#ffc940; border-color:rgba(255,179,0,.4); }
+  .sev-low      { background:rgba(74,144,226,.15); color:#7ab8f5; border-color:rgba(74,144,226,.4); }
+  .status-open         { background:rgba(26,191,107,.12); color:#7ee2b8; border-color:rgba(26,191,107,.4); }
+  .status-monitoring   { background:rgba(74,144,226,.12); color:#7ab8f5; border-color:rgba(74,144,226,.4); }
+  .status-closed       { background:rgba(200,200,200,.1); color:var(--muted); border-color:rgba(200,200,200,.3); }
+  .status-false_positive { background:rgba(255,179,0,.12); color:#ffc940; border-color:rgba(255,179,0,.35); }
+
+  .filter-card {
+    background: linear-gradient(180deg, var(--panel2), var(--panel));
+    border: 1px solid var(--stroke);
+    border-radius: 16px;
+    padding: 14px 20px;
+    margin-bottom: 14px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: flex-end;
+  }
+  .filter-field { display: flex; flex-direction: column; gap: 4px; }
+  .filter-field label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+  .filter-field .input { min-width: 0; }
+  .filter-field.flex-1 { flex: 1; min-width: 160px; }
+
+  .cases-table td { vertical-align: middle; }
+  .case-title-link {
+    color: var(--text);
+    text-decoration: none;
+    font-weight: 500;
+  }
+  .case-title-link:hover { color: var(--accent); }
+  .id-link { font-family: monospace; font-size: 0.82rem; }
+
+  .table-actions { display: flex; gap: 6px; }
+</style>
+
 <div class="page-head">
   <div>
     <h1>Cases</h1>
-    <div class="sub">Incidents and archived groups</div>
+    <div class="sub">Incidents and archived groups &middot; {{ total }} total</div>
   </div>
 </div>
 
-<div class="card" style="margin-bottom:12px;">
-  <form method="get" action="/dashboard/cases" style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;padding:12px 16px;">
-    <div style="display:flex;flex-direction:column;gap:4px;flex:1;min-width:160px;">
-      <label class="label-sm">Search title</label>
-      <input class="input" type="text" name="q" value="{{ q or '' }}" placeholder="Filter by title...">
-    </div>
-    <div style="display:flex;flex-direction:column;gap:4px;">
-      <label class="label-sm">Status</label>
-      <select class="input" name="status">
-        <option value="">All</option>
-        {% for s in ['open','monitoring','closed','false_positive'] %}
-        <option value="{{ s }}" {% if status_filter == s %}selected{% endif %}>{{ s }}</option>
-        {% endfor %}
-      </select>
-    </div>
-    <div style="display:flex;flex-direction:column;gap:4px;">
-      <label class="label-sm">Severity</label>
-      <select class="input" name="severity">
-        <option value="">All</option>
-        {% for sv in ['critical','high','medium','low'] %}
-        <option value="{{ sv }}" {% if severity_filter == sv %}selected{% endif %}>{{ sv }}</option>
-        {% endfor %}
-      </select>
-    </div>
-    <div style="display:flex;flex-direction:column;gap:4px;">
-      <label class="label-sm">Per page</label>
-      <select class="input" name="per_page">
-        {% for n in [25, 50, 100, 200] %}
-        <option value="{{ n }}" {% if per_page == n %}selected{% endif %}>{{ n }}</option>
-        {% endfor %}
-      </select>
-    </div>
-    <input type="hidden" name="page" value="1">
-    <button class="btn btn-primary" type="submit">Filter</button>
+<!-- Filter bar -->
+<form method="get" action="/dashboard/cases" class="filter-card">
+  <div class="filter-field flex-1">
+    <label>Search title</label>
+    <input class="input" type="text" name="q" value="{{ q or '' }}" placeholder="Filter by title…">
+  </div>
+  <div class="filter-field">
+    <label>Status</label>
+    <select class="input" name="status">
+      <option value="">All statuses</option>
+      {% for s in ['open','monitoring','closed','false_positive'] %}
+      <option value="{{ s }}" {% if status_filter == s %}selected{% endif %}>{{ s }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="filter-field">
+    <label>Severity</label>
+    <select class="input" name="severity">
+      <option value="">All severities</option>
+      {% for sv in ['critical','high','medium','low'] %}
+      <option value="{{ sv }}" {% if severity_filter == sv %}selected{% endif %}>{{ sv }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="filter-field">
+    <label>Per page</label>
+    <select class="input" name="per_page">
+      {% for n in [25, 50, 100, 200] %}
+      <option value="{{ n }}" {% if per_page == n %}selected{% endif %}>{{ n }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <input type="hidden" name="page" value="1">
+  <div style="display:flex;gap:6px;align-items:flex-end;">
+    <button class="btn btn-primary" type="submit">Apply</button>
     {% if q or status_filter or severity_filter %}
     <a class="btn" href="/dashboard/cases">Clear</a>
     {% endif %}
-  </form>
-</div>
+  </div>
+</form>
 
+<!-- Cases table -->
 <div class="card">
   <div class="card-head">
     <div class="card-title">Cases</div>
-    <div class="card-sub">{{ total }} total — page {{ page }} of {{ total_pages }}</div>
+    <div class="card-sub">{{ total }} result{{ 's' if total != 1 else '' }} &mdash; page {{ page }} of {{ total_pages }}</div>
   </div>
   <div class="table-wrap">
-    <table class="table table-sortable">
+    <table class="table table-sortable cases-table">
       <thead>
         <tr>
-          <th data-type="number">ID</th>
+          <th data-type="number" style="width:60px;">#</th>
           <th data-type="text">Title</th>
-          <th data-type="text">Severity</th>
-          <th data-type="text">Status</th>
-          <th data-type="date">Updated</th>
-          <th data-type="text">Actions</th>
+          <th data-type="text" style="width:110px;">Severity</th>
+          <th data-type="text" style="width:150px;">Status</th>
+          <th data-type="date" style="width:175px;">Updated</th>
+          <th style="width:90px;"></th>
         </tr>
       </thead>
       <tbody>
         {% for c in cases %}
         <tr>
-          <td><a class="link" href="/dashboard/cases/{{ c.id }}">{{ c.id }}</a></td>
-          <td>{{ c.title }}</td>
-          <td>{{ c.severity }}</td>
-          <td>{{ c.status }}</td>
-          <td class="mono">{{ c.updated_at }}</td>
+          <td class="mono muted" style="font-size:0.82rem;">
+            <a class="link id-link" href="/dashboard/cases/{{ c.id }}">#{{ c.id }}</a>
+          </td>
           <td>
-            <button class="btn btn-danger" type="button" onclick="deleteCase({{ c.id }}, this)">Delete</button>
+            <a class="case-title-link" href="/dashboard/cases/{{ c.id }}">{{ c.title }}</a>
+          </td>
+          <td>
+            {% if c.severity %}
+            <span class="badge sev-{{ c.severity }}">{{ c.severity }}</span>
+            {% else %}
+            <span class="muted" style="font-size:0.82rem;">—</span>
+            {% endif %}
+          </td>
+          <td>
+            <span class="badge status-{{ c.status }}">{{ c.status | replace('_', ' ') }}</span>
+          </td>
+          <td class="mono muted" style="font-size:0.82rem;">{{ c.updated_at }}</td>
+          <td class="table-actions">
+            <button class="btn btn-danger btn-small" type="button" onclick="deleteCase({{ c.id }}, this)">Delete</button>
           </td>
         </tr>
         {% endfor %}
         {% if not cases %}
-        <tr><td colspan="6" style="text-align:center;padding:24px;" class="muted">No cases found.</td></tr>
+        <tr>
+          <td colspan="6" style="text-align:center;padding:32px;" class="muted">
+            No cases found{% if q or status_filter or severity_filter %} matching the current filters{% endif %}.
+          </td>
+        </tr>
         {% endif %}
       </tbody>
     </table>
   </div>
+
   {% if total_pages > 1 %}
-  <div style="display:flex;gap:8px;align-items:center;padding:12px 16px;border-top:1px solid var(--border);">
+  <div style="display:flex;gap:8px;align-items:center;padding:12px 20px;border-top:1px solid var(--stroke);">
     {% set base_qs = '?q=' ~ (q or '') ~ '&status=' ~ (status_filter or '') ~ '&severity=' ~ (severity_filter or '') ~ '&per_page=' ~ per_page %}
     {% if page > 1 %}
-    <a class="btn" href="{{ base_qs }}&page={{ page - 1 }}">&#8592; Prev</a>
+    <a class="btn btn-small" href="{{ base_qs }}&page={{ page - 1 }}">&larr; Prev</a>
     {% else %}
-    <button class="btn" disabled>&#8592; Prev</button>
+    <button class="btn btn-small" disabled>&larr; Prev</button>
     {% endif %}
-    <span class="muted" style="font-size:0.85em;">Page {{ page }} / {{ total_pages }}</span>
+    <span class="muted" style="font-size:0.83rem;">Page {{ page }} / {{ total_pages }}</span>
     {% if page < total_pages %}
-    <a class="btn" href="{{ base_qs }}&page={{ page + 1 }}">Next &#8594;</a>
+    <a class="btn btn-small" href="{{ base_qs }}&page={{ page + 1 }}">Next &rarr;</a>
     {% else %}
-    <button class="btn" disabled>Next &#8594;</button>
+    <button class="btn btn-small" disabled>Next &rarr;</button>
     {% endif %}
   </div>
   {% endif %}
 </div>
 
 <script>
-  async function deleteCase(caseId, btn){
-    if(!confirm(`Delete case #${caseId}? This cannot be undone.`)){ return; }
-    if(btn){ btn.disabled = true; }
-    try{
-      const res = await fetch(`/dashboard/cases/${caseId}`, {method:'DELETE'});
-      if(res.ok){
-        const row = btn.closest('tr');
-        if(row){ row.remove(); }
-      }else{
+  async function deleteCase(caseId, btn) {
+    if (!confirm(`Delete case #${caseId}? This cannot be undone.`)) return;
+    btn.disabled = true;
+    btn.textContent = '…';
+    try {
+      const res = await fetch(`/dashboard/cases/${caseId}`, { method: 'DELETE' });
+      if (res.ok) {
+        btn.closest('tr').remove();
+      } else {
         const text = await res.text();
         alert('Error deleting case: ' + text);
-        if(btn){ btn.disabled = false; }
+        btn.disabled = false;
+        btn.textContent = 'Delete';
       }
-    }catch(e){
+    } catch (e) {
       alert('Error: ' + e.message);
-      if(btn){ btn.disabled = false; }
+      btn.disabled = false;
+      btn.textContent = 'Delete';
     }
   }
 </script>
-
 {% endblock %}

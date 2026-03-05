@@ -1,99 +1,252 @@
 {% extends "base.html" %}
 {% block content %}
+<style>
+  /* Severity & status badges */
+  .sev-critical { background:rgba(231,76,60,.15);  color:#f2a6a6; border-color:rgba(231,76,60,.4); }
+  .sev-high     { background:rgba(230,126,34,.15); color:#f0b06a; border-color:rgba(230,126,34,.4); }
+  .sev-medium   { background:rgba(255,179,0,.15);  color:#ffc940; border-color:rgba(255,179,0,.4); }
+  .sev-low      { background:rgba(74,144,226,.15); color:#7ab8f5; border-color:rgba(74,144,226,.4); }
+  .status-open         { background:rgba(26,191,107,.12); color:#7ee2b8; border-color:rgba(26,191,107,.4); }
+  .status-monitoring   { background:rgba(74,144,226,.12); color:#7ab8f5; border-color:rgba(74,144,226,.4); }
+  .status-closed       { background:rgba(200,200,200,.1); color:var(--muted); border-color:rgba(200,200,200,.3); }
+  .status-false_positive { background:rgba(255,179,0,.12); color:#ffc940; border-color:rgba(255,179,0,.35); }
+
+  /* Risk score */
+  .risk-score-box {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    width: 64px;
+    height: 64px;
+    border-radius: 12px;
+    font-weight: 800;
+    font-size: 1.6rem;
+    border: 2px solid;
+  }
+  .risk-score-box .risk-label {
+    font-size: 0.6rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-top: -2px;
+  }
+  .risk-critical { border-color:rgba(231,76,60,.5);  color:#f2a6a6; background:rgba(231,76,60,.1); }
+  .risk-high     { border-color:rgba(230,126,34,.5); color:#f0b06a; background:rgba(230,126,34,.1); }
+  .risk-medium   { border-color:rgba(255,179,0,.5);  color:#ffc940; background:rgba(255,179,0,.1); }
+  .risk-low      { border-color:rgba(74,144,226,.5); color:#7ab8f5; background:rgba(74,144,226,.1); }
+
+  /* Summary grid */
+  .intel-grid {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 10px 20px;
+    align-items: start;
+    padding: 16px;
+  }
+  .intel-grid .ig-key {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted);
+    padding-top: 3px;
+    white-space: nowrap;
+  }
+  .intel-grid .ig-val { font-size: 0.88rem; }
+
+  /* Event type badges */
+  .ev-type {
+    display: inline-block;
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    padding: 1px 6px;
+    border-radius: 3px;
+    letter-spacing: 0.04em;
+    background: rgba(255,255,255,.07);
+    color: var(--muted);
+  }
+  .ev-type-step   { background:rgba(74,144,226,.12); color:#7ab8f5; }
+  .ev-type-event  { background:rgba(140,120,255,.12); color:#b8a9ff; }
+  .ev-stage {
+    font-size: 0.75rem;
+    font-family: monospace;
+    color: var(--muted);
+  }
+  .ev-status-ok  { color: #7ee2b8; }
+  .ev-status-err { color: #f2a6a6; }
+
+  /* Status & Campaign form */
+  .cs-form {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    padding: 16px;
+  }
+  @media(max-width:700px){ .cs-form { grid-template-columns:1fr; } }
+  .cs-field { display: flex; flex-direction: column; gap: 8px; }
+  .cs-field label {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+  }
+  .cs-field-row { display: flex; gap: 8px; align-items: center; }
+  .cs-field-row select { flex: 1; }
+
+  /* Rename */
+  .rename-row { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
+  .rename-row input { flex: 1; }
+  .rename-feedback { font-size: 0.78rem; color: #7ee2b8; display: none; }
+  .rename-feedback.visible { display: inline; }
+
+  /* Evidence */
+  .evidence-section-title {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    padding: 10px 16px 6px;
+    border-bottom: 1px solid var(--stroke);
+  }
+  .evidence-list { display: flex; flex-direction: column; }
+  .evidence-item {
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+    padding: 12px 16px;
+  }
+  .evidence-item:last-child { border-bottom: none; }
+  .evidence-item-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 12px;
+  }
+  .evidence-title { font-weight: 600; font-size: 0.88rem; }
+  .evidence-meta  { font-size: 0.78rem; color: var(--muted); margin-top: 2px; }
+  .evidence-actions { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
+  .evidence-body { margin-top: 8px; }
+  .evidence-note {
+    font-size: 0.82rem;
+    color: var(--muted);
+    font-style: italic;
+    margin-top: 4px;
+  }
+</style>
+
 <div class="page-head">
-  <div>
-    <h1>{{ case.title }}</h1>
-    <div class="case-rename">
-      <input id="caseTitleInput" class="input input-lg" value="{{ case.title }}" placeholder="Case title">
-      <button class="btn btn-primary" type="button" onclick="renameCase()">Rename</button>
+  <div style="flex:1;">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+      <h1 style="margin:0;">{{ case.title }}</h1>
+      {% if case.severity %}
+      <span class="badge sev-{{ case.severity }}">{{ case.severity }}</span>
+      {% endif %}
+      <span class="badge status-{{ case.status }}">{{ case.status | replace('_',' ') }}</span>
     </div>
-    <div class="sub">Status: {{ case.status }} - Severity: {{ case.severity or 'n/a' }}</div>
+    <div class="rename-row">
+      <input id="caseTitleInput" class="input" value="{{ case.title }}" placeholder="Case title" style="max-width:400px;">
+      <button class="btn btn-small" type="button" onclick="renameCase()">Rename</button>
+      <span class="rename-feedback" id="renameFeedback">&#10003; Saved</span>
+    </div>
   </div>
   <div class="page-head-actions">
     <a class="btn btn-outline btn-small" href="/dashboard/cases/{{ case.id }}/export.json">Export JSON</a>
-    <a class="btn btn-outline btn-small" href="/dashboard/cases/{{ case.id }}/export.md">Export Markdown</a>
+    <a class="btn btn-outline btn-small" href="/dashboard/cases/{{ case.id }}/export.md">Export MD</a>
   </div>
 </div>
 
+<!-- Status & Campaign -->
 <div class="card">
-  <div class="card-head"><div class="card-title">Case Status & Campaign</div></div>
-  <div class="card-body">
-    <div class="form-row">
-      <div>
-        <label class="muted">Status</label>
-        <select id="caseStatusSelect" class="input input-lg">
+  <div class="card-head"><div class="card-title">Status &amp; Campaign</div></div>
+  <div class="cs-form">
+    <div class="cs-field">
+      <label>Case Status</label>
+      <div class="cs-field-row">
+        <select id="caseStatusSelect" class="input">
           {% set st = case.status or 'open' %}
-          <option value="open" {% if st == 'open' %}selected{% endif %}>open</option>
-          <option value="monitoring" {% if st == 'monitoring' %}selected{% endif %}>monitoring</option>
-          <option value="closed" {% if st == 'closed' %}selected{% endif %}>closed</option>
-          <option value="false_positive" {% if st == 'false_positive' %}selected{% endif %}>false_positive</option>
+          <option value="open"           {% if st == 'open' %}selected{% endif %}>open</option>
+          <option value="monitoring"     {% if st == 'monitoring' %}selected{% endif %}>monitoring</option>
+          <option value="closed"         {% if st == 'closed' %}selected{% endif %}>closed</option>
+          <option value="false_positive" {% if st == 'false_positive' %}selected{% endif %}>false positive</option>
         </select>
-        <button class="btn btn-primary btn-small" type="button" onclick="updateCaseStatus()">Save status</button>
+        <button class="btn btn-small btn-primary" type="button" onclick="updateCaseStatus()">Save</button>
+        <span id="statusFeedback" style="font-size:0.78rem;color:#7ee2b8;display:none;">&#10003;</span>
       </div>
-      <div>
-        <label class="muted">Campaign</label>
-        {% if campaigns %}
-          {# Campaigns are available and verified — show the full selector. #}
-          <select id="caseCampaignSelect" class="input input-lg">
+    </div>
+
+    <div class="cs-field">
+      <label>Linked Campaign</label>
+      {% if campaigns %}
+        <div class="cs-field-row">
+          <select id="caseCampaignSelect" class="input">
             <option value="">No campaign</option>
             {% for c in campaigns %}
-              <option value="{{ c.campaign_id }}" {% if case.campaign_id == c.campaign_id %}selected{% endif %}>
-                {{ c.campaign_id }}{% if c.label %} — {{ c.label }}{% endif %}
-              </option>
+            <option value="{{ c.campaign_id }}" {% if case.campaign_id == c.campaign_id %}selected{% endif %}>
+              {{ c.campaign_id }}{% if c.label %} — {{ c.label }}{% endif %}
+            </option>
             {% endfor %}
           </select>
-          <button class="btn btn-outline btn-small" type="button" onclick="updateCaseCampaign()">Link campaign</button>
-        {% elif case.campaign_id %}
-          {# Case has a campaign assigned but results aren't verified / campaigns not computed yet. #}
-          <div class="mono" style="font-size:0.88rem; margin-bottom:4px;">{{ case.campaign_id }}</div>
-          <div class="tiny-text" style="color:var(--text-muted,#888);">
-            Campaign results are not verified.
-            <a href="/dashboard/campaigns">Recompute</a> to update the list.
-          </div>
-        {% else %}
-          {# No campaigns at all and no assignment — friendly nudge. #}
-          <div class="tiny-text" style="color:var(--text-muted,#888);">
-            No campaigns computed yet.
-            <a href="/dashboard/campaigns">Go to campaigns</a> to run a recompute.
-          </div>
-        {% endif %}
-      </div>
+          <button class="btn btn-small" type="button" onclick="updateCaseCampaign()">Link</button>
+          <span id="campaignFeedback" style="font-size:0.78rem;color:#7ee2b8;display:none;">&#10003;</span>
+        </div>
+      {% elif case.campaign_id %}
+        <div class="muted" style="font-size:0.83rem;">
+          Linked to <span class="mono">{{ case.campaign_id }}</span> —
+          campaign results not verified.
+          <a class="link" href="/dashboard/campaigns">Recompute</a> to update.
+        </div>
+      {% else %}
+        <div class="muted" style="font-size:0.83rem;">
+          No campaigns computed yet.
+          <a class="link" href="/dashboard/campaigns">Run a recompute</a> first.
+        </div>
+      {% endif %}
     </div>
   </div>
 </div>
 
+<!-- Investigation Summary -->
 <div class="card">
   <div class="card-head"><div class="card-title">Investigation Summary</div></div>
-  <div class="card-body">
-    <div class="summary-grid">
-      <div>
-        <div class="k">Risk score</div>
-        <div class="v">{{ case_risk_score }}</div>
+  <div style="display:grid;grid-template-columns:auto 1fr;gap:0;">
+    <!-- Risk score -->
+    <div style="display:flex;align-items:center;justify-content:center;padding:20px 24px;border-right:1px solid var(--stroke);">
+      {% set score = case_risk_score or 0 %}
+      {% if score >= 8 %}{% set risk_cls = 'risk-critical' %}
+      {% elif score >= 5 %}{% set risk_cls = 'risk-high' %}
+      {% elif score >= 3 %}{% set risk_cls = 'risk-medium' %}
+      {% else %}{% set risk_cls = 'risk-low' %}{% endif %}
+      <div class="risk-score-box {{ risk_cls }}">
+        {{ score }}
+        <span class="risk-label">Risk</span>
       </div>
-      <div>
-        <div class="k">Stage flow</div>
-        <div class="v">{{ case_stage.flow or '-' }}</div>
+    </div>
+    <!-- Details -->
+    <div class="intel-grid">
+      <div class="ig-key">Stage flow</div>
+      <div class="ig-val mono">{{ case_stage.flow or '—' }}</div>
+
+      <div class="ig-key">Top endpoints</div>
+      <div class="ig-val mono" style="font-size:0.82rem;word-break:break-all;">
+        {{ case_endpoints|join('  ·  ') if case_endpoints else '—' }}
       </div>
-      <div>
-        <div class="k">Top endpoints</div>
-        <div class="v mono">{{ case_endpoints|join(', ') if case_endpoints else '-' }}</div>
-      </div>
-      <div>
-        <div class="k">Techniques</div>
-        <div class="v">
-          {% if case_techniques %}
-            {% for t in case_techniques %}<span class="tag">{{ t }}</span>{% endfor %}
-          {% else %}
-            -
-          {% endif %}
-        </div>
+
+      <div class="ig-key">Techniques</div>
+      <div class="ig-val">
+        {% if case_techniques %}
+          {% for t in case_techniques %}<span class="tag">{{ t }}</span>{% endfor %}
+        {% else %}—{% endif %}
       </div>
     </div>
   </div>
 </div>
 
+<!-- Actors -->
 <div class="card">
-  <div class="card-head"><div class="card-title">Actors</div></div>
+  <div class="card-head">
+    <div class="card-title">Actors</div>
+    <div class="card-sub">{{ actors|length }}</div>
+  </div>
+  {% if actors %}
   <div class="table-wrap">
     <table class="table table-sortable">
       <thead>
@@ -101,83 +254,111 @@
           <th data-type="text">Actor</th>
           <th data-type="text">Role</th>
           <th data-type="date">Added</th>
-          <th data-type="text">Actions</th>
+          <th style="width:80px;"></th>
         </tr>
       </thead>
       <tbody>
         {% for a in actors %}
         <tr>
-          <td><a class="link" href="/actor/{{ a.actor_id }}">{{ a.actor_id[:8] }}</a></td>
+          <td><a class="link mono" href="/actor/{{ a.actor_id }}">{{ a.actor_id[:8] }}</a></td>
           <td>{{ a.role }}</td>
-          <td class="mono">{{ a.added_at }}</td>
-          <td><button class="btn btn-ghost btn-small" type="button" onclick="removeCaseActor('{{ case.id }}','{{ a.actor_id }}', this)">Remove</button></td>
+          <td class="mono muted" style="font-size:0.82rem;">{{ a.added_at }}</td>
+          <td>
+            <button class="btn btn-ghost btn-small" type="button"
+              onclick="removeCaseActor('{{ case.id }}','{{ a.actor_id }}', this)">Remove</button>
+          </td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
+  {% else %}
+  <div class="case-empty" style="padding:24px;">No actors linked.</div>
+  {% endif %}
 </div>
 
+<!-- Timeline -->
 <div class="card">
-  <div class="card-head"><div class="card-title">Timeline (latest)</div></div>
+  <div class="card-head">
+    <div class="card-title">Timeline</div>
+    <div class="card-sub">latest {{ case_timeline|length }} events</div>
+  </div>
+  {% if case_timeline %}
   <div class="table-wrap">
-    <table class="table table-sortable">
+    <table class="table">
       <thead>
         <tr>
-          <th data-type="date">Timestamp</th>
-          <th data-type="text">Type</th>
-          <th data-type="text">Actor</th>
-          <th data-type="text">Request</th>
-          <th data-type="num">Stage</th>
-          <th data-type="num">Status</th>
+          <th data-type="date" style="width:170px;">Timestamp</th>
+          <th style="width:70px;">Type</th>
+          <th style="width:80px;">Actor</th>
+          <th>Request</th>
+          <th style="width:60px;">Stage</th>
+          <th style="width:60px;">Status</th>
         </tr>
       </thead>
       <tbody>
         {% for ev in case_timeline %}
         <tr>
-          <td class="mono">{{ ev.ts }}</td>
-          <td>{{ ev.type }}</td>
-          <td class="mono">{{ ev.actor_id[:8] }}</td>
-          <td class="mono">{% if ev.method %}{{ ev.method }}{% endif %} {{ ev.path }}</td>
-          <td>{{ ev.stage if ev.stage is not none else '-' }}</td>
-          <td>{{ ev.status if ev.status is not none else '-' }}</td>
+          <td class="mono muted" style="font-size:0.8rem;">{{ ev.ts }}</td>
+          <td>
+            <span class="ev-type ev-type-{{ ev.type }}">{{ ev.type }}</span>
+          </td>
+          <td class="mono" style="font-size:0.8rem;">
+            <a class="link" href="/actor/{{ ev.actor_id }}">{{ ev.actor_id[:8] }}</a>
+          </td>
+          <td class="mono" style="font-size:0.8rem;">
+            {% if ev.method %}<span class="muted">{{ ev.method }}</span> {% endif %}{{ ev.path }}
+          </td>
+          <td class="ev-stage">{{ ev.stage if ev.stage is not none else '—' }}</td>
+          <td>
+            {% if ev.status is not none %}
+            <span class="mono" style="font-size:0.8rem;{% if ev.status < 400 %}color:#7ee2b8{% elif ev.status < 500 %}color:#ffc940{% else %}color:#f2a6a6{% endif %}">
+              {{ ev.status }}
+            </span>
+            {% else %}—{% endif %}
+          </td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
-</div>
-
-<div class="card">
-  <div class="card-head"><div class="card-title">Similar Cases</div></div>
-  {% if case_similarity %}
-    <div class="table-wrap">
-      <table class="table table-sortable">
-        <thead>
-          <tr>
-            <th data-type="num">Case</th>
-            <th data-type="num">Score</th>
-            <th data-type="num">Shared Actors</th>
-            <th data-type="text">Shared Paths</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for sc in case_similarity %}
-          <tr>
-            <td><a class="link" href="/dashboard/cases/{{ sc.case_id }}">#{{ sc.case_id }}</a></td>
-            <td>{{ sc.score }}</td>
-            <td>{{ sc.shared_actors }}</td>
-            <td class="mono">{{ sc.shared_paths|join(', ') }}</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
   {% else %}
-    <div class="case-empty">No similar cases detected yet.</div>
+  <div class="case-empty" style="padding:24px;">No timeline events.</div>
   {% endif %}
 </div>
 
+<!-- Similar Cases -->
+<div class="card">
+  <div class="card-head"><div class="card-title">Similar Cases</div></div>
+  {% if case_similarity %}
+  <div class="table-wrap">
+    <table class="table table-sortable">
+      <thead>
+        <tr>
+          <th data-type="num" style="width:70px;">Case</th>
+          <th data-type="num" style="width:70px;">Score</th>
+          <th data-type="num" style="width:110px;">Shared Actors</th>
+          <th data-type="text">Shared Paths</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for sc in case_similarity %}
+        <tr>
+          <td><a class="link" href="/dashboard/cases/{{ sc.case_id }}">#{{ sc.case_id }}</a></td>
+          <td>{{ sc.score }}</td>
+          <td>{{ sc.shared_actors }}</td>
+          <td class="mono" style="font-size:0.8rem;">{{ sc.shared_paths|join(' · ') }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="case-empty" style="padding:24px;">No similar cases detected.</div>
+  {% endif %}
+</div>
+
+<!-- Replay Evidence -->
 <div class="card">
   <div class="card-head"><div class="card-title">Replay Evidence</div></div>
   {% if replay_sessions or replay_steps %}
@@ -188,22 +369,29 @@
       <div class="evidence-item">
         <div class="evidence-item-head">
           <div>
-            <div class="evidence-title"><a class="link" href="/dashboard/sessions/{{ s.session_id }}">Session {{ s.session_id_short }}</a></div>
-            <div class="evidence-meta">Actor {{ s.actor_id }} - Stage S{{ s.stage_max or 0 }} - Added {{ s.added_at }}</div>
+            <div class="evidence-title">
+              <a class="link" href="/dashboard/sessions/{{ s.session_id }}">Session {{ s.session_id_short }}</a>
+            </div>
+            <div class="evidence-meta">
+              Actor <span class="mono">{{ s.actor_id }}</span> &middot;
+              Stage S{{ s.stage_max or 0 }} &middot; Added {{ s.added_at }}
+            </div>
           </div>
           <div class="evidence-actions">
-            <button class="btn btn-ghost btn-small" type="button" onclick="removeEvidence('{{ case.id }}', '{{ s.evidence_id }}', this)">Remove</button>
             <span class="tag">Session</span>
+            <button class="btn btn-ghost btn-small" type="button"
+              onclick="removeEvidence('{{ case.id }}', '{{ s.evidence_id }}', this)">Remove</button>
           </div>
         </div>
         <div class="evidence-body">
-          <div class="mono small-text">{{ s.started_fmt }} → {{ s.ended_fmt }}</div>
+          <div class="mono small-text muted">{{ s.started_fmt }} → {{ s.ended_fmt }}</div>
           {% if s.note %}<div class="evidence-note">{{ s.note }}</div>{% endif %}
         </div>
       </div>
       {% endfor %}
     </div>
     {% endif %}
+
     {% if replay_steps %}
     <div class="evidence-section-title">Steps</div>
     <div class="evidence-list">
@@ -211,27 +399,34 @@
       <div class="evidence-item">
         <div class="evidence-item-head">
           <div>
-            <div class="evidence-title">Step #{{ st.seq }} - <a class="link" href="/dashboard/sessions/{{ st.session_id }}">{{ st.session_id[:8] }}</a></div>
-            <div class="evidence-meta">{{ st.method }} {{ st.path }} - Status {{ st.response_status or '-' }} - Added {{ st.added_at }}</div>
+            <div class="evidence-title">
+              Step #{{ st.seq }} &mdash;
+              <a class="link mono" href="/dashboard/sessions/{{ st.session_id }}">{{ st.session_id[:8] }}</a>
+            </div>
+            <div class="evidence-meta">
+              <span class="mono">{{ st.method }} {{ st.path }}</span> &middot;
+              Status {{ st.response_status or '—' }} &middot; Added {{ st.added_at }}
+            </div>
           </div>
           <div class="evidence-actions">
-            <button class="btn btn-ghost btn-small" type="button" onclick="removeEvidence('{{ case.id }}', '{{ st.evidence_id }}', this)">Remove</button>
             <span class="tag tag-muted">Step</span>
+            <button class="btn btn-ghost btn-small" type="button"
+              onclick="removeEvidence('{{ case.id }}', '{{ st.evidence_id }}', this)">Remove</button>
           </div>
         </div>
         <div class="evidence-body">
-          <div class="mono small-text">{{ st.ts_fmt }}</div>
+          <div class="mono small-text muted">{{ st.ts_fmt }}</div>
           {% if st.note %}<div class="evidence-note">{{ st.note }}</div>{% endif %}
           {% if st.headers_json %}
-            <div class="mono small-text">Headers:</div>
+            <div class="tiny-text" style="margin-top:6px;">Headers</div>
             <pre class="code-block">{{ st.headers_json }}</pre>
           {% endif %}
           {% if st.body_json %}
-            <div class="mono small-text">Body:</div>
+            <div class="tiny-text" style="margin-top:6px;">Body</div>
             <pre class="code-block">{{ st.body_json }}</pre>
           {% endif %}
           {% if st.response_json %}
-            <div class="mono small-text">Response:</div>
+            <div class="tiny-text" style="margin-top:6px;">Response</div>
             <pre class="code-block">{{ st.response_json }}</pre>
           {% endif %}
         </div>
@@ -240,101 +435,59 @@
     </div>
     {% endif %}
   {% else %}
-    <div class="case-empty">No replay evidence linked to this case.</div>
+  <div class="case-empty" style="padding:24px;">No replay evidence linked to this case.</div>
   {% endif %}
 </div>
 
-
 <script>
-  async function removeCaseActor(caseId, actorId, btn){
-    if(!confirm('Remove actor from case?')){ return; }
-    if(btn){ btn.disabled = true; }
-    try{
-      const res = await fetch(`/dashboard/cases/${caseId}/actors/remove?actor_id=${actorId}`, {method:'POST'});
-      if(res.ok){
-        const row = btn.closest('tr');
-        if(row){ row.remove(); }
-      }else{
-        const text = await res.text();
-        alert('Error: ' + text);
-      }
-    }catch(e){
-      alert('Error: ' + e.message);
-    }finally{
-      if(btn){ btn.disabled = false; }
-    }
+  async function removeCaseActor(caseId, actorId, btn) {
+    if (!confirm('Remove actor from case?')) return;
+    btn.disabled = true;
+    const res = await fetch(`/dashboard/cases/${caseId}/actors/remove?actor_id=${actorId}`, { method: 'POST' });
+    if (res.ok) { btn.closest('tr').remove(); }
+    else { alert('Error: ' + await res.text()); btn.disabled = false; }
   }
 
-  async function removeEvidence(caseId, evidenceId, btn){
-    if(!confirm('Remove evidence from case?')){ return; }
-    if(btn){ btn.disabled = true; }
-    try{
-      const res = await fetch(`/dashboard/cases/${caseId}/evidence/remove?evidence_id=${evidenceId}`, {method:'POST'});
-      if(res.ok){
-        const item = btn.closest('.evidence-item');
-        if(item){ item.remove(); }
-      }else{
-        const text = await res.text();
-        alert('Error: ' + text);
-      }
-    }catch(e){
-      alert('Error: ' + e.message);
-    }finally{
-      if(btn){ btn.disabled = false; }
-    }
+  async function removeEvidence(caseId, evidenceId, btn) {
+    if (!confirm('Remove evidence from case?')) return;
+    btn.disabled = true;
+    const res = await fetch(`/dashboard/cases/${caseId}/evidence/remove?evidence_id=${evidenceId}`, { method: 'POST' });
+    if (res.ok) { btn.closest('.evidence-item').remove(); }
+    else { alert('Error: ' + await res.text()); btn.disabled = false; }
   }
 
-  async function updateCaseStatus(){
-    const select = document.getElementById('caseStatusSelect');
-    if(!select) return;
-    const status = select.value;
-    try{
-      const res = await fetch(`/dashboard/cases/{{ case.id }}/status?status=${encodeURIComponent(status)}`, {method:'POST'});
-      if(!res.ok){
-        const text = await res.text();
-        alert('Error: ' + text);
-      }
-    }catch(e){
-      alert('Error: ' + e.message);
-    }
+  async function updateCaseStatus() {
+    const status = document.getElementById('caseStatusSelect').value;
+    const fb = document.getElementById('statusFeedback');
+    const res = await fetch(`/dashboard/cases/{{ case.id }}/status?status=${encodeURIComponent(status)}`, { method: 'POST' });
+    if (res.ok) {
+      fb.style.display = 'inline';
+      setTimeout(() => fb.style.display = 'none', 2000);
+    } else { alert('Error: ' + await res.text()); }
   }
 
-  async function updateCaseCampaign(){
-    const select = document.getElementById('caseCampaignSelect');
-    if(!select) return;
-    const campaignId = select.value || '';
-    try{
-      const res = await fetch(`/dashboard/cases/{{ case.id }}/campaign?campaign_id=${encodeURIComponent(campaignId)}`, {method:'POST'});
-      if(!res.ok){
-        const text = await res.text();
-        alert('Error: ' + text);
-      }
-    }catch(e){
-      alert('Error: ' + e.message);
-    }
+  async function updateCaseCampaign() {
+    const sel = document.getElementById('caseCampaignSelect');
+    if (!sel) return;
+    const fb = document.getElementById('campaignFeedback');
+    const res = await fetch(`/dashboard/cases/{{ case.id }}/campaign?campaign_id=${encodeURIComponent(sel.value || '')}`, { method: 'POST' });
+    if (res.ok) {
+      fb.style.display = 'inline';
+      setTimeout(() => fb.style.display = 'none', 2000);
+    } else { alert('Error: ' + await res.text()); }
   }
-</script>
 
-
-<script>
-  async function renameCase(){
+  async function renameCase() {
     const input = document.getElementById('caseTitleInput');
-    if(!input){ return; }
     const title = input.value.trim();
-    if(!title){ alert('Title required'); return; }
-    try{
-      const res = await fetch(`/dashboard/cases/{{ case.id }}/rename?title=${encodeURIComponent(title)}`, {method:'POST'});
-      if(res.ok){
-        const h1 = document.querySelector('h1');
-        if(h1){ h1.textContent = title; }
-      }else{
-        const text = await res.text();
-        alert('Error: ' + text);
-      }
-    }catch(e){
-      alert('Error: ' + e.message);
-    }
+    if (!title) { alert('Title required'); return; }
+    const fb = document.getElementById('renameFeedback');
+    const res = await fetch(`/dashboard/cases/{{ case.id }}/rename?title=${encodeURIComponent(title)}`, { method: 'POST' });
+    if (res.ok) {
+      document.querySelector('h1').textContent = title;
+      fb.classList.add('visible');
+      setTimeout(() => fb.classList.remove('visible'), 2500);
+    } else { alert('Error: ' + await res.text()); }
   }
 </script>
-
 {% endblock %}

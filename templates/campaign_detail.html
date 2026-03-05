@@ -1,211 +1,400 @@
 {% extends "base.html" %}
 {% block content %}
+<style>
+  .sev-critical { background:rgba(231,76,60,.15);  color:#f2a6a6; border-color:rgba(231,76,60,.4); }
+  .sev-high     { background:rgba(230,126,34,.15); color:#f0b06a; border-color:rgba(230,126,34,.4); }
+  .sev-medium   { background:rgba(255,179,0,.15);  color:#ffc940; border-color:rgba(255,179,0,.4); }
+  .sev-low      { background:rgba(74,144,226,.15); color:#7ab8f5; border-color:rgba(74,144,226,.4); }
+  .status-open         { background:rgba(26,191,107,.12); color:#7ee2b8; border-color:rgba(26,191,107,.4); }
+  .status-monitoring   { background:rgba(74,144,226,.12); color:#7ab8f5; border-color:rgba(74,144,226,.4); }
+  .status-closed       { background:rgba(200,200,200,.1); color:var(--muted); border-color:rgba(200,200,200,.3); }
+  .status-false_positive { background:rgba(255,179,0,.12); color:#ffc940; border-color:rgba(255,179,0,.35); }
+
+  /* KPI grid */
+  .camp-kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 0;
+    border-bottom: 1px solid var(--stroke);
+  }
+  .camp-kpi {
+    padding: 18px 20px;
+    border-right: 1px solid var(--stroke);
+  }
+  .camp-kpi:last-child { border-right: none; }
+  .camp-kpi .ck-label {
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--muted);
+    margin-bottom: 6px;
+  }
+  .camp-kpi .ck-value {
+    font-size: 1.4rem;
+    font-weight: 800;
+    line-height: 1;
+  }
+  .camp-kpi .ck-sub {
+    font-size: 0.72rem;
+    color: var(--muted);
+    margin-top: 3px;
+    font-family: monospace;
+  }
+
+  /* Details grid inside a card */
+  .detail-grid {
+    display: grid;
+    grid-template-columns: 160px 1fr;
+    gap: 0;
+  }
+  .dg-row {
+    display: contents;
+  }
+  .dg-key {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted);
+    padding: 10px 20px;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    display: flex;
+    align-items: center;
+  }
+  .dg-val {
+    font-size: 0.85rem;
+    padding: 10px 20px 10px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    word-break: break-word;
+  }
+  .dg-row:last-child .dg-key,
+  .dg-row:last-child .dg-val { border-bottom: none; }
+
+  /* Activity timeline bar */
+  .activity-bar-wrap { padding: 16px 20px; }
+  .activity-bars {
+    display: flex;
+    align-items: flex-end;
+    gap: 3px;
+    height: 60px;
+    margin-top: 8px;
+  }
+  .activity-bar {
+    flex: 1;
+    min-width: 4px;
+    border-radius: 2px 2px 0 0;
+    background: rgba(74,144,226,.5);
+    position: relative;
+    cursor: default;
+    transition: background 0.15s;
+  }
+  .activity-bar:hover { background: rgba(74,144,226,.9); }
+  .activity-bar[title]:hover::after {
+    content: attr(title);
+    position: absolute;
+    bottom: calc(100% + 4px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--panel2);
+    border: 1px solid var(--stroke);
+    border-radius: 4px;
+    padding: 2px 7px;
+    font-size: 0.72rem;
+    white-space: nowrap;
+    pointer-events: none;
+    z-index: 10;
+  }
+  .activity-meta {
+    display: flex;
+    gap: 20px;
+    margin-top: 10px;
+    font-size: 0.78rem;
+    color: var(--muted);
+  }
+  .activity-meta strong { color: var(--text); }
+
+  /* Confidence bar */
+  .conf-bar-wrap { display: flex; align-items: center; gap: 8px; }
+  .conf-bar-bg {
+    flex: 1;
+    height: 5px;
+    background: rgba(255,255,255,.08);
+    border-radius: 3px;
+    min-width: 60px;
+  }
+  .conf-bar-fill {
+    height: 100%;
+    border-radius: 3px;
+    background: linear-gradient(90deg, #7ab8f5, #b8a9ff);
+  }
+  .conf-val { font-family: monospace; font-size: 0.8rem; min-width: 36px; text-align: right; }
+
+  /* Shared paths cell */
+  .path-list { display: flex; flex-wrap: wrap; gap: 4px; }
+  .path-chip {
+    font-family: monospace;
+    font-size: 0.72rem;
+    background: rgba(255,255,255,.06);
+    border-radius: 3px;
+    padding: 1px 6px;
+    color: var(--muted);
+  }
+</style>
+
 <div class="page-head">
   <div>
-    <h1>Campaign {{ campaign.campaign_id }}</h1>
-    <div class="sub">{{ campaign.label }}</div>
+    <h1>{{ campaign.label or campaign.campaign_id }}</h1>
+    <div class="sub mono" style="font-size:0.82rem;">{{ campaign.campaign_id }}</div>
   </div>
-  <div style="display:flex;gap:8px;">
-    <a class="btn" href="/dashboard/campaigns/{{ campaign.campaign_id }}/export.json" target="_blank">Export JSON</a>
-    <a class="btn" href="/dashboard/campaigns/{{ campaign.campaign_id }}/export.md" target="_blank">Export Markdown</a>
-    <button class="btn btn-danger" type="button" onclick="deleteCampaign('{{ campaign.campaign_id }}')">Delete</button>
+  <div style="display:flex;gap:8px;align-items:center;">
+    <a class="btn btn-outline btn-small" href="/dashboard/campaigns/{{ campaign.campaign_id }}/export.json" target="_blank">Export JSON</a>
+    <a class="btn btn-outline btn-small" href="/dashboard/campaigns/{{ campaign.campaign_id }}/export.md" target="_blank">Export MD</a>
+    <button class="btn btn-danger btn-small" type="button" onclick="deleteCampaign('{{ campaign.campaign_id }}')">Delete</button>
   </div>
 </div>
 
-<script>
-  async function deleteCampaign(campaignId){
-    if(!confirm(`Delete campaign ${campaignId}? This cannot be undone.`)){ return; }
-    const res = await fetch(`/dashboard/campaigns/${campaignId}`, {method:'DELETE'});
-    if(res.ok){
-      location.href = '/dashboard/campaigns';
-    }else{
-      const text = await res.text();
-      alert('Error deleting campaign: ' + text);
-    }
-  }
-</script>
-
+<!-- KPI strip -->
 <div class="card">
-  <div class="card-head">
-    <div class="card-title">Summary</div>
-  </div>
-  <div class="kv">
-    <div class="k">Score</div><div>{{ campaign.score_det or campaign.summary.score_det or 0 }}</div>
-    <div class="k">First Seen</div><div class="mono">{{ campaign.first_seen_at or campaign.summary.first_seen or '-' }}</div>
-    <div class="k">Last Seen</div><div class="mono">{{ campaign.last_seen_at or campaign.summary.last_seen or '-' }}</div>
-    <div class="k">Group Size</div><div>{{ campaign.summary.group_size or links|length }}</div>
-    <div class="k">Seed Actor</div><div class="mono">{{ campaign.summary.seed_actor or '-' }}</div>
-    <div class="k">Thresholds</div><div>Jaccard &ge; {{ campaign.summary.min_jaccard or '0.65' }}, overlap &ge; {{ campaign.summary.min_intersection or '4' }}</div>
-    <div class="k">Seed Paths</div>
-    <div>
-      {% if campaign.summary.seed_paths_sample %}
-        <div class="mono small-text">{{ campaign.summary.seed_paths_sample|join(', ') }}</div>
-      {% else %}
-        <span class="muted">No sample available</span>
-      {% endif %}
+  <div class="camp-kpi-grid">
+    <div class="camp-kpi">
+      <div class="ck-label">Score</div>
+      <div class="ck-value">{{ campaign.score_det or campaign.summary.score_det or 0 }}</div>
+      <div class="ck-sub">deterministic</div>
     </div>
-    <div class="k">Stage Flow</div><div>{{ campaign.summary.stage_flow or '-' }}</div>
-    <div class="k">Stage Counts</div>
-    <div>
-      {% if campaign.summary.stage_counts %}
-        <div class="mono small-text">
-          {% for item in campaign.summary.stage_counts %}
-            {{ item.stage }}: {{ item.count }}{% if not loop.last %}, {% endif %}
+    <div class="camp-kpi">
+      <div class="ck-label">Members</div>
+      <div class="ck-value">{{ campaign.summary.group_size or links|length }}</div>
+      <div class="ck-sub">actors</div>
+    </div>
+    <div class="camp-kpi">
+      <div class="ck-label">Duration</div>
+      <div class="ck-value">{{ campaign.timeline.duration_days or '—' }}</div>
+      <div class="ck-sub">days</div>
+    </div>
+    <div class="camp-kpi">
+      <div class="ck-label">First Seen</div>
+      <div class="ck-value" style="font-size:0.85rem;font-weight:600;">
+        {{ (campaign.first_seen_at or campaign.summary.first_seen or '—')[:10] }}
+      </div>
+    </div>
+    <div class="camp-kpi">
+      <div class="ck-label">Last Seen</div>
+      <div class="ck-value" style="font-size:0.85rem;font-weight:600;">
+        {{ (campaign.last_seen_at or campaign.summary.last_seen or '—')[:10] }}
+      </div>
+    </div>
+  </div>
+
+  <!-- Detail rows -->
+  <div class="detail-grid">
+    <div class="dg-row">
+      <div class="dg-key">Seed Actor</div>
+      <div class="dg-val mono">{{ campaign.summary.seed_actor or '—' }}</div>
+    </div>
+    <div class="dg-row">
+      <div class="dg-key">Stage Flow</div>
+      <div class="dg-val mono">{{ campaign.summary.stage_flow or campaign.stage_detail.flow or '—' }}</div>
+    </div>
+    <div class="dg-row">
+      <div class="dg-key">Thresholds</div>
+      <div class="dg-val">
+        Jaccard &ge; <strong>{{ campaign.summary.min_jaccard or '0.65' }}</strong> &nbsp;&middot;&nbsp;
+        overlap &ge; <strong>{{ campaign.summary.min_intersection or '4' }}</strong>
+      </div>
+    </div>
+    <div class="dg-row">
+      <div class="dg-key">Timing</div>
+      <div class="dg-val">{{ campaign.summary.timing or 'unknown' }}</div>
+    </div>
+    {% if campaign.techniques %}
+    <div class="dg-row">
+      <div class="dg-key">Techniques</div>
+      <div class="dg-val">
+        {% for t in campaign.techniques %}<span class="tag">{{ t }}</span>{% endfor %}
+      </div>
+    </div>
+    {% endif %}
+    {% if campaign.summary.dominant_paths or campaign.endpoints %}
+    <div class="dg-row">
+      <div class="dg-key">Top Paths</div>
+      <div class="dg-val">
+        <div class="path-list">
+          {% for p in (campaign.summary.dominant_paths or campaign.endpoints or []) %}
+          <span class="path-chip">{{ p }}</span>
           {% endfor %}
         </div>
-      {% else %}
-        <span class="muted">-</span>
-      {% endif %}
+      </div>
     </div>
-    <div class="k">Timing</div><div>{{ campaign.summary.timing or 'unknown' }}</div>
-    <div class="k">Top Paths</div>
-    <div>
-      {% if campaign.summary.dominant_paths %}
-        <div class="mono small-text">{{ campaign.summary.dominant_paths|join(', ') }}</div>
-      {% else %}
-        <span class="muted">No data</span>
-      {% endif %}
-    </div>
-  </div>
-  {% if campaign.summary.representative_session_id or campaign.representative_session_id %}
-    <div class="modal-actions" style="margin-top:10px;">
-      <a class="btn btn-primary" href="/dashboard/sessions/{{ campaign.summary.representative_session_id or campaign.representative_session_id }}">Open Representative Replay</a>
-    </div>
-  {% endif %}
-</div>
-
-<div class="card">
-  <div class="card-head"><div class="card-title">Intelligence</div></div>
-  <div class="card-body">
-    <div class="summary-grid">
-      <div>
-        <div class="k">Techniques</div>
-        <div class="v">
-          {% if campaign.techniques %}
-            {% for t in campaign.techniques %}<span class="tag">{{ t }}</span>{% endfor %}
-          {% else %}
-            -
-          {% endif %}
+    {% endif %}
+    {% if campaign.summary.seed_paths_sample %}
+    <div class="dg-row">
+      <div class="dg-key">Seed Paths</div>
+      <div class="dg-val">
+        <div class="path-list">
+          {% for p in campaign.summary.seed_paths_sample %}
+          <span class="path-chip">{{ p }}</span>
+          {% endfor %}
         </div>
       </div>
-      <div>
-        <div class="k">Stage Flow</div>
-        <div class="v">{{ campaign.stage_detail.flow or '-' }}</div>
-      </div>
-      <div>
-        <div class="k">Top Endpoints</div>
-        <div class="v mono">{{ campaign.endpoints|join(', ') if campaign.endpoints else '-' }}</div>
-      </div>
-      <div>
-        <div class="k">Duration</div>
-        <div class="v">{{ campaign.timeline.duration_days or '-' }} days</div>
-      </div>
     </div>
-  </div>
-</div>
-
-<div class="card">
-  <div class="card-head"><div class="card-title">Activity Timeline</div></div>
-  <div class="card-body">
-    {% if campaign.activity.by_day %}
-      <div class="mono small-text">
-        {% for item in campaign.activity.by_day %}
-          {{ item.day }}={{ item.count }}{% if not loop.last %}, {% endif %}
+    {% endif %}
+    {% if campaign.summary.stage_counts %}
+    <div class="dg-row">
+      <div class="dg-key">Stage Counts</div>
+      <div class="dg-val mono" style="font-size:0.82rem;">
+        {% for item in campaign.summary.stage_counts %}
+          {{ item.stage }}: {{ item.count }}{% if not loop.last %} &nbsp;&middot;&nbsp; {% endif %}
         {% endfor %}
       </div>
-      <div class="muted tiny-text">Peaks: {{ campaign.timeline.peaks|join(', ') if campaign.timeline.peaks else '-' }} · Max pause: {{ campaign.timeline.max_pause_days or 0 }} days</div>
-    {% else %}
-      <div class="muted">No activity data.</div>
+    </div>
     {% endif %}
   </div>
-</div>
 
-<div class="card">
-  <div class="card-head"><div class="card-title">Cases</div></div>
-  {% if cases %}
-    <div class="table-wrap">
-      <table class="table table-sortable">
-        <thead>
-          <tr>
-            <th data-type="num">ID</th>
-            <th data-type="text">Title</th>
-            <th data-type="text">Status</th>
-            <th data-type="text">Severity</th>
-            <th data-type="date">Updated</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for c in cases %}
-          <tr>
-            <td><a class="link" href="/dashboard/cases/{{ c.id }}">#{{ c.id }}</a></td>
-            <td>{{ c.title }}</td>
-            <td>{{ c.status }}</td>
-            <td>{{ c.severity or '-' }}</td>
-            <td class="mono">{{ c.updated_at }}</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  {% else %}
-    <div class="case-empty" style="margin:14px;">No cases linked to this campaign.</div>
+  {% if campaign.summary.representative_session_id or campaign.representative_session_id %}
+  <div style="padding:14px 20px;border-top:1px solid var(--stroke);">
+    <a class="btn btn-primary btn-small" href="/dashboard/sessions/{{ campaign.summary.representative_session_id or campaign.representative_session_id }}">
+      Open Representative Replay
+    </a>
+  </div>
   {% endif %}
 </div>
 
-<div class="card">
-  <div class="card-head"><div class="card-title">Actors</div></div>
+<!-- Activity Timeline -->
+{% if campaign.activity.by_day %}
+<div class="card" style="margin-top:14px;">
+  <div class="card-head"><div class="card-title">Activity Timeline</div></div>
+  <div class="activity-bar-wrap">
+    {% set max_count = campaign.activity.by_day | map(attribute='count') | max %}
+    <div class="activity-bars" id="activityBars">
+      {% for item in campaign.activity.by_day %}
+      {% set pct = ((item.count / max_count) * 100) | int if max_count > 0 else 0 %}
+      <div class="activity-bar" style="height:{{ [pct, 4]|max }}%;" title="{{ item.day }}: {{ item.count }} events"></div>
+      {% endfor %}
+    </div>
+    <div class="activity-meta">
+      {% if campaign.timeline.peaks %}
+      <div>Peaks: <strong>{{ campaign.timeline.peaks|join(', ') }}</strong></div>
+      {% endif %}
+      {% if campaign.timeline.max_pause_days %}
+      <div>Max pause: <strong>{{ campaign.timeline.max_pause_days }} days</strong></div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<!-- Linked Cases -->
+<div class="card" style="margin-top:14px;">
+  <div class="card-head">
+    <div class="card-title">Cases</div>
+    <div class="card-sub">{{ cases|length }}</div>
+  </div>
+  {% if cases %}
+  <div class="table-wrap">
+    <table class="table table-sortable">
+      <thead>
+        <tr>
+          <th data-type="num" style="width:70px;">#</th>
+          <th data-type="text">Title</th>
+          <th data-type="text" style="width:130px;">Status</th>
+          <th data-type="text" style="width:110px;">Severity</th>
+          <th data-type="date" style="width:175px;">Updated</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for c in cases %}
+        <tr>
+          <td><a class="link mono" href="/dashboard/cases/{{ c.id }}">#{{ c.id }}</a></td>
+          <td><a class="link" href="/dashboard/cases/{{ c.id }}" style="color:var(--text);text-decoration:none;font-weight:500;">{{ c.title }}</a></td>
+          <td><span class="badge status-{{ c.status }}">{{ c.status | replace('_',' ') }}</span></td>
+          <td>{% if c.severity %}<span class="badge sev-{{ c.severity }}">{{ c.severity }}</span>{% else %}—{% endif %}</td>
+          <td class="mono muted" style="font-size:0.82rem;">{{ c.updated_at }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="case-empty" style="padding:24px;">No cases linked to this campaign.</div>
+  {% endif %}
+</div>
+
+<!-- Actors -->
+<div class="card" style="margin-top:14px;">
+  <div class="card-head">
+    <div class="card-title">Actors</div>
+    <div class="card-sub">{{ links|length }} member{{ 's' if links|length != 1 else '' }}</div>
+  </div>
   <div class="table-wrap">
     <table class="table table-sortable">
       <thead>
         <tr>
           <th data-type="text">Actor</th>
-          <th data-type="text">IP</th>
-          <th data-type="text">Overlap Paths</th>
-          <th data-type="number">Jaccard</th>
-          <th data-type="date">Linked</th>
+          <th data-type="text" style="width:140px;">IP</th>
+          <th data-type="number" style="width:130px;">Confidence</th>
+          <th data-type="date" style="width:80px;">Linked</th>
+          <th>Overlap</th>
         </tr>
       </thead>
       <tbody>
         {% for l in links %}
         {% set reason = l.reasons or {} %}
         <tr>
-          <td><a class="link" href="/actor/{{ l.actor_id }}">{{ l.actor_id[:8] }}</a></td>
-          <td class="mono">
-            {% if l.geo_flag %}{{ l.geo_flag }} {% endif %}
-            {{ l.last_ip or '-' }}
+          <td>
+            <a class="link mono" href="/actor/{{ l.actor_id }}">{{ l.actor_id[:8] }}</a>
           </td>
+          <td class="mono" style="font-size:0.82rem;">
+            {% if l.geo_flag %}<span style="margin-right:4px;">{{ l.geo_flag }}</span>{% endif %}
+            {{ l.last_ip or '—' }}
+          </td>
+          <td>
+            {% set conf = ((reason.jaccard_vs_seed or l.confidence or 0) * 100) | round(1) %}
+            <div class="conf-bar-wrap">
+              <div class="conf-bar-bg">
+                <div class="conf-bar-fill" style="width:{{ conf | int }}%;"></div>
+              </div>
+              <span class="conf-val">{{ conf }}%</span>
+            </div>
+          </td>
+          <td class="mono muted" style="font-size:0.78rem;">{{ l.linked_at[:10] if l.linked_at else '—' }}</td>
           <td>
             {% if reason.shared_paths %}
-              <div class="mono small-text">{{ reason.shared_paths|join(', ') }}</div>
-            {% else %}
-              <span class="muted">-</span>
-            {% endif %}
-            <div class="muted tiny-text">
-              Total: {{ reason.overlap_count or 0 }} &middot; Stage {{ reason.shared_stage_flow or '-' }} &middot; Timing {{ reason.shared_timing or 'unknown' }}
+            <div class="path-list">
+              {% for p in reason.shared_paths[:4] %}
+              <span class="path-chip">{{ p }}</span>
+              {% endfor %}
+              {% if reason.shared_paths|length > 4 %}
+              <span class="path-chip muted">+{{ reason.shared_paths|length - 4 }} more</span>
+              {% endif %}
             </div>
-            {% if reason.stage_counts %}
-              <div class="muted tiny-text">
-                Stage counts:
-                {% for item in reason.stage_counts %}
-                  {{ item.stage }}={{ item.count }}{% if not loop.last %}, {% endif %}
-                {% endfor %}
-              </div>
             {% endif %}
+            <div class="tiny-text" style="margin-top:4px;">
+              {% if reason.overlap_count %}{{ reason.overlap_count }} paths{% endif %}
+              {% if reason.shared_stage_flow %} &middot; stage {{ reason.shared_stage_flow }}{% endif %}
+              {% if reason.shared_timing %} &middot; {{ reason.shared_timing }}{% endif %}
+              {% if reason.shared_errors %} &middot; errors {{ reason.shared_errors|join(', ') }}{% endif %}
+            </div>
           </td>
-          <td>
-            {{ reason.jaccard_vs_seed or l.confidence }}
-            {% if reason.shared_errors %}
-              <div class="muted tiny-text">Errors {{ reason.shared_errors|join(', ') }}</div>
-            {% endif %}
-            {% if reason.shared_ua %}
-              <div class="muted tiny-text">UA {{ reason.shared_ua }}</div>
-            {% endif %}
-          </td>
-          <td class="mono">{{ l.linked_at }}</td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
 </div>
+
+<script>
+  async function deleteCampaign(campaignId) {
+    if (!confirm(`Delete campaign ${campaignId}? This cannot be undone.`)) return;
+    const btn = event.target;
+    btn.disabled = true;
+    btn.textContent = '…';
+    const res = await fetch(`/dashboard/campaigns/${campaignId}`, { method: 'DELETE' });
+    if (res.ok) {
+      location.href = '/dashboard/campaigns';
+    } else {
+      alert('Error: ' + await res.text());
+      btn.disabled = false;
+      btn.textContent = 'Delete';
+    }
+  }
+</script>
 {% endblock %}

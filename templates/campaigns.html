@@ -1,199 +1,306 @@
-﻿{% extends "base.html" %}
+{% extends "base.html" %}
 {% block content %}
 {% set pro_state = campaigns_pro_state or {} %}
+<style>
+  /* Score pill */
+  .score-pill {
+    display: inline-block;
+    font-weight: 800;
+    font-size: 0.88rem;
+    padding: 2px 10px;
+    border-radius: 999px;
+    min-width: 40px;
+    text-align: center;
+  }
+  .score-high   { background:rgba(231,76,60,.15);  color:#f2a6a6; }
+  .score-med    { background:rgba(255,179,0,.15);  color:#ffc940; }
+  .score-low    { background:rgba(26,191,107,.15); color:#7ee2b8; }
+
+  /* Job status card */
+  .job-card {
+    border: 1px solid var(--stroke);
+    border-radius: 10px;
+    padding: 14px 18px;
+    margin: 16px 0 0;
+    font-size: 0.84rem;
+    display: none;
+  }
+  .job-card.visible { display: block; }
+  .job-card-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+    font-weight: 600;
+  }
+  .job-status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .dot-queued  { background:#ffc940; box-shadow:0 0 6px #ffc940; animation: pulse 1.2s infinite; }
+  .dot-running { background:#7ab8f5; box-shadow:0 0 6px #7ab8f5; animation: pulse 0.8s infinite; }
+  .dot-completed { background:#7ee2b8; }
+  .dot-failed    { background:#f2a6a6; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+  .job-metrics {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    font-size: 0.78rem;
+    color: var(--muted);
+  }
+  .job-metric { display: flex; flex-direction: column; gap: 2px; }
+  .job-metric .jm-val { font-weight: 700; color: var(--text); font-family: monospace; }
+
+  /* Verification banner */
+  .verify-banner {
+    border-radius: 8px;
+    padding: 10px 16px;
+    font-size: 0.85rem;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .verify-ok      { background:rgba(26,191,107,.08); border:1px solid rgba(26,191,107,.3); color:#7ee2b8; }
+  .verify-pending { background:rgba(255,179,0,.08);  border:1px solid rgba(255,179,0,.3);  color:#ffc940; }
+  .verify-error   { background:rgba(231,76,60,.08);  border:1px solid rgba(231,76,60,.3);  color:#f2a6a6; }
+  .verify-none    { background:rgba(255,255,255,.04); border:1px solid var(--stroke); color:var(--muted); }
+
+  .member-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: rgba(255,255,255,.06);
+    border-radius: 999px;
+    padding: 2px 9px;
+    font-size: 0.8rem;
+  }
+</style>
+
 <div class="page-head">
   <div>
     <h1>Campaigns</h1>
-    <div class="sub">Detected lateral movement groups</div>
+    <div class="sub">Detected lateral movement groups &middot; auto-clustered by behavioral similarity</div>
   </div>
-  <div>
+  <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;">
     <button
       id="recomputeBtn"
       class="btn btn-primary"
       type="button"
       onclick="recomputeCampaigns(this)"
-    >
-      Recompute groups
-    </button>
-    <div id="campaignJobStatus" class="muted tiny-text" style="margin-top:6px;"></div>
-    <div id="campaignVerifyStatus" class="muted tiny-text" style="margin-top:4px;">{{ pro_state.message or '' }}</div>
+    >Recompute groups</button>
   </div>
 </div>
 
-{% if not pro_state.verified %}
-<div class="card" style="margin-bottom:12px;">
-  <div class="case-empty" style="margin:14px;">{{ pro_state.message or 'Resultado no disponible' }}</div>
+<!-- Verification state banner -->
+{% set vstatus = pro_state.status or 'none' %}
+{% if vstatus == 'verified' %}
+<div class="verify-banner verify-ok">
+  <span>&#10003;</span>
+  <span>{{ pro_state.message or 'Results available' }}</span>
+  {% if pro_state.expires_at %}<span class="muted" style="margin-left:auto;font-size:0.78rem;">expires {{ pro_state.expires_at }}</span>{% endif %}
+</div>
+{% elif vstatus == 'pending' %}
+<div class="verify-banner verify-pending">
+  <span style="animation:pulse 1s infinite;display:inline-block;">&#9679;</span>
+  <span>{{ pro_state.message or 'Recompute in progress…' }}</span>
+</div>
+{% elif vstatus == 'unverified' %}
+<div class="verify-banner verify-error">
+  <span>&#9888;</span>
+  <span>{{ pro_state.message or 'Results unavailable — recompute to rebuild.' }}</span>
+</div>
+{% else %}
+<div class="verify-banner verify-none">
+  <span>&#9432;</span>
+  <span>No campaign data yet. Click <strong>Recompute groups</strong> to start clustering.</span>
 </div>
 {% endif %}
 
-<div class="card">
+<!-- Job progress card (shown via JS) -->
+<div class="job-card" id="jobCard">
+  <div class="job-card-head">
+    <span class="job-status-dot" id="jobDot"></span>
+    <span id="jobLabel">Recompute</span>
+    <span class="muted" id="jobTime" style="font-weight:400;margin-left:auto;font-size:0.78rem;"></span>
+  </div>
+  <div class="job-metrics" id="jobMetrics"></div>
+</div>
+
+<!-- Campaigns table -->
+<div class="card" style="margin-top:16px;">
   <div class="card-head">
     <div class="card-title">Campaigns</div>
-    <div class="card-sub">Auto clustering of actors by behavior</div>
+    <div class="card-sub">{{ campaigns|length }} group{{ 's' if campaigns|length != 1 else '' }}</div>
   </div>
+
   {% if campaigns %}
-    <div class="table-wrap">
-      <table class="table table-sortable">
-        <thead>
-          <tr>
-            <th data-type="text">ID</th>
-            <th data-type="text">Label</th>
-            <th data-type="number">Score</th>
-            <th data-type="date">Created</th>
-            <th data-type="date">First Seen</th>
-            <th data-type="date">Last Seen</th>
-            <th data-type="number">Members</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for c in campaigns %}
-          <tr>
-            <td><a class="link" href="/dashboard/campaigns/{{ c.campaign_id }}">{{ c.campaign_id }}</a></td>
-            <td>{{ c.label or 'Unnamed' }}</td>
-            <td>{{ c.score_det or 0 }}</td>
-            <td class="mono">{{ c.created_at }}</td>
-            <td class="mono">{{ c.first_seen_at or '-' }}</td>
-            <td class="mono">{{ c.last_seen_at or '-' }}</td>
-            <td>{{ c.member_count }}</td>
-            <td>
-              <button class="btn btn-danger" type="button" onclick="deleteCampaign('{{ c.campaign_id }}', this)">Delete</button>
-            </td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
+  <div class="table-wrap">
+    <table class="table table-sortable">
+      <thead>
+        <tr>
+          <th data-type="text">ID</th>
+          <th data-type="text">Label</th>
+          <th data-type="number" style="width:80px;">Score</th>
+          <th data-type="number" style="width:90px;">Members</th>
+          <th data-type="date" style="width:175px;">First Seen</th>
+          <th data-type="date" style="width:175px;">Last Seen</th>
+          <th style="width:90px;"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for c in campaigns %}
+        {% set score = c.score_det or 0 %}
+        <tr>
+          <td class="mono" style="font-size:0.82rem;">
+            <a class="link" href="/dashboard/campaigns/{{ c.campaign_id }}">{{ c.campaign_id }}</a>
+          </td>
+          <td style="font-weight:500;">{{ c.label or '—' }}</td>
+          <td>
+            {% if score >= 7 %}
+            <span class="score-pill score-high">{{ score }}</span>
+            {% elif score >= 4 %}
+            <span class="score-pill score-med">{{ score }}</span>
+            {% else %}
+            <span class="score-pill score-low">{{ score }}</span>
+            {% endif %}
+          </td>
+          <td>
+            <span class="member-chip">{{ c.member_count }}</span>
+          </td>
+          <td class="mono muted" style="font-size:0.82rem;">{{ c.first_seen_at or '—' }}</td>
+          <td class="mono muted" style="font-size:0.82rem;">{{ c.last_seen_at or '—' }}</td>
+          <td>
+            <button class="btn btn-danger btn-small" type="button"
+              onclick="deleteCampaign('{{ c.campaign_id }}', this)">Delete</button>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
   {% else %}
-    <div class="case-empty" style="margin:14px;">No campaigns available. Run recompute to build campaigns.</div>
+  <div class="case-empty" style="padding:32px 16px;">
+    No campaigns yet. Run <strong>Recompute groups</strong> to cluster actors by behavioral similarity.
+  </div>
   {% endif %}
 </div>
 
 <script>
-  const jobStatusEl = document.getElementById('campaignJobStatus');
-  const verifyStatusEl = document.getElementById('campaignVerifyStatus');
+  const jobCard     = document.getElementById('jobCard');
+  const jobDot      = document.getElementById('jobDot');
+  const jobLabel    = document.getElementById('jobLabel');
+  const jobTime     = document.getElementById('jobTime');
+  const jobMetrics  = document.getElementById('jobMetrics');
   const recomputeBtn = document.getElementById('recomputeBtn');
   const recomputeEnabled = {{ (campaigns_recompute_enabled|default(true))|tojson }};
-  const initialVerification = {{ (campaigns_pro_state|default({}))|tojson }};
   let jobPollTimer = null;
   let autoRefreshOnComplete = false;
-  let lastJobStatus = '';
 
-  function renderJobStatus(job){
-    if(!jobStatusEl) return;
-    if(!job || !job.status || job.status === 'none' || job.status === 'disabled'){
-      jobStatusEl.textContent = '';
-      if(recomputeBtn && recomputeEnabled){
+  function renderJobCard(job) {
+    if (!job || !job.status || job.status === 'none' || job.status === 'disabled') {
+      jobCard.classList.remove('visible');
+      if (recomputeEnabled) {
         recomputeBtn.disabled = false;
         recomputeBtn.textContent = 'Recompute groups';
       }
       return;
     }
-    let msg = `Recompute: ${job.status}`;
-    if(job.status === 'queued'){
-      msg += ` - queued ${job.created_at || ''}`;
-    }
-    if(job.status === 'running'){
-      msg += ` - started ${job.started_at || ''}`;
-    }
-    if(job.status === 'completed'){
-      if(job.duration_ms !== undefined){ msg += ` - ${job.duration_ms}ms`; }
-      if(job.actors_considered !== undefined){ msg += ` - actors ${job.actors_considered}`; }
-      if(job.features_cached !== undefined){ msg += ` - cached ${job.features_cached}`; }
-      if(job.features_built !== undefined){ msg += ` - built ${job.features_built}`; }
-    }
-    if(job.status === 'failed'){
-      msg += job.error ? ` - ${job.error}` : '';
-    }
-    jobStatusEl.textContent = msg;
-    if(recomputeBtn){
-      recomputeBtn.disabled = !recomputeEnabled || job.status === 'queued' || job.status === 'running';
-      recomputeBtn.textContent = recomputeBtn.disabled ? 'Recomputing...' : 'Recompute groups';
-    }
+
+    jobCard.classList.add('visible');
+    jobDot.className = 'job-status-dot dot-' + job.status;
+
+    const labels = { queued:'Queued', running:'Running…', completed:'Completed', failed:'Failed' };
+    jobLabel.textContent = 'Recompute — ' + (labels[job.status] || job.status);
+
+    if (job.status === 'queued')    jobTime.textContent = job.created_at || '';
+    else if (job.status === 'running') jobTime.textContent = 'started ' + (job.started_at || '');
+    else if (job.status === 'completed') jobTime.textContent = (job.duration_ms !== undefined ? job.duration_ms + ' ms' : '');
+    else if (job.status === 'failed')   jobTime.textContent = '';
+
+    const metrics = [];
+    if (job.actors_considered !== undefined) metrics.push({ label: 'Actors', val: job.actors_considered });
+    if (job.features_built    !== undefined) metrics.push({ label: 'Features built', val: job.features_built });
+    if (job.features_cached   !== undefined) metrics.push({ label: 'From cache', val: job.features_cached });
+    if (job.links_created     !== undefined) metrics.push({ label: 'Links created', val: job.links_created });
+    if (job.status === 'failed' && job.error) metrics.push({ label: 'Error', val: job.error });
+
+    jobMetrics.innerHTML = metrics.map(m =>
+      `<div class="job-metric"><span>${escHtml(m.label)}</span><span class="jm-val">${escHtml(String(m.val))}</span></div>`
+    ).join('');
+
+    const busy = job.status === 'queued' || job.status === 'running';
+    recomputeBtn.disabled = !recomputeEnabled || busy;
+    recomputeBtn.textContent = busy ? 'Recomputing…' : 'Recompute groups';
   }
 
-  function renderVerification(state){
-    if(!verifyStatusEl) return;
-    if(!state || !state.message){
-      verifyStatusEl.textContent = '';
-      return;
-    }
-    verifyStatusEl.textContent = state.message;
-  }
-
-  async function fetchJobStatus(){
-    try{
+  async function fetchJobStatus() {
+    try {
       const res = await fetch('/dashboard/campaigns/recompute/status');
-      if(!res.ok) return;
+      if (!res.ok) return;
       const data = await res.json();
-      renderJobStatus(data);
-      if(data.verification){
-        renderVerification(data.verification);
-      }
+      renderJobCard(data);
       const status = data.status || '';
-      if(status !== lastJobStatus){
-        lastJobStatus = status;
-      }
-      if(status === 'queued' || status === 'running'){
+      if (status === 'queued' || status === 'running') {
         jobPollTimer = setTimeout(fetchJobStatus, 1500);
-      }else if(status === 'completed'){
-        if(autoRefreshOnComplete){
-          autoRefreshOnComplete = false;
-          setTimeout(() => location.reload(), 800);
-        }
+      } else if (status === 'completed' && autoRefreshOnComplete) {
+        autoRefreshOnComplete = false;
+        setTimeout(() => location.reload(), 600);
       }
-    }catch(e){
-      // ignore
-    }
+    } catch (e) { /* ignore */ }
   }
 
-  async function recomputeCampaigns(btn){
-    const original = btn.textContent;
+  async function recomputeCampaigns(btn) {
     btn.disabled = true;
-    btn.textContent = 'Recomputing...';
-    try{
-      const res = await fetch('/dashboard/campaigns/recompute', {method:'POST'});
-      if(res.ok){
+    btn.textContent = 'Starting…';
+    try {
+      const res = await fetch('/dashboard/campaigns/recompute', { method: 'POST' });
+      if (res.ok) {
         const data = await res.json();
-        renderJobStatus(data.job || data);
-        if(data.verification){
-          renderVerification(data.verification);
-        }
+        renderJobCard(data.job || data);
         autoRefreshOnComplete = true;
-        if(!jobPollTimer){ jobPollTimer = setTimeout(fetchJobStatus, 1500); }
-      }else{
+        if (!jobPollTimer) jobPollTimer = setTimeout(fetchJobStatus, 1500);
+      } else {
         const text = await res.text();
         alert('Error: ' + text);
+        btn.disabled = false;
+        btn.textContent = 'Recompute groups';
       }
-    }catch(e){
+    } catch (e) {
       alert('Error: ' + e.message);
-    }finally{
-      if(!btn.disabled){
-        btn.textContent = original;
-      }
+      btn.disabled = false;
+      btn.textContent = 'Recompute groups';
     }
   }
 
-  renderVerification(initialVerification);
-  fetchJobStatus();
-
-  async function deleteCampaign(campaignId, btn){
-    if(!confirm(`Delete campaign ${campaignId}? This cannot be undone.`)){ return; }
-    if(btn){ btn.disabled = true; }
-    try{
-      const res = await fetch(`/dashboard/campaigns/${campaignId}`, {method:'DELETE'});
-      if(res.ok){
-        const row = btn.closest('tr');
-        if(row){ row.remove(); }
-      }else{
+  async function deleteCampaign(campaignId, btn) {
+    if (!confirm(`Delete campaign ${campaignId}? This cannot be undone.`)) return;
+    btn.disabled = true;
+    btn.textContent = '…';
+    try {
+      const res = await fetch(`/dashboard/campaigns/${campaignId}`, { method: 'DELETE' });
+      if (res.ok) {
+        btn.closest('tr').remove();
+      } else {
         const text = await res.text();
         alert('Error deleting campaign: ' + text);
-        if(btn){ btn.disabled = false; }
+        btn.disabled = false;
+        btn.textContent = 'Delete';
       }
-    }catch(e){
+    } catch (e) {
       alert('Error: ' + e.message);
-      if(btn){ btn.disabled = false; }
+      btn.disabled = false;
+      btn.textContent = 'Delete';
     }
   }
+
+  function escHtml(s) {
+    return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  fetchJobStatus();
 </script>
 {% endblock %}
