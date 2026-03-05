@@ -2,148 +2,183 @@
 {% block content %}
 
 <style>
-  .env-section { margin-top: 24px; }
+  /* ── Layout ── */
+  .env-section { margin-top: 28px; }
   .env-section-title {
-    font-size: 0.75rem;
+    font-size: 0.72rem;
     text-transform: uppercase;
-    letter-spacing: 0.06em;
+    letter-spacing: 0.07em;
     color: var(--muted);
-    margin-bottom: 10px;
-    padding-bottom: 6px;
+    margin-bottom: 4px;
+    padding-bottom: 8px;
     border-bottom: 1px solid var(--stroke);
   }
+
   .env-row {
     display: grid;
-    grid-template-columns: 220px 1fr auto auto;
-    align-items: center;
-    gap: 12px;
-    padding: 10px 0;
+    grid-template-columns: 200px 1fr 110px;
+    align-items: start;
+    gap: 0 20px;
+    padding: 14px 0;
     border-bottom: 1px solid rgba(255,255,255,0.04);
   }
   .env-row:last-child { border-bottom: none; }
+
+  /* ── Label column ── */
   .env-label {
-    font-size: 0.82rem;
+    padding-top: 6px;
+    font-size: 0.85rem;
     font-weight: 600;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    line-height: 1.3;
   }
   .env-label .key-name {
-    font-family: monospace;
-    font-size: 0.78rem;
-    color: var(--muted);
     display: block;
+    font-family: monospace;
+    font-size: 0.76rem;
+    color: var(--muted);
     font-weight: 400;
+    margin-top: 2px;
   }
-  .env-input-wrap {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  .env-input-wrap input {
-    flex: 1;
+
+  /* ── Input + sub-info column ── */
+  .env-field { display: flex; flex-direction: column; gap: 6px; }
+  .env-field input {
+    width: 100%;
+    box-sizing: border-box;
     padding: 6px 10px;
     border: 1px solid var(--stroke);
     background: var(--panel2);
     color: var(--text);
     border-radius: 4px;
     font-family: monospace;
-    font-size: 0.85rem;
-    min-width: 0;
+    font-size: 0.84rem;
+    transition: border-color 0.15s;
   }
-  .env-input-wrap input:focus {
+  .env-field input:focus {
     outline: none;
     border-color: var(--accent);
   }
-  .env-meta {
-    font-size: 0.75rem;
-    color: var(--muted);
-    white-space: nowrap;
-  }
-  .badge {
-    display: inline-block;
-    padding: 2px 7px;
-    border-radius: 999px;
-    font-size: 0.72rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-  }
-  .badge-override { background: rgba(255,179,0,.18); color: #ffc940; }
-  .badge-env     { background: rgba(74,144,226,.18); color: #7ab8f5; }
-  .badge-default { background: rgba(255,255,255,.07); color: var(--muted); }
-  .diag-row {
+  .env-field input::placeholder { color: var(--muted); opacity: 0.7; }
+
+  .env-sub {
     display: flex;
     align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    font-size: 0.76rem;
+    color: var(--muted);
+    min-height: 18px;
+  }
+  .env-effective {
+    font-family: monospace;
+    font-size: 0.76rem;
+    color: var(--muted);
+    word-break: break-all;
+  }
+
+  /* ── Buttons column ── */
+  .env-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding-top: 2px;
+  }
+  .env-actions .btn {
+    width: 100%;
+    font-size: 0.8rem;
+    padding: 5px 0;
+    text-align: center;
+  }
+
+  /* ── Badges ── */
+  .badge {
+    display: inline-block;
+    padding: 1px 7px;
+    border-radius: 999px;
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    flex-shrink: 0;
+  }
+  .badge-override { background: rgba(255,179,0,.15); color: #ffc940; }
+  .badge-env      { background: rgba(74,144,226,.15); color: #7ab8f5; }
+  .badge-default  { background: rgba(255,255,255,.06); color: var(--muted); }
+
+  /* ── Feedback ── */
+  .save-feedback { color: #7ee2b8; display: none; font-size: 0.76rem; }
+  .save-feedback.visible { display: inline; }
+  .err-feedback  { color: #f2a6a6; display: none; font-size: 0.76rem; word-break: break-all; }
+  .err-feedback.visible  { display: inline; }
+
+  /* ── Restart banner ── */
+  .restart-banner {
+    display: none;
+    align-items: center;
+    gap: 10px;
+    background: rgba(255,179,0,.08);
+    border: 1px solid rgba(255,179,0,.3);
+    border-radius: 6px;
+    padding: 11px 16px;
+    font-size: 0.87rem;
+    color: #ffc940;
+    margin-bottom: 20px;
+  }
+  .restart-banner.visible { display: flex; }
+
+  /* ── Diagnostics ── */
+  .diag-row {
+    display: flex;
+    align-items: baseline;
     gap: 12px;
-    padding: 8px 0;
+    padding: 9px 0;
     border-bottom: 1px solid rgba(255,255,255,0.04);
   }
   .diag-row:last-child { border-bottom: none; }
   .diag-tag {
     font-family: monospace;
-    font-size: 0.82rem;
+    font-size: 0.78rem;
     font-weight: 700;
-    padding: 3px 8px;
+    padding: 2px 8px;
     border-radius: 4px;
     min-width: 64px;
     text-align: center;
+    flex-shrink: 0;
   }
-  .diag-tag-ok    { background: rgba(26,191,107,.18); color: #7ee2b8; }
-  .diag-tag-warn  { background: rgba(255,179,0,.18);  color: #ffc940; }
-  .diag-tag-error { background: rgba(231,76,60,.18);  color: #f2a6a6; }
-  .diag-label { font-weight: 600; font-size: 0.88rem; }
-  .diag-detail { font-size: 0.82rem; color: var(--muted); font-family: monospace; }
-  .diag-placeholder { color: var(--muted); font-size: 0.85rem; padding: 12px 0; }
+  .diag-tag-ok    { background: rgba(26,191,107,.15); color: #7ee2b8; }
+  .diag-tag-warn  { background: rgba(255,179,0,.15);  color: #ffc940; }
+  .diag-tag-error { background: rgba(231,76,60,.15);  color: #f2a6a6; }
+  .diag-label  { font-weight: 600; font-size: 0.87rem; white-space: nowrap; }
+  .diag-detail { font-size: 0.8rem; color: var(--muted); font-family: monospace; word-break: break-all; }
+  .diag-placeholder { color: var(--muted); font-size: 0.85rem; padding: 14px 0; }
+
+  /* ── Egress ── */
   .egress-row {
     display: flex;
     align-items: center;
-    gap: 12px;
-    padding: 6px 0;
+    gap: 14px;
+    padding: 7px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.03);
   }
-  .egress-host { font-family: monospace; font-size: 0.85rem; }
-  .egress-check { font-size: 0.78rem; color: var(--muted); }
-  .restart-banner {
-    display: none;
-    align-items: center;
-    gap: 10px;
-    background: rgba(255,179,0,.1);
-    border: 1px solid rgba(255,179,0,.35);
-    border-radius: 6px;
-    padding: 10px 16px;
-    font-size: 0.88rem;
-    color: #ffc940;
-    margin-bottom: 18px;
-  }
-  .restart-banner.visible { display: flex; }
-  .save-feedback {
-    font-size: 0.78rem;
-    color: #7ee2b8;
-    display: none;
-  }
-  .save-feedback.visible { display: inline; }
-  .err-feedback {
-    font-size: 0.78rem;
-    color: #f2a6a6;
-    display: none;
-  }
-  .err-feedback.visible { display: inline; }
+  .egress-row:last-child { border-bottom: none; }
+  .egress-host  { font-family: monospace; font-size: 0.85rem; }
+  .egress-checks { display: flex; gap: 8px; font-size: 0.78rem; }
 </style>
 
 <div class="page-head">
   <div>
     <h1>Environment</h1>
-    <div class="sub">Proxy, TLS, egress, and logging configuration &middot; diagnostics</div>
+    <div class="sub">Proxy, TLS, egress and logging configuration &middot; live diagnostics</div>
   </div>
 </div>
 
-<!-- Restart banner (shown after any save) -->
+<!-- Restart banner -->
 <div class="restart-banner" id="restart-banner">
-  <span>&#9888;</span>
-  <span>Changes saved to DB. <strong>Restart the container</strong> for them to take effect.</span>
+  <span style="font-size:1.1rem;">⚠</span>
+  <span>Changes saved. <strong>Restart the container</strong> to apply them.</span>
 </div>
 
-<!-- ── Diagnostics card ────────────────────────────────────────────────── -->
+<!-- ── Diagnostics ──────────────────────────────────────────────────────── -->
 <div class="card">
   <div class="card-head">
     <div class="card-title">Live Diagnostics</div>
@@ -154,17 +189,17 @@
     <div class="diag-placeholder">Click "Run Diagnostics" to check DNS, HTTPS, proxy, and TLS trust store.</div>
   </div>
 
-  <div id="egress-results" style="margin-top:14px;display:none;">
-    <div class="env-section-title">Egress Hosts</div>
+  <div id="egress-results" style="margin-top:16px;display:none;">
+    <div class="env-section-title" style="margin-top:0;">Egress Hosts</div>
     <div id="egress-list"></div>
   </div>
 </div>
 
-<!-- ── Configuration card ─────────────────────────────────────────────── -->
+<!-- ── Configuration ────────────────────────────────────────────────────── -->
 <div class="card" style="margin-top:20px;">
   <div class="card-head">
     <div class="card-title">Configuration</div>
-    <div class="muted" style="font-size:0.82rem;">Changes require container restart to take effect</div>
+    <div class="muted" style="font-size:0.8rem;">Saved to DB · restart required to apply</div>
   </div>
 
   {% for group in config_groups %}
@@ -172,11 +207,15 @@
     <div class="env-section-title">{{ group.name }}</div>
     {% for row in group.rows %}
     <div class="env-row" data-key="{{ row.key }}">
+
+      <!-- Label -->
       <div class="env-label">
         {{ row.label }}
         <span class="key-name">{{ row.key }}</span>
       </div>
-      <div class="env-input-wrap">
+
+      <!-- Input + sub info -->
+      <div class="env-field">
         <input
           type="text"
           id="input-{{ row.key }}"
@@ -185,19 +224,24 @@
           autocomplete="off"
           spellcheck="false"
         />
+        <div class="env-sub">
+          <span class="badge badge-{{ row.source }}">{{ row.source }}</span>
+          {% if row.effective %}
+            <span class="env-effective">{{ row.effective }}</span>
+          {% else %}
+            <span style="font-style:italic;opacity:.5;font-size:0.75rem;">not set</span>
+          {% endif %}
+          <span class="save-feedback" id="ok-{{ row.key }}">&#10003; saved</span>
+          <span class="err-feedback"  id="err-{{ row.key }}"></span>
+        </div>
       </div>
-      <div class="env-meta">
-        <span class="badge badge-{{ row.source }}">{{ row.source }}</span>
-        {% if row.effective %}
-          <span style="margin-left:4px;font-family:monospace;">{{ row.effective }}</span>
-        {% endif %}
-        <span class="save-feedback" id="ok-{{ row.key }}">saved</span>
-        <span class="err-feedback" id="err-{{ row.key }}"></span>
-      </div>
-      <div style="display:flex;gap:6px;">
+
+      <!-- Actions -->
+      <div class="env-actions">
         <button class="btn btn-sm" onclick="saveSetting('{{ row.key }}')">Save</button>
         <button class="btn btn-sm btn-ghost" onclick="clearSetting('{{ row.key }}')">Clear</button>
       </div>
+
     </div>
     {% endfor %}
   </div>
@@ -219,7 +263,7 @@ function runDiagnostics() {
       renderEgress(data.egress || []);
     })
     .catch(err => {
-      diagEl.innerHTML = '<div class="diag-placeholder" style="color:#f2a6a6">Request failed: ' + err + '</div>';
+      diagEl.innerHTML = '<div class="diag-placeholder" style="color:#f2a6a6">Request failed: ' + escHtml(String(err)) + '</div>';
     })
     .finally(() => {
       btn.disabled = false;
@@ -229,14 +273,11 @@ function runDiagnostics() {
 
 function renderDiagnostics(results) {
   const el = document.getElementById('diag-results');
-  if (!results.length) {
-    el.innerHTML = '<div class="diag-placeholder">No results.</div>';
-    return;
-  }
+  if (!results.length) { el.innerHTML = '<div class="diag-placeholder">No results.</div>'; return; }
   el.innerHTML = results.map(r => {
     const cls = 'diag-tag-' + r.status;
     const tag = r.status === 'ok' ? '[OK]' : r.status === 'warn' ? '[WARN]' : '[ERROR]';
-    const detail = r.detail ? `<span class="diag-detail"> — ${escHtml(r.detail)}</span>` : '';
+    const detail = r.detail ? `<span class="diag-detail">&mdash; ${escHtml(r.detail)}</span>` : '';
     return `<div class="diag-row">
       <span class="diag-tag ${cls}">${tag}</span>
       <span class="diag-label">${escHtml(r.label)}</span>
@@ -251,33 +292,29 @@ function renderEgress(results) {
   if (!results.length) { wrap.style.display = 'none'; return; }
   wrap.style.display = 'block';
   list.innerHTML = results.map(r => {
-    const dns = r.dns === 'ok'
-      ? '<span style="color:#7ee2b8">dns=[OK]</span>'
-      : `<span style="color:#f2a6a6">dns=[ERROR]</span>`;
+    const dnsOk = r.dns === 'ok';
+    const dns = `<span style="color:${dnsOk ? '#7ee2b8' : '#f2a6a6'}">dns [${dnsOk ? 'OK' : 'ERR'}]</span>`;
     let tcp = '';
     if (r.port !== null && r.port !== undefined) {
-      tcp = r.tcp === 'ok'
-        ? ' <span style="color:#7ee2b8">tcp=[OK]</span>'
-        : ` <span style="color:#f2a6a6">tcp=[ERROR]</span>`;
+      const tcpOk = r.tcp === 'ok';
+      tcp = `<span style="color:${tcpOk ? '#7ee2b8' : '#f2a6a6'}">tcp [${tcpOk ? 'OK' : 'ERR'}]</span>`;
     }
     const portStr = (r.port !== null && r.port !== undefined) ? ':' + r.port : '';
+    const errStr = r.error ? `<span style="color:#f2a6a6;font-family:monospace;font-size:0.78rem;">${escHtml(r.error)}</span>` : '';
     return `<div class="egress-row">
       <span class="egress-host">${escHtml(r.host)}${portStr}</span>
-      <span class="egress-check">${dns}${tcp}</span>
-      ${r.error ? '<span class="diag-detail" style="color:#f2a6a6">' + escHtml(r.error) + '</span>' : ''}
+      <div class="egress-checks">${dns}${tcp ? ' ' + tcp : ''}</div>
+      ${errStr}
     </div>`;
   }).join('');
 }
 
 function saveSetting(key) {
-  const input = document.getElementById('input-' + key);
-  const value = input.value.trim();
-  _postSetting(key, value);
+  _postSetting(key, document.getElementById('input-' + key).value.trim());
 }
 
 function clearSetting(key) {
-  const input = document.getElementById('input-' + key);
-  input.value = '';
+  document.getElementById('input-' + key).value = '';
   _postSetting(key, '');
 }
 
@@ -298,7 +335,6 @@ function _postSetting(key, value) {
         okEl.classList.add('visible');
         setTimeout(() => okEl.classList.remove('visible'), 3000);
         document.getElementById('restart-banner').classList.add('visible');
-        // Update badge in the row
         const row = document.querySelector('.env-row[data-key="' + key + '"]');
         if (row) {
           const badge = row.querySelector('.badge');
@@ -306,6 +342,8 @@ function _postSetting(key, value) {
             badge.className = 'badge badge-' + (value ? 'override' : 'env');
             badge.textContent = value ? 'override' : 'env';
           }
+          const effEl = row.querySelector('.env-effective');
+          if (effEl) effEl.textContent = value;
         }
       } else {
         errEl.textContent = data.detail || 'error';
