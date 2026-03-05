@@ -103,12 +103,32 @@
         </tr>
         <tr class="table-filters">
           <th></th>
-          <th><input class="table-filter" data-col="1" placeholder="Filter #" aria-label="Filter #"></th>
-          <th><input class="table-filter" data-col="2" placeholder="Filter timestamp" aria-label="Filter timestamp"></th>
-          <th><input class="table-filter" data-col="3" placeholder="Filter method" aria-label="Filter method"></th>
-          <th><input class="table-filter" data-col="4" placeholder="Filter path" aria-label="Filter path"></th>
-          <th><input class="table-filter" data-col="5" placeholder="Filter stage" aria-label="Filter stage"></th>
-          <th><input class="table-filter" data-col="6" placeholder="Filter status" aria-label="Filter status"></th>
+          <th><input class="table-filter" data-col="1" placeholder="#" aria-label="Filter #"></th>
+          <th><input class="table-filter" data-col="2" placeholder="Timestamp" aria-label="Filter timestamp"></th>
+          <th>
+            <select class="table-filter" data-col="3" aria-label="Filter method">
+              <option value="">All</option>
+              <option>GET</option>
+              <option>POST</option>
+              <option>PUT</option>
+              <option>DELETE</option>
+              <option>PATCH</option>
+              <option>HEAD</option>
+              <option>OPTIONS</option>
+            </select>
+          </th>
+          <th><input class="table-filter" data-col="4" placeholder="Path" aria-label="Filter path"></th>
+          <th>
+            <select class="table-filter" data-col="5" aria-label="Filter stage">
+              <option value="">All</option>
+              <option>S0</option>
+              <option>S1</option>
+              <option>S2</option>
+              <option>S3</option>
+              <option>S4</option>
+            </select>
+          </th>
+          <th><input class="table-filter" data-col="6" placeholder="Status" aria-label="Filter status"></th>
           <th></th>
         </tr>
       </thead>

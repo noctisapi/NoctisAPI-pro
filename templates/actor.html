@@ -244,13 +244,17 @@
     return eventsTableHelper;
   }
 
-  const refreshTimer = setInterval(() => {
-    if (autoRefreshEnabled && !document.hidden) {
-      const helper = ensureEventsTableHelper();
-      if (helper && helper.isActive()) return;
-      window.location.reload();
-    }
-  }, 5000);
+  let lastActivity = Date.now();
+  ['mousemove','keydown','click','scroll'].forEach(ev =>
+    document.addEventListener(ev, () => lastActivity = Date.now(), { passive: true })
+  );
+  setInterval(() => {
+    if (!autoRefreshEnabled || document.hidden) return;
+    const helper = ensureEventsTableHelper();
+    if (helper && helper.isActive()) return;
+    if (Date.now() - lastActivity < 60000) return; // idle check
+    window.location.reload();
+  }, 60000);
 
   function showToast(message, type = 'info'){
     if(!toastEl) return;

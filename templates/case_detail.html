@@ -263,11 +263,13 @@
           <td><a class="link mono" href="/actor/{{ a.actor_id }}">{{ a.actor_id[:8] }}</a></td>
           <td>{{ a.role }}</td>
           <td class="mono muted" style="font-size:0.82rem;">{{ a.added_at }}</td>
-          <td style="display:flex;gap:4px;">
-            <button class="btn btn-ghost btn-small" type="button"
-              onclick="filterTimelineByActor('{{ a.actor_id }}', '{{ a.actor_id[:8] }}')">Filter timeline</button>
-            <button class="btn btn-ghost btn-small" type="button"
-              onclick="removeCaseActor('{{ case.id }}','{{ a.actor_id }}', this)">Remove</button>
+          <td>
+            <div style="display:flex;gap:4px;flex-wrap:wrap;">
+              <button class="btn btn-ghost btn-small" type="button"
+                onclick="filterTimelineByActor('{{ a.actor_id }}', '{{ a.actor_id[:8] }}')">Filter</button>
+              <button class="btn btn-ghost btn-small" type="button"
+                onclick="removeCaseActor('{{ case.id }}','{{ a.actor_id }}', this)">Remove</button>
+            </div>
           </td>
         </tr>
         {% endfor %}
@@ -286,10 +288,26 @@
     <div class="card-sub">latest {{ case_timeline|length }} events</div>
   </div>
   {% if case_timeline %}
-  <div id="timelineFilterBar" style="display:none;align-items:center;gap:8px;padding:8px 16px;background:rgba(255,179,0,.06);border-bottom:1px solid rgba(255,179,0,.2);font-size:0.82rem;">
-    <span style="color:#ffc940;">&#9632;</span>
-    <span>Filtered by actor: <strong id="timelineFilterLabel" class="mono"></strong></span>
-    <button class="btn btn-ghost btn-small" type="button" style="margin-left:auto;" onclick="clearTimelineFilter()">Clear filter</button>
+  <div style="padding:8px 14px;border-bottom:1px solid var(--stroke);display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+    <select id="tlTypeFilter" class="input" style="width:130px;padding:5px 10px;font-size:0.82rem;" onchange="applyTimelineFilters()">
+      <option value="">All types</option>
+      <option value="step">Steps only</option>
+      <option value="event">Events only</option>
+    </select>
+    <select id="tlStageFilter" class="input" style="width:120px;padding:5px 10px;font-size:0.82rem;" onchange="applyTimelineFilters()">
+      <option value="">All stages</option>
+      <option value="0">S0</option>
+      <option value="1">S1</option>
+      <option value="2">S2</option>
+      <option value="3">S3</option>
+      <option value="4">S4+</option>
+    </select>
+    <div id="tlActorChip" style="display:none;align-items:center;gap:6px;background:rgba(255,179,0,.1);border:1px solid rgba(255,179,0,.3);border-radius:999px;padding:3px 10px;font-size:0.8rem;color:#ffc940;">
+      <span>Actor: <strong id="timelineFilterLabel" class="mono"></strong></span>
+      <button type="button" style="background:none;border:none;color:#ffc940;cursor:pointer;padding:0;line-height:1;font-size:1rem;" onclick="clearActorFilter()">&#10005;</button>
+    </div>
+    <button class="btn btn-ghost btn-small" type="button" onclick="clearAllTimelineFilters()" style="margin-left:auto;">Clear all</button>
+    <span id="tlCount" class="muted" style="font-size:0.78rem;"></span>
   </div>
   <div class="table-wrap">
     <table class="table" id="timelineTable">
@@ -305,7 +323,7 @@
       </thead>
       <tbody>
         {% for ev in case_timeline %}
-        <tr data-actor="{{ ev.actor_id }}">
+        <tr data-actor="{{ ev.actor_id }}" data-type="{{ ev.type }}" data-stage="{{ ev.stage if ev.stage is not none else '' }}">
           <td class="mono muted" style="font-size:0.8rem;">{{ ev.ts }}</td>
           <td>
             <span class="ev-type ev-type-{{ ev.type }}">{{ ev.type }}</span>
@@ -479,24 +497,55 @@
   }
 
   let activeActorFilter = null;
-  function filterTimelineByActor(actorId, short) {
-    activeActorFilter = actorId;
+
+  function applyTimelineFilters() {
+    const typeF = (document.getElementById('tlTypeFilter')?.value || '').toLowerCase();
+    const stageF = document.getElementById('tlStageFilter')?.value ?? '';
+    const actorF = activeActorFilter;
+    let visible = 0;
     document.querySelectorAll('#timelineTable tbody tr').forEach(tr => {
-      tr.style.display = (tr.dataset.actor === actorId) ? '' : 'none';
+      const matchType  = !typeF  || tr.dataset.type === typeF;
+      const matchActor = !actorF || tr.dataset.actor === actorF;
+      const trStage    = tr.dataset.stage !== '' ? parseInt(tr.dataset.stage) : null;
+      let matchStage = true;
+      if (stageF !== '') {
+        if (stageF === '4') matchStage = trStage !== null && trStage >= 4;
+        else matchStage = trStage !== null && trStage === parseInt(stageF);
+      }
+      const show = matchType && matchActor && matchStage;
+      tr.style.display = show ? '' : 'none';
+      if (show) visible++;
     });
-    const bar = document.getElementById('timelineFilterBar');
-    const lbl = document.getElementById('timelineFilterLabel');
-    if (bar) bar.style.display = 'flex';
-    if (lbl) lbl.textContent = short || actorId.slice(0, 8);
+    const countEl = document.getElementById('tlCount');
+    const total = document.querySelectorAll('#timelineTable tbody tr').length;
+    if (countEl) countEl.textContent = visible < total ? `${visible} / ${total}` : '';
   }
 
-  function clearTimelineFilter() {
+  function filterTimelineByActor(actorId, short) {
+    activeActorFilter = actorId;
+    const chip = document.getElementById('tlActorChip');
+    const lbl  = document.getElementById('timelineFilterLabel');
+    if (chip) chip.style.display = 'flex';
+    if (lbl)  lbl.textContent = short || actorId.slice(0, 8);
+    applyTimelineFilters();
+  }
+
+  function clearActorFilter() {
     activeActorFilter = null;
-    document.querySelectorAll('#timelineTable tbody tr').forEach(tr => {
-      tr.style.display = '';
-    });
-    const bar = document.getElementById('timelineFilterBar');
-    if (bar) bar.style.display = 'none';
+    const chip = document.getElementById('tlActorChip');
+    if (chip) chip.style.display = 'none';
+    applyTimelineFilters();
+  }
+
+  function clearAllTimelineFilters() {
+    activeActorFilter = null;
+    const chip = document.getElementById('tlActorChip');
+    if (chip) chip.style.display = 'none';
+    const typeEl  = document.getElementById('tlTypeFilter');
+    const stageEl = document.getElementById('tlStageFilter');
+    if (typeEl)  typeEl.value = '';
+    if (stageEl) stageEl.value = '';
+    applyTimelineFilters();
   }
 
   async function updateCaseCampaign() {
