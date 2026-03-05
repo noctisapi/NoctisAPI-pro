@@ -300,7 +300,11 @@
       <option value="1">S1</option>
       <option value="2">S2</option>
       <option value="3">S3</option>
-      <option value="4">S4+</option>
+      <option value="4">S4</option>
+      <option value="5">S5</option>
+      <option value="6">S6</option>
+      <option value="7">S7</option>
+      <option value="8">S8</option>
     </select>
     <div id="tlActorChip" style="display:none;align-items:center;gap:6px;background:rgba(255,179,0,.1);border:1px solid rgba(255,179,0,.3);border-radius:999px;padding:3px 10px;font-size:0.8rem;color:#ffc940;">
       <span>Actor: <strong id="timelineFilterLabel" class="mono"></strong></span>
@@ -507,11 +511,7 @@
       const matchType  = !typeF  || tr.dataset.type === typeF;
       const matchActor = !actorF || tr.dataset.actor === actorF;
       const trStage    = tr.dataset.stage !== '' ? parseInt(tr.dataset.stage) : null;
-      let matchStage = true;
-      if (stageF !== '') {
-        if (stageF === '4') matchStage = trStage !== null && trStage >= 4;
-        else matchStage = trStage !== null && trStage === parseInt(stageF);
-      }
+      const matchStage = stageF === '' || (trStage !== null && trStage === parseInt(stageF));
       const show = matchType && matchActor && matchStage;
       tr.style.display = show ? '' : 'none';
       if (show) visible++;

@@ -81,7 +81,11 @@
       <option value="1">S1</option>
       <option value="2">S2</option>
       <option value="3">S3</option>
-      <option value="4">S4+</option>
+      <option value="4">S4</option>
+      <option value="5">S5</option>
+      <option value="6">S6</option>
+      <option value="7">S7</option>
+      <option value="8">S8</option>
     </select>
     <select id="scoreFilter" class="input" style="width:120px;padding:6px 10px;font-size:0.83rem;" onchange="filterActors()">
       <option value="">All scores</option>
@@ -161,7 +165,7 @@
       const trStage = parseInt(tr.dataset.stage || '0', 10);
       const trScore = parseFloat(tr.dataset.score || '0');
       const matchText  = !q || actor.includes(q) || ip.includes(q) || ua.includes(q);
-      const matchStage = !stage || (stage === '4' ? trStage >= 4 : trStage === parseInt(stage, 10));
+      const matchStage = !stage || trStage === parseInt(stage, 10);
       let matchScore = true;
       if (scoreF === 'high')      matchScore = trScore >= 7;
       else if (scoreF === 'med')  matchScore = trScore >= 4 && trScore < 7;

@@ -82,7 +82,7 @@
 <div class="card">
   <div class="card-head"><div class="card-title">Steps ({{ steps|length }})</div></div>
   <div style="padding:8px 14px;border-bottom:1px solid var(--stroke);display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-    <select id="filterMethod" class="table-filter" style="width:110px;flex:none;" onchange="applyStepFilters()" aria-label="Filter method">
+    <select id="filterMethod" class="table-filter" style="width:120px;flex:none;" onchange="applyStepFilters()" aria-label="Filter method">
       <option value="">All methods</option>
       <option>GET</option>
       <option>POST</option>
@@ -91,6 +91,8 @@
       <option>PATCH</option>
       <option>HEAD</option>
       <option>OPTIONS</option>
+      <option>CONNECT</option>
+      <option>TRACE</option>
     </select>
     <select id="filterStage" class="table-filter" style="width:100px;flex:none;" onchange="applyStepFilters()" aria-label="Filter stage">
       <option value="">All stages</option>
@@ -99,6 +101,10 @@
       <option value="2">S2</option>
       <option value="3">S3</option>
       <option value="4">S4</option>
+      <option value="5">S5</option>
+      <option value="6">S6</option>
+      <option value="7">S7</option>
+      <option value="8">S8</option>
     </select>
     <input type="text" id="filterPath" class="table-filter" style="width:160px;flex:none;" placeholder="Filter path…" oninput="applyStepFilters()" aria-label="Filter path">
     <span style="flex:1;min-width:4px;"></span>
