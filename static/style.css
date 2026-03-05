@@ -35,6 +35,7 @@ body{
   background:rgba(255,255,255,.04);
   color:var(--text);
   transition:background .2s ease, box-shadow .2s ease, transform .15s ease;
+  white-space:nowrap;
 }
 .btn:hover{
   background:rgba(255,255,255,.08);

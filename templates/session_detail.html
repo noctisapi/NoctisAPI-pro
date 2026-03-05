@@ -81,18 +81,39 @@
 
 <div class="card">
   <div class="card-head"><div class="card-title">Steps ({{ steps|length }})</div></div>
+  <div style="padding:8px 14px;border-bottom:1px solid var(--stroke);display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+    <select id="filterMethod" class="table-filter" style="width:110px;flex:none;" onchange="applyStepFilters()" aria-label="Filter method">
+      <option value="">All methods</option>
+      <option>GET</option>
+      <option>POST</option>
+      <option>PUT</option>
+      <option>DELETE</option>
+      <option>PATCH</option>
+      <option>HEAD</option>
+      <option>OPTIONS</option>
+    </select>
+    <select id="filterStage" class="table-filter" style="width:100px;flex:none;" onchange="applyStepFilters()" aria-label="Filter stage">
+      <option value="">All stages</option>
+      <option value="0">S0</option>
+      <option value="1">S1</option>
+      <option value="2">S2</option>
+      <option value="3">S3</option>
+      <option value="4">S4</option>
+    </select>
+    <input type="text" id="filterPath" class="table-filter" style="width:160px;flex:none;" placeholder="Filter path…" oninput="applyStepFilters()" aria-label="Filter path">
+    <span style="flex:1;min-width:4px;"></span>
+    <input type="checkbox" id="selectAllSteps" aria-label="Select all steps">
+    <button class="btn btn-ghost btn-small" type="button" onclick="selectAllSteps(true)">Select all</button>
+    <button class="btn btn-ghost btn-small" type="button" onclick="selectAllSteps(false)">Clear</button>
+    <button class="btn btn-primary btn-small{% if not cases_enabled %} is-disabled{% endif %}" type="button" onclick="addSelectedSteps()" {% if not cases_enabled %}disabled title="PRO feature"{% endif %}>Add to case</button>
+    <button class="btn btn-outline btn-small{% if not cases_enabled %} is-disabled{% endif %}" type="button" onclick="addSelectedStepsToLastCase()" {% if not cases_enabled %}disabled title="PRO feature"{% endif %}>Add to last case</button>
+    <span id="selectedCount" class="muted tiny-text"></span>
+  </div>
   <div class="table-wrap">
-    <div class="table-toolbar">
-      <button class="btn btn-ghost btn-small" type="button" onclick="selectAllSteps(true)">Select all</button>
-      <button class="btn btn-ghost btn-small" type="button" onclick="selectAllSteps(false)">Clear</button>
-      <button class="btn btn-primary btn-small{% if not cases_enabled %} is-disabled{% endif %}" type="button" onclick="addSelectedSteps()" {% if not cases_enabled %}disabled title="PRO feature"{% endif %}>Add selected to case</button>
-      <button class="btn btn-outline btn-small{% if not cases_enabled %} is-disabled{% endif %}" type="button" onclick="addSelectedStepsToLastCase()" {% if not cases_enabled %}disabled title="PRO feature"{% endif %}>Add selected to last case</button>
-      <span id="selectedCount" class="muted tiny-text"></span>
-    </div>
     <table class="table table-sortable" id="stepsTable">
       <thead>
         <tr class="header">
-          <th data-type="text"><input type="checkbox" id="selectAllSteps" aria-label="Select all steps"></th>
+          <th data-type="text" style="width:32px;"></th>
           <th data-type="number">#</th>
           <th data-type="date">Timestamp</th>
           <th data-type="text">Method</th>
@@ -100,36 +121,6 @@
           <th data-type="number">Stage</th>
           <th data-type="number">Status</th>
           <th data-type="text">Evidence</th>
-        </tr>
-        <tr class="table-filters">
-          <th></th>
-          <th><input class="table-filter" data-col="1" placeholder="#" aria-label="Filter #"></th>
-          <th><input class="table-filter" data-col="2" placeholder="Timestamp" aria-label="Filter timestamp"></th>
-          <th>
-            <select class="table-filter" data-col="3" aria-label="Filter method">
-              <option value="">All</option>
-              <option>GET</option>
-              <option>POST</option>
-              <option>PUT</option>
-              <option>DELETE</option>
-              <option>PATCH</option>
-              <option>HEAD</option>
-              <option>OPTIONS</option>
-            </select>
-          </th>
-          <th><input class="table-filter" data-col="4" placeholder="Path" aria-label="Filter path"></th>
-          <th>
-            <select class="table-filter" data-col="5" aria-label="Filter stage">
-              <option value="">All</option>
-              <option>S0</option>
-              <option>S1</option>
-              <option>S2</option>
-              <option>S3</option>
-              <option>S4</option>
-            </select>
-          </th>
-          <th><input class="table-filter" data-col="6" placeholder="Status" aria-label="Filter status"></th>
-          <th></th>
         </tr>
       </thead>
       <tbody>
@@ -298,8 +289,23 @@
     if(added > 0) showSessionToast(`Added ${added} steps to case #${caseId}`, 'success');
   }
 
-  if(window.TableFilterSort){
-    window.TableFilterSort.initTable(document.getElementById('stepsTable'));
+  function applyStepFilters() {
+    const method = document.getElementById('filterMethod')?.value || '';
+    const stage  = document.getElementById('filterStage')?.value ?? '';
+    const path   = (document.getElementById('filterPath')?.value || '').toLowerCase();
+    document.querySelectorAll('#stepsTable tbody tr').forEach(tr => {
+      const cells = tr.querySelectorAll('td');
+      if (cells.length < 7) return;
+      const rowMethod = cells[3].textContent.trim();
+      const rowPath   = cells[4].getAttribute('title') || cells[4].textContent.trim();
+      const stageTag  = cells[5].querySelector('.tag');
+      const rowStage  = stageTag ? stageTag.textContent.trim() : '';
+      const matchMethod = !method || rowMethod === method;
+      const matchPath   = !path   || rowPath.toLowerCase().includes(path);
+      const matchStage  = !stage  || rowStage === ('S' + stage);
+      tr.style.display = matchMethod && matchPath && matchStage ? '' : 'none';
+    });
+    updateSelectedCount();
   }
 
   const caseSelect = document.getElementById('caseSelect');
