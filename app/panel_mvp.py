@@ -309,6 +309,18 @@ def _auto_recompute_campaigns_worker() -> None:
 
 @app.on_event("startup")
 def _start_background_tasks():
+    import os as _os
+    from app.system_settings import load_settings_overrides, ensure_settings_table
+    _conn = db()
+    try:
+        ensure_settings_table(_conn)
+        _overrides = load_settings_overrides(_conn)
+        for _k, _v in _overrides.items():
+            _os.environ[_k] = _v
+        if _overrides:
+            _logger.info("startup: applied %d config overrides from DB", len(_overrides))
+    finally:
+        _conn.close()
     from app.egress import check_egress_hosts
     check_egress_hosts()
     from app.diagnostics import run_diagnostics
@@ -3395,3 +3407,97 @@ def actor(actor_id: str, request: Request):
         )
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Environment page
+# ---------------------------------------------------------------------------
+
+
+def _mask_proxy_password(value: str) -> str:
+    """Hide password in proxy URLs like http://user:pass@host:port."""
+    import re
+    return re.sub(r"(https?://[^:@/]+:)[^@/]+(@)", r"\1•••\2", value)
+
+
+def _get_env_config(db_overrides: dict[str, str]) -> list[dict]:
+    """Build the config view for all editable keys."""
+    from app.system_settings import KEY_GROUPS, KEY_LABELS
+    groups = []
+    for group_name, keys in KEY_GROUPS:
+        rows = []
+        for key in keys:
+            db_val = db_overrides.get(key, "")
+            env_val = os.environ.get(key, "")
+            if db_val:
+                effective = db_val
+                source = "override"
+            elif env_val:
+                effective = env_val
+                source = "env"
+            else:
+                effective = ""
+                source = "default"
+            # Mask passwords in proxy-like URLs
+            display = _mask_proxy_password(effective) if effective else ""
+            rows.append({
+                "key": key,
+                "label": KEY_LABELS.get(key, key),
+                "effective": display,
+                "source": source,
+                "db_value": db_val,
+                "env_value": env_val,
+            })
+        groups.append({"name": group_name, "rows": rows})
+    return groups
+
+
+@app.get("/dashboard/environment", response_class=HTMLResponse)
+async def environment_page(request: Request):
+    from app.system_settings import load_all_settings, ensure_settings_table
+    conn = db()
+    try:
+        ensure_settings_table(conn)
+        db_overrides = load_all_settings(conn)
+    finally:
+        conn.close()
+    config_groups = _get_env_config(db_overrides)
+    return templates.TemplateResponse(
+        "environment.html",
+        {
+            "request": request,
+            "config_groups": config_groups,
+            **_license_context(),
+        },
+    )
+
+
+@app.post("/dashboard/environment/settings")
+async def environment_save_setting(payload: dict = Body(...)):
+    from app.system_settings import save_setting, ensure_settings_table, _EDITABLE_KEYS
+    key = str(payload.get("key") or "").strip()
+    value = str(payload.get("value") or "").strip()
+    if not key or key not in _EDITABLE_KEYS:
+        raise HTTPException(status_code=400, detail=f"Key {key!r} is not editable")
+    conn = db()
+    try:
+        ensure_settings_table(conn)
+        save_setting(conn, key, value)
+    finally:
+        conn.close()
+    return JSONResponse({"ok": True, "restart_required": True})
+
+
+@app.post("/dashboard/environment/diagnostics")
+async def environment_run_diagnostics():
+    from app.diagnostics import run_diagnostics
+    from app.egress import check_egress_hosts
+    diag_results = run_diagnostics()
+    egress_results = check_egress_hosts()
+    return JSONResponse({
+        "diagnostics": [
+            {"label": r.label, "status": r.status, "detail": r.detail}
+            for r in diag_results
+        ],
+        "egress": egress_results,
+    })

@@ -153,6 +153,18 @@ def _warn_if_default_seed() -> None:
 @app.on_event("startup")
 async def _startup_checks() -> None:
     _warn_if_default_seed()
+    import os as _os
+    from app.system_settings import load_settings_overrides, ensure_settings_table
+    _ss_conn = _db()
+    try:
+        ensure_settings_table(_ss_conn)
+        _overrides = load_settings_overrides(_ss_conn)
+        for _k, _v in _overrides.items():
+            _os.environ[_k] = _v
+        if _overrides:
+            _logger.info("startup: applied %d config overrides from DB", len(_overrides))
+    finally:
+        _ss_conn.close()
     from app.egress import check_egress_hosts
     check_egress_hosts()
     from app.diagnostics import run_diagnostics

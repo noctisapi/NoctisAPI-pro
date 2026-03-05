@@ -1,0 +1,328 @@
+{% extends "base.html" %}
+{% block content %}
+
+<style>
+  .env-section { margin-top: 24px; }
+  .env-section-title {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    margin-bottom: 10px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--stroke);
+  }
+  .env-row {
+    display: grid;
+    grid-template-columns: 220px 1fr auto auto;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+  }
+  .env-row:last-child { border-bottom: none; }
+  .env-label {
+    font-size: 0.82rem;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .env-label .key-name {
+    font-family: monospace;
+    font-size: 0.78rem;
+    color: var(--muted);
+    display: block;
+    font-weight: 400;
+  }
+  .env-input-wrap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .env-input-wrap input {
+    flex: 1;
+    padding: 6px 10px;
+    border: 1px solid var(--stroke);
+    background: var(--panel2);
+    color: var(--text);
+    border-radius: 4px;
+    font-family: monospace;
+    font-size: 0.85rem;
+    min-width: 0;
+  }
+  .env-input-wrap input:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+  .env-meta {
+    font-size: 0.75rem;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .badge {
+    display: inline-block;
+    padding: 2px 7px;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .badge-override { background: rgba(255,179,0,.18); color: #ffc940; }
+  .badge-env     { background: rgba(74,144,226,.18); color: #7ab8f5; }
+  .badge-default { background: rgba(255,255,255,.07); color: var(--muted); }
+  .diag-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+  }
+  .diag-row:last-child { border-bottom: none; }
+  .diag-tag {
+    font-family: monospace;
+    font-size: 0.82rem;
+    font-weight: 700;
+    padding: 3px 8px;
+    border-radius: 4px;
+    min-width: 64px;
+    text-align: center;
+  }
+  .diag-tag-ok    { background: rgba(26,191,107,.18); color: #7ee2b8; }
+  .diag-tag-warn  { background: rgba(255,179,0,.18);  color: #ffc940; }
+  .diag-tag-error { background: rgba(231,76,60,.18);  color: #f2a6a6; }
+  .diag-label { font-weight: 600; font-size: 0.88rem; }
+  .diag-detail { font-size: 0.82rem; color: var(--muted); font-family: monospace; }
+  .diag-placeholder { color: var(--muted); font-size: 0.85rem; padding: 12px 0; }
+  .egress-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 6px 0;
+  }
+  .egress-host { font-family: monospace; font-size: 0.85rem; }
+  .egress-check { font-size: 0.78rem; color: var(--muted); }
+  .restart-banner {
+    display: none;
+    align-items: center;
+    gap: 10px;
+    background: rgba(255,179,0,.1);
+    border: 1px solid rgba(255,179,0,.35);
+    border-radius: 6px;
+    padding: 10px 16px;
+    font-size: 0.88rem;
+    color: #ffc940;
+    margin-bottom: 18px;
+  }
+  .restart-banner.visible { display: flex; }
+  .save-feedback {
+    font-size: 0.78rem;
+    color: #7ee2b8;
+    display: none;
+  }
+  .save-feedback.visible { display: inline; }
+  .err-feedback {
+    font-size: 0.78rem;
+    color: #f2a6a6;
+    display: none;
+  }
+  .err-feedback.visible { display: inline; }
+</style>
+
+<div class="page-head">
+  <div>
+    <h1>Environment</h1>
+    <div class="sub">Proxy, TLS, egress, and logging configuration &middot; diagnostics</div>
+  </div>
+</div>
+
+<!-- Restart banner (shown after any save) -->
+<div class="restart-banner" id="restart-banner">
+  <span>&#9888;</span>
+  <span>Changes saved to DB. <strong>Restart the container</strong> for them to take effect.</span>
+</div>
+
+<!-- ── Diagnostics card ────────────────────────────────────────────────── -->
+<div class="card">
+  <div class="card-head">
+    <div class="card-title">Live Diagnostics</div>
+    <button class="btn" id="run-diag-btn" onclick="runDiagnostics()">Run Diagnostics</button>
+  </div>
+
+  <div id="diag-results">
+    <div class="diag-placeholder">Click "Run Diagnostics" to check DNS, HTTPS, proxy, and TLS trust store.</div>
+  </div>
+
+  <div id="egress-results" style="margin-top:14px;display:none;">
+    <div class="env-section-title">Egress Hosts</div>
+    <div id="egress-list"></div>
+  </div>
+</div>
+
+<!-- ── Configuration card ─────────────────────────────────────────────── -->
+<div class="card" style="margin-top:20px;">
+  <div class="card-head">
+    <div class="card-title">Configuration</div>
+    <div class="muted" style="font-size:0.82rem;">Changes require container restart to take effect</div>
+  </div>
+
+  {% for group in config_groups %}
+  <div class="env-section">
+    <div class="env-section-title">{{ group.name }}</div>
+    {% for row in group.rows %}
+    <div class="env-row" data-key="{{ row.key }}">
+      <div class="env-label">
+        {{ row.label }}
+        <span class="key-name">{{ row.key }}</span>
+      </div>
+      <div class="env-input-wrap">
+        <input
+          type="text"
+          id="input-{{ row.key }}"
+          value="{{ row.db_value }}"
+          placeholder="{{ row.effective if row.effective else 'not set' }}"
+          autocomplete="off"
+          spellcheck="false"
+        />
+      </div>
+      <div class="env-meta">
+        <span class="badge badge-{{ row.source }}">{{ row.source }}</span>
+        {% if row.effective %}
+          <span style="margin-left:4px;font-family:monospace;">{{ row.effective }}</span>
+        {% endif %}
+        <span class="save-feedback" id="ok-{{ row.key }}">saved</span>
+        <span class="err-feedback" id="err-{{ row.key }}"></span>
+      </div>
+      <div style="display:flex;gap:6px;">
+        <button class="btn btn-sm" onclick="saveSetting('{{ row.key }}')">Save</button>
+        <button class="btn btn-sm btn-ghost" onclick="clearSetting('{{ row.key }}')">Clear</button>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endfor %}
+</div>
+
+<script>
+function runDiagnostics() {
+  const btn = document.getElementById('run-diag-btn');
+  btn.disabled = true;
+  btn.textContent = 'Running…';
+  const diagEl = document.getElementById('diag-results');
+  diagEl.innerHTML = '<div class="diag-placeholder">Running checks…</div>';
+
+  fetch('/dashboard/environment/diagnostics', { method: 'POST' })
+    .then(r => r.json())
+    .then(data => {
+      renderDiagnostics(data.diagnostics || []);
+      renderEgress(data.egress || []);
+    })
+    .catch(err => {
+      diagEl.innerHTML = '<div class="diag-placeholder" style="color:#f2a6a6">Request failed: ' + err + '</div>';
+    })
+    .finally(() => {
+      btn.disabled = false;
+      btn.textContent = 'Run Diagnostics';
+    });
+}
+
+function renderDiagnostics(results) {
+  const el = document.getElementById('diag-results');
+  if (!results.length) {
+    el.innerHTML = '<div class="diag-placeholder">No results.</div>';
+    return;
+  }
+  el.innerHTML = results.map(r => {
+    const cls = 'diag-tag-' + r.status;
+    const tag = r.status === 'ok' ? '[OK]' : r.status === 'warn' ? '[WARN]' : '[ERROR]';
+    const detail = r.detail ? `<span class="diag-detail"> — ${escHtml(r.detail)}</span>` : '';
+    return `<div class="diag-row">
+      <span class="diag-tag ${cls}">${tag}</span>
+      <span class="diag-label">${escHtml(r.label)}</span>
+      ${detail}
+    </div>`;
+  }).join('');
+}
+
+function renderEgress(results) {
+  const wrap = document.getElementById('egress-results');
+  const list = document.getElementById('egress-list');
+  if (!results.length) { wrap.style.display = 'none'; return; }
+  wrap.style.display = 'block';
+  list.innerHTML = results.map(r => {
+    const dns = r.dns === 'ok'
+      ? '<span style="color:#7ee2b8">dns=[OK]</span>'
+      : `<span style="color:#f2a6a6">dns=[ERROR]</span>`;
+    let tcp = '';
+    if (r.port !== null && r.port !== undefined) {
+      tcp = r.tcp === 'ok'
+        ? ' <span style="color:#7ee2b8">tcp=[OK]</span>'
+        : ` <span style="color:#f2a6a6">tcp=[ERROR]</span>`;
+    }
+    const portStr = (r.port !== null && r.port !== undefined) ? ':' + r.port : '';
+    return `<div class="egress-row">
+      <span class="egress-host">${escHtml(r.host)}${portStr}</span>
+      <span class="egress-check">${dns}${tcp}</span>
+      ${r.error ? '<span class="diag-detail" style="color:#f2a6a6">' + escHtml(r.error) + '</span>' : ''}
+    </div>`;
+  }).join('');
+}
+
+function saveSetting(key) {
+  const input = document.getElementById('input-' + key);
+  const value = input.value.trim();
+  _postSetting(key, value);
+}
+
+function clearSetting(key) {
+  const input = document.getElementById('input-' + key);
+  input.value = '';
+  _postSetting(key, '');
+}
+
+function _postSetting(key, value) {
+  const okEl  = document.getElementById('ok-'  + key);
+  const errEl = document.getElementById('err-' + key);
+  okEl.classList.remove('visible');
+  errEl.classList.remove('visible');
+
+  fetch('/dashboard/environment/settings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key, value }),
+  })
+    .then(r => r.json())
+    .then(data => {
+      if (data.ok) {
+        okEl.classList.add('visible');
+        setTimeout(() => okEl.classList.remove('visible'), 3000);
+        document.getElementById('restart-banner').classList.add('visible');
+        // Update badge in the row
+        const row = document.querySelector('.env-row[data-key="' + key + '"]');
+        if (row) {
+          const badge = row.querySelector('.badge');
+          if (badge) {
+            badge.className = 'badge badge-' + (value ? 'override' : 'env');
+            badge.textContent = value ? 'override' : 'env';
+          }
+        }
+      } else {
+        errEl.textContent = data.detail || 'error';
+        errEl.classList.add('visible');
+      }
+    })
+    .catch(err => {
+      errEl.textContent = String(err);
+      errEl.classList.add('visible');
+    });
+}
+
+function escHtml(s) {
+  return String(s || '')
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+</script>
+
+{% endblock %}
