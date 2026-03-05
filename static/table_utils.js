@@ -14,7 +14,8 @@
     return thead.querySelector('tr.header') || thead.querySelector('tr');
   }
 
-  function ensureFilterRow(thead, headerCells){
+  function ensureFilterRow(thead, headerCells, noFilters){
+    if(noFilters) return null;
     let filterRow = thead.querySelector('tr.table-filters');
     if(filterRow) return filterRow;
     filterRow = document.createElement('tr');
@@ -54,8 +55,9 @@
     headerRow.classList.add('header');
     const headerCells = Array.from(headerRow.querySelectorAll('th'));
     if(!headerCells.length) return null;
-    const filterRow = ensureFilterRow(thead, headerCells);
-    const filterInputs = Array.from(filterRow.querySelectorAll('.table-filter'));
+    const noFilters = table.hasAttribute('data-no-filters');
+    const filterRow = ensureFilterRow(thead, headerCells, noFilters);
+    const filterInputs = filterRow ? Array.from(filterRow.querySelectorAll('.table-filter')) : [];
     const rows = Array.from(tbody.querySelectorAll('tr'));
     const rowCache = new Map();
 
