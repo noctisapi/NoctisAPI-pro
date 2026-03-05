@@ -3,14 +3,18 @@
 
 <style>
   /* ── Layout ── */
-  .env-section { margin-top: 28px; }
+  .env-section {
+    margin-top: 24px;
+    padding: 0 24px;
+  }
+  .env-section-last { padding-bottom: 20px; }
   .env-section-title {
     font-size: 0.72rem;
     text-transform: uppercase;
     letter-spacing: 0.07em;
     color: var(--muted);
     margin-bottom: 4px;
-    padding: 0 20px 8px;
+    padding-bottom: 8px;
     border-bottom: 1px solid var(--stroke);
   }
 
@@ -19,7 +23,7 @@
     grid-template-columns: 200px 1fr 110px;
     align-items: start;
     gap: 0 20px;
-    padding: 14px 20px;
+    padding: 14px 0;
     border-bottom: 1px solid rgba(255,255,255,0.04);
   }
   .env-row:last-child { border-bottom: none; }
@@ -185,11 +189,11 @@
     <button class="btn" id="run-diag-btn" onclick="runDiagnostics()">Run Diagnostics</button>
   </div>
 
-  <div id="diag-results">
+  <div id="diag-results" style="padding:0 24px;">
     <div class="diag-placeholder">Click "Run Diagnostics" to check DNS, HTTPS, proxy, and TLS trust store.</div>
   </div>
 
-  <div id="egress-results" style="margin-top:16px;display:none;">
+  <div id="egress-results" style="padding:0 24px;margin-top:16px;display:none;">
     <div class="env-section-title" style="margin-top:0;">Egress Hosts</div>
     <div id="egress-list"></div>
   </div>
@@ -203,7 +207,7 @@
   </div>
 
   {% for group in config_groups %}
-  <div class="env-section">
+  <div class="env-section {% if loop.last %}env-section-last{% endif %}">
     <div class="env-section-title">{{ group.name }}</div>
     {% for row in group.rows %}
     <div class="env-row" data-key="{{ row.key }}">
