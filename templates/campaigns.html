@@ -78,6 +78,34 @@
     padding: 2px 9px;
     font-size: 0.8rem;
   }
+
+  /* Filter bar */
+  .filter-card {
+    background: linear-gradient(180deg, var(--panel2), var(--panel));
+    border: 1px solid var(--stroke);
+    border-radius: 16px;
+    padding: 14px 20px;
+    margin-bottom: 14px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: flex-end;
+  }
+  .filter-field { display: flex; flex-direction: column; gap: 4px; }
+  .filter-field label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+  .filter-field.flex-1 { flex: 1; min-width: 180px; }
+
+  /* Job history */
+  .job-history-table td { vertical-align: middle; font-size: 0.82rem; }
+  .hist-dot {
+    display: inline-block;
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    margin-right: 5px;
+    vertical-align: middle;
+  }
+  .hist-completed { background: #7ee2b8; }
+  .hist-failed    { background: #f2a6a6; }
 </style>
 
 <div class="page-head">
@@ -130,16 +158,45 @@
   <div class="job-metrics" id="jobMetrics"></div>
 </div>
 
+<!-- Filter bar -->
+{% if campaigns %}
+<div class="filter-card">
+  <div class="filter-field flex-1">
+    <label>Search label</label>
+    <input class="input" type="text" id="campSearch" placeholder="Filter by label…" oninput="filterCampaigns()" autocomplete="off">
+  </div>
+  <div class="filter-field">
+    <label>Score</label>
+    <select class="input" id="campScore" onchange="filterCampaigns()" style="width:140px;">
+      <option value="">All scores</option>
+      <option value="high">High (&ge;70)</option>
+      <option value="med">Medium (&ge;40)</option>
+      <option value="low">Low (&lt;40)</option>
+    </select>
+  </div>
+  <div class="filter-field">
+    <label>Min members</label>
+    <select class="input" id="campMinMembers" onchange="filterCampaigns()" style="width:130px;">
+      <option value="">Any</option>
+      <option value="3">3+</option>
+      <option value="5">5+</option>
+      <option value="10">10+</option>
+    </select>
+  </div>
+  <button class="btn btn-ghost btn-small" type="button" onclick="clearCampFilter()">Clear</button>
+</div>
+{% endif %}
+
 <!-- Campaigns table -->
-<div class="card" style="margin-top:16px;">
+<div class="card" style="margin-top:0;">
   <div class="card-head">
     <div class="card-title">Campaigns</div>
-    <div class="card-sub">{{ campaigns|length }} group{{ 's' if campaigns|length != 1 else '' }}</div>
+    <div class="card-sub" id="campCount">{{ campaigns|length }} group{{ 's' if campaigns|length != 1 else '' }}</div>
   </div>
 
   {% if campaigns %}
   <div class="table-wrap">
-    <table class="table table-sortable">
+    <table class="table table-sortable" id="campTable" data-no-filters>
       <thead>
         <tr>
           <th data-type="text">ID</th>
@@ -151,18 +208,18 @@
           <th style="width:90px;"></th>
         </tr>
       </thead>
-      <tbody>
+      <tbody id="campBody">
         {% for c in campaigns %}
         {% set score = c.score_det or 0 %}
-        <tr>
+        <tr data-label="{{ (c.label or '')|lower }}" data-score="{{ score }}" data-members="{{ c.member_count or 0 }}">
           <td class="mono" style="font-size:0.82rem;">
             <a class="link" href="/dashboard/campaigns/{{ c.campaign_id }}">{{ c.campaign_id }}</a>
           </td>
           <td style="font-weight:500;">{{ c.label or '—' }}</td>
           <td>
-            {% if score >= 7 %}
+            {% if score >= 70 %}
             <span class="score-pill score-high">{{ score }}</span>
-            {% elif score >= 4 %}
+            {% elif score >= 40 %}
             <span class="score-pill score-med">{{ score }}</span>
             {% else %}
             <span class="score-pill score-low">{{ score }}</span>
@@ -188,6 +245,49 @@
   </div>
   {% endif %}
 </div>
+
+<!-- Job History -->
+{% if job_history %}
+<div class="card" style="margin-top:14px;">
+  <div class="card-head">
+    <div class="card-title">Job History</div>
+    <div class="card-sub">Last {{ job_history|length }} completed run{{ 's' if job_history|length != 1 else '' }}</div>
+  </div>
+  <div class="table-wrap">
+    <table class="table job-history-table" data-no-filters>
+      <thead>
+        <tr>
+          <th style="width:120px;">Status</th>
+          <th style="width:175px;">Finished</th>
+          <th style="width:90px;">Duration</th>
+          <th style="width:80px;">Actors</th>
+          <th style="width:90px;">Campaigns</th>
+          <th style="width:80px;">Links</th>
+          <th style="width:70px;">Merges</th>
+          <th style="width:80px;">Cached</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for j in job_history %}
+        <tr>
+          <td>
+            <span class="hist-dot hist-{{ j.status }}"></span>
+            {{ j.status }}
+          </td>
+          <td class="mono muted">{{ j.finished_at or '—' }}</td>
+          <td class="mono">{{ j.duration_ms or '—' }}{% if j.duration_ms %} ms{% endif %}</td>
+          <td class="mono">{{ j.actors_considered or '—' }}</td>
+          <td class="mono">{{ j.params.campaigns_count if j.params.campaigns_count is defined else '—' }}</td>
+          <td class="mono">{{ j.links_created or '—' }}</td>
+          <td class="mono">{{ j.params.merges_done if j.params.merges_done is defined else '—' }}</td>
+          <td class="mono">{{ j.features_cached or '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
 
 <script>
   const jobCard     = document.getElementById('jobCard');
@@ -222,10 +322,12 @@
     else if (job.status === 'failed')   jobTime.textContent = '';
 
     const metrics = [];
-    if (job.actors_considered !== undefined) metrics.push({ label: 'Actors', val: job.actors_considered });
-    if (job.features_built    !== undefined) metrics.push({ label: 'Features built', val: job.features_built });
-    if (job.features_cached   !== undefined) metrics.push({ label: 'From cache', val: job.features_cached });
-    if (job.links_created     !== undefined) metrics.push({ label: 'Links created', val: job.links_created });
+    if (job.actors_considered  !== undefined) metrics.push({ label: 'Actors', val: job.actors_considered });
+    if (job.campaigns_count    !== undefined) metrics.push({ label: 'Campaigns', val: job.campaigns_count });
+    if (job.merges_done        !== undefined && job.merges_done > 0) metrics.push({ label: 'Merges', val: job.merges_done });
+    if (job.features_built     !== undefined) metrics.push({ label: 'Features built', val: job.features_built });
+    if (job.features_cached    !== undefined) metrics.push({ label: 'From cache', val: job.features_cached });
+    if (job.links_created      !== undefined) metrics.push({ label: 'Links created', val: job.links_created });
     if (job.status === 'failed' && job.error) metrics.push({ label: 'Error', val: job.error });
 
     jobMetrics.innerHTML = metrics.map(m =>
@@ -299,6 +401,44 @@
 
   function escHtml(s) {
     return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  /* ── Campaign filter ── */
+  function filterCampaigns() {
+    const q       = (document.getElementById('campSearch')?.value || '').toLowerCase();
+    const scoreF  = document.getElementById('campScore')?.value || '';
+    const minM    = parseInt(document.getElementById('campMinMembers')?.value || '0', 10);
+    let visible = 0;
+    document.querySelectorAll('#campBody tr').forEach(tr => {
+      const label   = tr.dataset.label || '';
+      const score   = parseFloat(tr.dataset.score || '0');
+      const members = parseInt(tr.dataset.members || '0', 10);
+      const matchText  = !q || label.includes(q);
+      const matchScore = !scoreF ||
+        (scoreF === 'high' && score >= 70) ||
+        (scoreF === 'med'  && score >= 40 && score < 70) ||
+        (scoreF === 'low'  && score < 40);
+      const matchMembers = !minM || members >= minM;
+      const show = matchText && matchScore && matchMembers;
+      tr.style.display = show ? '' : 'none';
+      if (show) visible++;
+    });
+    const total = document.querySelectorAll('#campBody tr').length;
+    const countEl = document.getElementById('campCount');
+    if (countEl) {
+      const anyFilter = q || scoreF || minM;
+      countEl.textContent = anyFilter ? `${visible} / ${total} groups` : `${total} group${total !== 1 ? 's' : ''}`;
+    }
+  }
+
+  function clearCampFilter() {
+    const s = document.getElementById('campSearch');
+    const sc = document.getElementById('campScore');
+    const mm = document.getElementById('campMinMembers');
+    if (s) s.value = '';
+    if (sc) sc.value = '';
+    if (mm) mm.value = '';
+    filterCampaigns();
   }
 
   fetchJobStatus();

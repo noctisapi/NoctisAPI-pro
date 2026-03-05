@@ -192,7 +192,20 @@
             <th><input class="table-filter" data-col="0" placeholder="Filter timestamp" aria-label="Filter timestamp"></th>
             <th><input class="table-filter" data-col="1" placeholder="Filter icon" aria-label="Filter icon"></th>
             <th><input class="table-filter" data-col="2" placeholder="Filter kind" aria-label="Filter kind"></th>
-            <th><input class="table-filter" data-col="3" placeholder="Filter method" aria-label="Filter method"></th>
+            <th>
+              <select class="table-filter" data-col="3" aria-label="Filter method">
+                <option value="">All</option>
+                <option>GET</option>
+                <option>POST</option>
+                <option>PUT</option>
+                <option>DELETE</option>
+                <option>PATCH</option>
+                <option>HEAD</option>
+                <option>OPTIONS</option>
+                <option>CONNECT</option>
+                <option>TRACE</option>
+              </select>
+            </th>
             <th><input class="table-filter" data-col="4" placeholder="Filter path" aria-label="Filter path"></th>
             <th><input class="table-filter" data-col="5" placeholder="Filter IP" aria-label="Filter IP"></th>
             <th><input class="table-filter" data-col="6" placeholder="Filter token" aria-label="Filter token"></th>

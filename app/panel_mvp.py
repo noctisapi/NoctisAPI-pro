@@ -1,4 +1,5 @@
 # panel_mvp.py (sin auth, solo protegido por SSH tunnel)
+import hashlib
 import logging
 import os
 import time
@@ -615,11 +616,34 @@ def _timing_bucket(deltas):
     if not deltas:
         return "unknown"
     med = median(deltas)
-    if med < 1:
+    if med < 0.5:
         return "burst"
-    if med < 5:
+    if med < 2:
+        return "fast"
+    if med < 10:
         return "steady"
-    return "slow"
+    if med < 60:
+        return "slow"
+    return "very_slow"
+
+
+_FEATURE_WEIGHTS: dict[str, float] = {"path": 1.0, "stage": 1.5, "time": 0.8, "err": 1.2}
+
+
+def _weighted_jaccard(fp_a: set, fp_b: set) -> float:
+    """Weighted Jaccard similarity: stage features count 1.5×, time 0.8×, err 1.2×, path 1.0×."""
+    all_features = fp_a | fp_b
+    if not all_features:
+        return 0.0
+    inter_sum = 0.0
+    union_sum = 0.0
+    for f in all_features:
+        prefix = f.split("::", 1)[0]
+        w = _FEATURE_WEIGHTS.get(prefix, 1.0)
+        union_sum += w
+        if f in fp_a and f in fp_b:
+            inter_sum += w
+    return inter_sum / union_sum if union_sum > 0 else 0.0
 
 
 def _stage_flow(stages):
@@ -935,7 +959,12 @@ def _serialize_campaign_job(row: Optional[sqlite3.Row]) -> dict:
         return {}
     job = dict(row)
     try:
-        job["params"] = json.loads(job.get("params_json") or "{}")
+        params = json.loads(job.get("params_json") or "{}")
+        job["params"] = params
+        if "campaigns_count" in params:
+            job["campaigns_count"] = params["campaigns_count"]
+        if "merges_done" in params:
+            job["merges_done"] = params["merges_done"]
     except Exception:
         job["params"] = {}
     return job
@@ -947,13 +976,7 @@ def _compute_campaigns(conn: sqlite3.Connection, config: dict) -> dict:
     features_built = 0
     links_created = 0
     cur = conn.cursor()
-    cur.execute("DELETE FROM campaign_actor_links")
-    cur.execute("DELETE FROM campaigns")
-    # Null out case references so no case points to a now-deleted campaign.
-    try:
-        cur.execute("UPDATE cases SET campaign_id=NULL WHERE campaign_id IS NOT NULL")
-    except Exception:
-        pass  # cases table may not exist in very old DBs
+    # NOTE: DELETEs happen at the end (atomic swap) — not here.
 
     cache_enabled = True
     # actor_fingerprints may not exist on older DBs
@@ -1122,7 +1145,8 @@ def _compute_campaigns(conn: sqlite3.Connection, config: dict) -> dict:
                 (actor, json.dumps(cache_payload, ensure_ascii=False), _utc_now_iso()),
             )
 
-    campaigns_created = []
+    # First-pass greedy grouping using weighted Jaccard
+    campaign_groups: list[dict] = []
     processed = set()
     for actor in actors:
         if actor in processed:
@@ -1143,10 +1167,7 @@ def _compute_campaigns(conn: sqlite3.Connection, config: dict) -> dict:
             inter_features = fp & other_fp
             if len(inter_features) < config["min_intersection"]:
                 continue
-            union = len(fp | other_fp)
-            if union == 0:
-                continue
-            score = len(inter_features) / union
+            score = _weighted_jaccard(fp, other_fp)
             if score >= config["min_jaccard"]:
                 group.append(other)
                 link_scores[other] = round(score, 3)
@@ -1154,93 +1175,143 @@ def _compute_campaigns(conn: sqlite3.Connection, config: dict) -> dict:
         for g in group:
             processed.add(g)
         if len(group) >= 2:
-            import secrets
+            campaign_groups.append({
+                "seed": actor,
+                "members": group,
+                "link_scores": link_scores,
+                "overlap_details": overlap_details,
+            })
 
-            cid = secrets.token_hex(8)
-            now = _utc_now_iso()
-            seed_meta = actor_meta.get(actor, {})
-            rep_session_id = seed_meta.get("representative_session_id")
-            label_stage = seed_meta.get("stage_flow") or "replay flow"
-            label = f"{len(group)} actors - {label_stage}"
-            summary = {
-                "seed_actor": actor,
-                "group_size": len(group),
-                "min_jaccard": config["min_jaccard"],
-                "min_intersection": config["min_intersection"],
-                "seed_paths_sample": seed_meta.get("top_paths", []),
-                "dominant_paths": seed_meta.get("top_paths", []),
-                "stage_flow": seed_meta.get("stage_flow"),
-                "stage_counts": seed_meta.get("stage_counts", []),
-                "timing": seed_meta.get("timing"),
-                "ua": seed_meta.get("ua"),
-                "representative_session_id": rep_session_id,
-                "params": config,
+    # Second merge pass: merge campaign pairs whose seed features are similar
+    merges_done = 0
+    changed = True
+    while changed:
+        changed = False
+        for i in range(len(campaign_groups)):
+            if changed:
+                break
+            for j in range(i + 1, len(campaign_groups)):
+                cA = campaign_groups[i]
+                cB = campaign_groups[j]
+                fp_a = actor_features.get(cA["seed"], set())
+                fp_b = actor_features.get(cB["seed"], set())
+                inter = fp_a & fp_b
+                if len(inter) < config["min_intersection"]:
+                    continue
+                if _weighted_jaccard(fp_a, fp_b) >= config["min_jaccard"]:
+                    for m in cB["members"]:
+                        if m not in cA["members"]:
+                            cA["members"].append(m)
+                            fp_m = actor_features.get(m, set())
+                            cA["link_scores"][m] = round(_weighted_jaccard(fp_a, fp_m), 3)
+                            cA["overlap_details"][m] = fp_a & fp_m
+                    campaign_groups.pop(j)
+                    merges_done += 1
+                    changed = True
+                    break
+
+    # Atomic swap: delete old campaigns then insert new ones in a single transaction
+    cur.execute("DELETE FROM campaign_actor_links")
+    cur.execute("DELETE FROM campaigns")
+    try:
+        cur.execute("UPDATE cases SET campaign_id=NULL WHERE campaign_id IS NOT NULL")
+    except Exception:
+        pass  # cases table may not exist in very old DBs
+
+    config_key = f"j{config['min_jaccard']:.3f}i{config['min_intersection']}"
+    campaigns_created = []
+    for grp in campaign_groups:
+        actor = grp["seed"]
+        group = grp["members"]
+        link_scores = grp["link_scores"]
+        overlap_details = grp["overlap_details"]
+        # Deterministic campaign ID: stable across recomputes with same members + config
+        members_key = "|".join(sorted(group))
+        cid = hashlib.sha256(f"{members_key}#{config_key}".encode()).hexdigest()[:16]
+        now = _utc_now_iso()
+        seed_meta = actor_meta.get(actor, {})
+        rep_session_id = seed_meta.get("representative_session_id")
+        label_stage = seed_meta.get("stage_flow") or "replay flow"
+        label = f"{len(group)} actors - {label_stage}"
+        summary = {
+            "seed_actor": actor,
+            "group_size": len(group),
+            "min_jaccard": config["min_jaccard"],
+            "min_intersection": config["min_intersection"],
+            "seed_paths_sample": seed_meta.get("top_paths", []),
+            "dominant_paths": seed_meta.get("top_paths", []),
+            "stage_flow": seed_meta.get("stage_flow"),
+            "stage_counts": seed_meta.get("stage_counts", []),
+            "timing": seed_meta.get("timing"),
+            "ua": seed_meta.get("ua"),
+            "representative_session_id": rep_session_id,
+            "params": config,
+        }
+        metrics = _campaign_metrics(cur, group)
+        summary.update(
+            {
+                "first_seen": metrics.get("first_seen"),
+                "last_seen": metrics.get("last_seen"),
+                "activity": metrics.get("activity"),
+                "timeline": metrics.get("timeline"),
+                "stage": metrics.get("stage"),
+                "techniques": metrics.get("techniques"),
+                "endpoints": metrics.get("endpoints"),
+                "score_det": metrics.get("score_det"),
             }
-            metrics = _campaign_metrics(cur, group)
-            summary.update(
-                {
-                    "first_seen": metrics.get("first_seen"),
-                    "last_seen": metrics.get("last_seen"),
-                    "activity": metrics.get("activity"),
-                    "timeline": metrics.get("timeline"),
-                    "stage": metrics.get("stage"),
-                    "techniques": metrics.get("techniques"),
-                    "endpoints": metrics.get("endpoints"),
-                    "score_det": metrics.get("score_det"),
-                }
-            )
+        )
+        cur.execute(
+            """
+            INSERT OR REPLACE INTO campaigns(
+                campaign_id, label, created_at, last_seen_at, score_avg, features_summary_json,
+                representative_session_id, first_seen_at, score_det, activity_json, timeline_json,
+                stage_flow_json, techniques_json, endpoints_json
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                cid,
+                label,
+                now,
+                metrics.get("last_seen") or now,
+                0.0,
+                json.dumps(summary, ensure_ascii=False),
+                rep_session_id,
+                metrics.get("first_seen"),
+                int(metrics.get("score_det") or 0),
+                json.dumps(metrics.get("activity") or {}, ensure_ascii=False),
+                json.dumps(metrics.get("timeline") or {}, ensure_ascii=False),
+                json.dumps(metrics.get("stage") or {}, ensure_ascii=False),
+                json.dumps(metrics.get("techniques") or [], ensure_ascii=False),
+                json.dumps(metrics.get("endpoints") or [], ensure_ascii=False),
+            ),
+        )
+        for a in group:
+            conf = link_scores.get(a, 0.0)
+            overlaps = overlap_details.get(a, set())
+            shared_paths = [f.split("path::", 1)[1] for f in overlaps if f.startswith("path::")][:5]
+            shared_stage = next((f.split("stage::", 1)[1] for f in overlaps if f.startswith("stage::")), "")
+            shared_timing = next((f.split("time::", 1)[1] for f in overlaps if f.startswith("time::")), "")
+            shared_errors = [f.split("err::", 1)[1] for f in overlaps if f.startswith("err::")][:5]
+            seed_ua = (actor_meta.get(actor, {}) or {}).get("ua") or ""
+            member_ua = (actor_meta.get(a, {}) or {}).get("ua") or ""
+            shared_ua = member_ua if seed_ua and member_ua and seed_ua == member_ua else ""
+            stage_counts = (actor_meta.get(a, {}) or {}).get("stage_counts", [])
+            reasons = {
+                "jaccard_vs_seed": conf,
+                "overlap_count": len(overlaps),
+                "shared_paths": shared_paths,
+                "shared_stage_flow": shared_stage,
+                "shared_timing": shared_timing,
+                "shared_errors": shared_errors,
+                "shared_ua": shared_ua,
+                "stage_counts": stage_counts,
+            }
             cur.execute(
-                """
-                INSERT OR REPLACE INTO campaigns(
-                    campaign_id, label, created_at, last_seen_at, score_avg, features_summary_json,
-                    representative_session_id, first_seen_at, score_det, activity_json, timeline_json,
-                    stage_flow_json, techniques_json, endpoints_json
-                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                """,
-                (
-                    cid,
-                    label,
-                    now,
-                    metrics.get("last_seen") or now,
-                    0.0,
-                    json.dumps(summary, ensure_ascii=False),
-                    rep_session_id,
-                    metrics.get("first_seen"),
-                    int(metrics.get("score_det") or 0),
-                    json.dumps(metrics.get("activity") or {}, ensure_ascii=False),
-                    json.dumps(metrics.get("timeline") or {}, ensure_ascii=False),
-                    json.dumps(metrics.get("stage") or {}, ensure_ascii=False),
-                    json.dumps(metrics.get("techniques") or [], ensure_ascii=False),
-                    json.dumps(metrics.get("endpoints") or [], ensure_ascii=False),
-                ),
+                "INSERT OR REPLACE INTO campaign_actor_links(campaign_id, actor_id, confidence, reasons_json, linked_at) VALUES(?,?,?,?,?)",
+                (cid, a, conf, json.dumps(reasons, ensure_ascii=False), now),
             )
-            for a in group:
-                conf = link_scores.get(a, 0.0)
-                overlaps = overlap_details.get(a, set())
-                shared_paths = [f.split("path::", 1)[1] for f in overlaps if f.startswith("path::")][:5]
-                shared_stage = next((f.split("stage::", 1)[1] for f in overlaps if f.startswith("stage::")), "")
-                shared_timing = next((f.split("time::", 1)[1] for f in overlaps if f.startswith("time::")), "")
-                shared_errors = [f.split("err::", 1)[1] for f in overlaps if f.startswith("err::")][:5]
-                seed_ua = (actor_meta.get(actor, {}) or {}).get("ua") or ""
-                member_ua = (actor_meta.get(a, {}) or {}).get("ua") or ""
-                shared_ua = member_ua if seed_ua and member_ua and seed_ua == member_ua else ""
-                stage_counts = (actor_meta.get(a, {}) or {}).get("stage_counts", [])
-                reasons = {
-                    "jaccard_vs_seed": conf,
-                    "overlap_count": len(overlaps),
-                    "shared_paths": shared_paths,
-                    "shared_stage_flow": shared_stage,
-                    "shared_timing": shared_timing,
-                    "shared_errors": shared_errors,
-                    "shared_ua": shared_ua,
-                    "stage_counts": stage_counts,
-                }
-                cur.execute(
-                    "INSERT OR REPLACE INTO campaign_actor_links(campaign_id, actor_id, confidence, reasons_json, linked_at) VALUES(?,?,?,?,?)",
-                    (cid, a, conf, json.dumps(reasons, ensure_ascii=False), now),
-                )
-                links_created += 1
-            campaigns_created.append({"campaign_id": cid, "members": group})
+            links_created += 1
+        campaigns_created.append({"campaign_id": cid, "members": group})
 
     conn.commit()
     duration_ms = int((time.perf_counter() - t0) * 1000.0)
@@ -1250,6 +1321,8 @@ def _compute_campaigns(conn: sqlite3.Connection, config: dict) -> dict:
         "features_cached": features_cached,
         "features_built": features_built,
         "links_created": links_created,
+        "campaigns_count": len(campaigns_created),
+        "merges_done": merges_done,
         "duration_ms": duration_ms,
         "params": config,
         "cache_enabled": cache_enabled,
@@ -1286,7 +1359,7 @@ def _run_campaign_job(job_id: str, config: dict) -> None:
                     metrics.get("features_built"),
                     metrics.get("links_created"),
                     1 if metrics.get("cache_enabled") else 0,
-                    json.dumps(config, ensure_ascii=False),
+                    json.dumps({"config": config, "campaigns_count": metrics.get("campaigns_count", 0), "merges_done": metrics.get("merges_done", 0)}, ensure_ascii=False),
                     job_id,
                 ),
             )
@@ -2971,6 +3044,14 @@ def list_campaigns(request: Request):
                 """
             )
             rows = [dict(r) for r in cur.fetchall()]
+        job_history = []
+        if _campaign_jobs_table_exists(conn):
+            job_history = [
+                _serialize_campaign_job(r)
+                for r in cur.execute(
+                    "SELECT * FROM campaign_jobs WHERE status IN ('completed','failed') ORDER BY created_at DESC LIMIT 5"
+                ).fetchall()
+            ]
         return templates.TemplateResponse(
             "campaigns.html",
             {
@@ -2978,6 +3059,7 @@ def list_campaigns(request: Request):
                 "campaigns": rows,
                 "campaigns_pro_state": verification,
                 "campaigns_recompute_enabled": True,
+                "job_history": job_history,
                 **_license_context(),
             },
         )

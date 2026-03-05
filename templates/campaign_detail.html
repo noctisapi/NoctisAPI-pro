@@ -138,6 +138,24 @@
     padding: 1px 6px;
     color: var(--muted);
   }
+
+  /* Score breakdown bars */
+  .score-breakdown { padding: 16px 20px; border-top: 1px solid var(--stroke); }
+  .score-breakdown-title {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    margin-bottom: 12px;
+  }
+  .sb-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; font-size: 0.82rem; }
+  .sb-label { width: 160px; color: var(--muted); flex-shrink: 0; }
+  .sb-bar-bg { flex: 1; height: 6px; background: rgba(255,255,255,.07); border-radius: 3px; }
+  .sb-bar-fill { height: 100%; border-radius: 3px; }
+  .sb-fill-stage { background: linear-gradient(90deg, #b8a9ff, #7ab8f5); }
+  .sb-fill-ep    { background: linear-gradient(90deg, #7ab8f5, #7ee2b8); }
+  .sb-fill-tech  { background: linear-gradient(90deg, #ffc940, #f0b06a); }
+  .sb-val { font-family: monospace; font-size: 0.78rem; min-width: 32px; text-align: right; color: var(--text); }
 </style>
 
 <div class="page-head">
@@ -248,6 +266,35 @@
     </div>
     {% endif %}
   </div>
+
+  <!-- Score breakdown -->
+  {% set score_total = campaign.score_det or campaign.summary.score_det or 0 %}
+  {% set stage_max = campaign.stage_detail.max_stage or 0 %}
+  {% set tech_count = campaign.techniques | length %}
+  {% set ep_count = campaign.endpoints | length %}
+  {% set stage_contrib = [stage_max * 8, 100] | min %}
+  {% set ep_contrib = [ep_count * 2, 30] | min %}
+  {% set tech_contrib = tech_count * 6 %}
+  {% if score_total > 0 %}
+  <div class="score-breakdown">
+    <div class="score-breakdown-title">Score Breakdown &mdash; total {{ score_total }} / 100</div>
+    <div class="sb-row">
+      <div class="sb-label">Stage progression <span class="muted">(max S{{ stage_max }} × 8)</span></div>
+      <div class="sb-bar-bg"><div class="sb-bar-fill sb-fill-stage" style="width:{{ stage_contrib }}%;"></div></div>
+      <div class="sb-val">{{ stage_contrib }}</div>
+    </div>
+    <div class="sb-row">
+      <div class="sb-label">Endpoints <span class="muted">({{ ep_count }} × 2, cap 30)</span></div>
+      <div class="sb-bar-bg"><div class="sb-bar-fill sb-fill-ep" style="width:{{ ep_contrib }}%;"></div></div>
+      <div class="sb-val">{{ ep_contrib }}</div>
+    </div>
+    <div class="sb-row">
+      <div class="sb-label">Techniques <span class="muted">({{ tech_count }} × 6)</span></div>
+      <div class="sb-bar-bg"><div class="sb-bar-fill sb-fill-tech" style="width:{{ [tech_contrib, 100] | min }}%;"></div></div>
+      <div class="sb-val">{{ tech_contrib }}</div>
+    </div>
+  </div>
+  {% endif %}
 
   {% if campaign.summary.representative_session_id or campaign.representative_session_id %}
   <div style="padding:14px 20px;border-top:1px solid var(--stroke);">
