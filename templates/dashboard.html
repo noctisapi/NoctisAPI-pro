@@ -1,10 +1,10 @@
-﻿{% extends "base.html" %}
+{% extends "base.html" %}
 {% block content %}
 
 <div class="page-head">
   <div>
     <h1>Actors</h1>
-    <div class="sub">Latest 200 · sorted by activity</div>
+    <div class="sub">Latest 200 &middot; sorted by activity</div>
   </div>
 
   <div class="kpis">
@@ -14,9 +14,7 @@
     </div>
     <div class="kpi">
       <div class="kpi-label">Top stage</div>
-      <div class="kpi-value">
-        S{{ max_stage or 0 }}
-      </div>
+      <div class="kpi-value">S{{ max_stage or 0 }}</div>
     </div>
   </div>
 </div>
@@ -24,11 +22,24 @@
 <div class="card">
   <div class="card-head">
     <div class="card-title">Actors</div>
-    <div class="card-sub mono">/dashboard/actors</div>
+    <div class="card-sub" id="actorCount">{{ actors|length }} actors</div>
+  </div>
+
+  <div style="padding:10px 16px;border-bottom:1px solid var(--stroke);display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+    <input id="actorSearch" class="input" type="text" placeholder="Search by actor ID, IP, or user-agent…" style="flex:1;min-width:200px;" autocomplete="off" oninput="filterActors()">
+    <select id="stageFilter" class="input" style="width:130px;" onchange="filterActors()">
+      <option value="">All stages</option>
+      <option value="0">S0</option>
+      <option value="1">S1</option>
+      <option value="2">S2</option>
+      <option value="3">S3</option>
+      <option value="4">S4+</option>
+    </select>
+    <button class="btn btn-ghost btn-small" type="button" onclick="clearActorFilter()">Clear</button>
   </div>
 
   <div class="table-wrap">
-    <table class="table table-sortable">
+    <table class="table table-sortable" id="actorsTable">
       <thead>
         <tr>
           <th data-type="text">Actor</th>
@@ -38,12 +49,12 @@
           <th data-type="text">IP</th>
           <th data-type="text">User-Agent</th>
           <th data-type="date">Last seen</th>
-          <th data-type="text">Actions</th>
+          <th data-type="text" style="width:90px;"></th>
         </tr>
       </thead>
-      <tbody>
+      <tbody id="actorsBody">
         {% for a in actors %}
-        <tr>
+        <tr data-actor="{{ a.actor_id }}" data-ip="{{ a.last_ip or '' }}" data-ua="{{ a.last_ua or '' }}" data-stage="{{ a.stage or 0 }}">
           <td><a class="link" href="/actor/{{ a.actor_id }}">{{ a.short }}</a></td>
           <td><span class="pill">S{{ a.stage }}</span></td>
           <td class="mono">{{ a.score }}</td>
@@ -68,23 +79,51 @@
   </div>
 </div>
 
-<!-- Auto-refresh (solo si la pestaÃ±a estÃ¡ visible) -->
+<!-- Auto-refresh (only when tab is visible and no filter active) -->
 <script>
   let dashboardTableHelper = null;
+  let filterActive = false;
 
   function ensureDashboardTableHelper(){
     if(!dashboardTableHelper && window.TableFilterSort){
-      dashboardTableHelper = window.TableFilterSort.initTable(document.querySelector('.table-sortable'));
+      dashboardTableHelper = window.TableFilterSort.initTable(document.getElementById('actorsTable'));
     }
     return dashboardTableHelper;
   }
+
   setInterval(() => {
-    if (!document.hidden) {
+    if (!document.hidden && !filterActive) {
       const helper = ensureDashboardTableHelper();
       if (helper && helper.isActive()) return;
       window.location.reload();
     }
   }, 5000);
+
+  function filterActors() {
+    const q = (document.getElementById('actorSearch').value || '').toLowerCase();
+    const stage = document.getElementById('stageFilter').value;
+    filterActive = q.length > 0 || stage !== '';
+    let visible = 0;
+    document.querySelectorAll('#actorsBody tr').forEach(tr => {
+      const actor = (tr.dataset.actor || '').toLowerCase();
+      const ip = (tr.dataset.ip || '').toLowerCase();
+      const ua = (tr.dataset.ua || '').toLowerCase();
+      const trStage = parseInt(tr.dataset.stage || '0', 10);
+      const matchText = !q || actor.includes(q) || ip.includes(q) || ua.includes(q);
+      const matchStage = !stage || (stage === '4' ? trStage >= 4 : trStage === parseInt(stage, 10));
+      const show = matchText && matchStage;
+      tr.style.display = show ? '' : 'none';
+      if (show) visible++;
+    });
+    const countEl = document.getElementById('actorCount');
+    if (countEl) countEl.textContent = visible + ' actor' + (visible !== 1 ? 's' : '');
+  }
+
+  function clearActorFilter() {
+    document.getElementById('actorSearch').value = '';
+    document.getElementById('stageFilter').value = '';
+    filterActors();
+  }
 
   async function trashActor(actorId, btn){
     if(!confirm('Move actor to deleted list?')){ return; }
@@ -107,4 +146,3 @@
 </script>
 
 {% endblock %}
-

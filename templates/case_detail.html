@@ -140,7 +140,7 @@
       {% if case.severity %}
       <span class="badge sev-{{ case.severity }}">{{ case.severity }}</span>
       {% endif %}
-      <span class="badge status-{{ case.status }}">{{ case.status | replace('_',' ') }}</span>
+      <span class="badge status-{{ case.status }}" id="headerStatusBadge">{{ case.status | replace('_',' ') }}</span>
     </div>
     <div class="rename-row">
       <input id="caseTitleInput" class="input" value="{{ case.title }}" placeholder="Case title" style="max-width:400px;">
@@ -263,7 +263,9 @@
           <td><a class="link mono" href="/actor/{{ a.actor_id }}">{{ a.actor_id[:8] }}</a></td>
           <td>{{ a.role }}</td>
           <td class="mono muted" style="font-size:0.82rem;">{{ a.added_at }}</td>
-          <td>
+          <td style="display:flex;gap:4px;">
+            <button class="btn btn-ghost btn-small" type="button"
+              onclick="filterTimelineByActor('{{ a.actor_id }}', '{{ a.actor_id[:8] }}')">Filter timeline</button>
             <button class="btn btn-ghost btn-small" type="button"
               onclick="removeCaseActor('{{ case.id }}','{{ a.actor_id }}', this)">Remove</button>
           </td>
@@ -284,8 +286,13 @@
     <div class="card-sub">latest {{ case_timeline|length }} events</div>
   </div>
   {% if case_timeline %}
+  <div id="timelineFilterBar" style="display:none;align-items:center;gap:8px;padding:8px 16px;background:rgba(255,179,0,.06);border-bottom:1px solid rgba(255,179,0,.2);font-size:0.82rem;">
+    <span style="color:#ffc940;">&#9632;</span>
+    <span>Filtered by actor: <strong id="timelineFilterLabel" class="mono"></strong></span>
+    <button class="btn btn-ghost btn-small" type="button" style="margin-left:auto;" onclick="clearTimelineFilter()">Clear filter</button>
+  </div>
   <div class="table-wrap">
-    <table class="table">
+    <table class="table" id="timelineTable">
       <thead>
         <tr>
           <th data-type="date" style="width:170px;">Timestamp</th>
@@ -298,13 +305,13 @@
       </thead>
       <tbody>
         {% for ev in case_timeline %}
-        <tr>
+        <tr data-actor="{{ ev.actor_id }}">
           <td class="mono muted" style="font-size:0.8rem;">{{ ev.ts }}</td>
           <td>
             <span class="ev-type ev-type-{{ ev.type }}">{{ ev.type }}</span>
           </td>
           <td class="mono" style="font-size:0.8rem;">
-            <a class="link" href="/actor/{{ ev.actor_id }}">{{ ev.actor_id[:8] }}</a>
+            <a class="link" href="#" onclick="filterTimelineByActor('{{ ev.actor_id }}', '{{ ev.actor_id[:8] }}'); return false;">{{ ev.actor_id[:8] }}</a>
           </td>
           <td class="mono" style="font-size:0.8rem;">
             {% if ev.method %}<span class="muted">{{ ev.method }}</span> {% endif %}{{ ev.path }}
@@ -463,7 +470,33 @@
     if (res.ok) {
       fb.style.display = 'inline';
       setTimeout(() => fb.style.display = 'none', 2000);
+      const badge = document.getElementById('headerStatusBadge');
+      if (badge) {
+        badge.className = 'badge status-' + status;
+        badge.textContent = status.replace('_', ' ');
+      }
     } else { alert('Error: ' + await res.text()); }
+  }
+
+  let activeActorFilter = null;
+  function filterTimelineByActor(actorId, short) {
+    activeActorFilter = actorId;
+    document.querySelectorAll('#timelineTable tbody tr').forEach(tr => {
+      tr.style.display = (tr.dataset.actor === actorId) ? '' : 'none';
+    });
+    const bar = document.getElementById('timelineFilterBar');
+    const lbl = document.getElementById('timelineFilterLabel');
+    if (bar) bar.style.display = 'flex';
+    if (lbl) lbl.textContent = short || actorId.slice(0, 8);
+  }
+
+  function clearTimelineFilter() {
+    activeActorFilter = null;
+    document.querySelectorAll('#timelineTable tbody tr').forEach(tr => {
+      tr.style.display = '';
+    });
+    const bar = document.getElementById('timelineFilterBar');
+    if (bar) bar.style.display = 'none';
   }
 
   async function updateCaseCampaign() {

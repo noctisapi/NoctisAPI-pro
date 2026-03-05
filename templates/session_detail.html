@@ -5,7 +5,7 @@
 <div class="page-head">
   <div>
     <h1>Session {{ session.session_id }}</h1>
-    <div class="sub">Actor {{ session.actor_id }} - Stage {{ session.stage_max or 0 }}</div>
+    <div class="sub">Actor {{ session.actor_id }} &middot; Stage {{ session.stage_max or 0 }}</div>
   </div>
   <div class="kpis">
     <div class="kpi">
@@ -28,14 +28,27 @@
         {% endif %}
       </div>
     </div>
+    <div class="kpi">
+      <div class="kpi-label">Steps</div>
+      <div class="kpi-value">{{ steps|length }}</div>
+    </div>
   </div>
 </div>
+
+{% if session_in_cases %}
+<div style="margin-bottom:12px;padding:10px 16px;background:rgba(26,191,107,.08);border:1px solid rgba(26,191,107,.3);border-radius:8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:0.84rem;">
+  <span style="color:#7ee2b8;">&#10003; Session linked to:</span>
+  {% for c in session_in_cases %}
+  <a class="link" href="/dashboard/cases/{{ c.case_id }}" style="color:#7ee2b8;font-weight:600;">#{{ c.case_id }} {{ c.title }}</a>
+  {% endfor %}
+</div>
+{% endif %}
 
 <div class="card session-meta">
   <div class="session-summary">
     <div>
       <div class="muted tiny-text">Summary</div>
-      <div>{{ session.summary or 'No resumen disponible' }}</div>
+      <div>{{ session.summary or 'No summary available' }}</div>
     </div>
     <div>
       <div class="muted tiny-text">Max Stage</div>
@@ -56,9 +69,9 @@
         <button class="btn btn-primary" type="button" onclick="addSessionEvidence()">Add session to case</button>
         <button class="btn btn-outline" type="button" onclick="addSessionToLastCase()">Add session to last case</button>
       </div>
-      <p class="case-picker-help">Select a case and use step buttons to attach granular evidence.</p>
+      <p class="case-picker-help">Select a case then use the step buttons to attach granular evidence.</p>
     {% elif cases_enabled %}
-      <div class="case-empty">No open cases available for this session.</div>
+      <div class="case-empty">No open cases available.</div>
     {% else %}
       <div class="case-empty">Cases are available on the PRO plan.</div>
     {% endif %}
@@ -86,7 +99,7 @@
           <th data-type="text">Path</th>
           <th data-type="number">Stage</th>
           <th data-type="number">Status</th>
-          <th data-type="text">Actions</th>
+          <th data-type="text">Evidence</th>
         </tr>
         <tr class="table-filters">
           <th></th>
@@ -96,23 +109,32 @@
           <th><input class="table-filter" data-col="4" placeholder="Filter path" aria-label="Filter path"></th>
           <th><input class="table-filter" data-col="5" placeholder="Filter stage" aria-label="Filter stage"></th>
           <th><input class="table-filter" data-col="6" placeholder="Filter status" aria-label="Filter status"></th>
-          <th><input class="table-filter" data-col="7" placeholder="Filter actions" aria-label="Filter actions"></th>
+          <th></th>
         </tr>
       </thead>
       <tbody>
         {% for s in steps %}
         {% set stage = s.stage_after if s.stage_after is not none else s.stage_before %}
-        <tr>
-          <td><input type="checkbox" class="step-select" data-step-id="{{ s.id }}" data-step-seq="{{ s.seq }}" aria-label="Select step {{ s.seq }}"></td>
+        {% set step_evidence = evidence_by_step.get(s.id|string, []) %}
+        <tr id="step-row-{{ s.id }}" {% if step_evidence %}class="step-in-case"{% endif %}>
+          <td><input type="checkbox" class="step-select" data-step-id="{{ s.id }}" data-step-seq="{{ s.seq }}" aria-label="Select step {{ s.seq }}" {% if step_evidence %}disabled{% endif %}></td>
           <td>{{ s.seq }}</td>
           <td class="mono">{{ s.ts }}</td>
           <td class="mono">{{ s.method }}</td>
           <td class="mono" title="{{ s.path }}">{{ s.path }}</td>
           <td><span class="tag">S{{ stage or 0 }}</span></td>
           <td>{{ s.response_status or '-' }}</td>
-          <td class="step-actions">
-            {% if cases_enabled and cases %}
-              <button class="btn btn-ghost btn-small" type="button" onclick="addStepEvidence({{ s.id }}, {{ s.seq }})">Add step to case</button>
+          <td class="step-actions" id="step-action-{{ s.id }}">
+            {% if step_evidence %}
+              <div style="display:flex;flex-wrap:wrap;gap:4px;">
+                {% for ev in step_evidence %}
+                <a class="badge" href="/dashboard/cases/{{ ev.case_id }}" style="background:rgba(26,191,107,.12);color:#7ee2b8;border-color:rgba(26,191,107,.3);text-decoration:none;">
+                  #{{ ev.case_id }}
+                </a>
+                {% endfor %}
+              </div>
+            {% elif cases_enabled and cases %}
+              <button class="btn btn-ghost btn-small" type="button" onclick="addStepEvidence({{ s.id }}, {{ s.seq }})">Add to case</button>
             {% elif cases_enabled %}
               <span class="muted tiny-text">No cases</span>
             {% else %}
@@ -125,6 +147,10 @@
     </table>
   </div>
 </div>
+
+<style>
+  .step-in-case { background: rgba(26,191,107,.04); }
+</style>
 
 <script>
   const sessionId = "{{ session.session_id }}";
@@ -166,7 +192,8 @@
     if(!casesEnabled){ showSessionToast('Cases are a PRO feature', 'info'); return; }
     const caseId = currentCaseId();
     if(!caseId){ showSessionToast('Select a case first', 'error'); return; }
-    await submitEvidence(caseId, 'step', stepId, `Step #${seq}`);
+    const ok = await submitEvidence(caseId, 'step', stepId, `Step #${seq}`);
+    if(ok) markStepAdded(stepId, caseId);
     setLastCaseId(caseId);
   }
 
@@ -185,13 +212,29 @@
       const res = await fetch(`/dashboard/cases/${caseId}/evidence?${params.toString()}`, {method:'POST'});
       if(res.ok){
         showSessionToast(`${label} added to case #${caseId}`, 'success');
+        return true;
       }else{
         const text = await res.text();
         showSessionToast(`Error: ${text}`, 'error');
+        return false;
       }
     }catch(e){
       showSessionToast(`Error: ${e.message}`, 'error');
+      return false;
     }
+  }
+
+  function markStepAdded(stepId, caseId){
+    const actionEl = document.getElementById('step-action-' + stepId);
+    const row = document.getElementById('step-row-' + stepId);
+    if(actionEl){
+      actionEl.innerHTML = `<a class="badge" href="/dashboard/cases/${caseId}" style="background:rgba(26,191,107,.12);color:#7ee2b8;border-color:rgba(26,191,107,.3);text-decoration:none;">#${caseId}</a>`;
+    }
+    if(row){ row.classList.add('step-in-case'); }
+    // Disable checkbox
+    const cb = row?.querySelector('.step-select');
+    if(cb){ cb.disabled = true; cb.checked = false; }
+    updateSelectedCount();
   }
 
   function updateSelectedCount(){
@@ -201,7 +244,7 @@
   }
 
   function selectAllSteps(checked){
-    document.querySelectorAll('.step-select').forEach(cb => { cb.checked = checked; });
+    document.querySelectorAll('.step-select:not(:disabled)').forEach(cb => { cb.checked = checked; });
     const master = document.getElementById('selectAllSteps');
     if(master){ master.checked = checked; }
     updateSelectedCount();
@@ -225,12 +268,14 @@
   async function addSelectedStepsToCase(caseId){
     const selected = Array.from(document.querySelectorAll('.step-select:checked'));
     if(selected.length === 0){ showSessionToast('No steps selected', 'error'); return; }
+    let added = 0;
     for(const cb of selected){
       const stepId = cb.dataset.stepId;
       const seq = cb.dataset.stepSeq;
-      await submitEvidence(caseId, 'step', stepId, `Step #${seq}`);
+      const ok = await submitEvidence(caseId, 'step', stepId, `Step #${seq}`);
+      if(ok){ markStepAdded(stepId, caseId); added++; }
     }
-    showSessionToast(`Added ${selected.length} steps to case #${caseId}`, 'success');
+    if(added > 0) showSessionToast(`Added ${added} steps to case #${caseId}`, 'success');
   }
 
   if(window.TableFilterSort){

@@ -2076,7 +2076,7 @@ def dashboard_case_detail(case_id: int, request: Request):
                     step_lookup_id = None
                 if step_lookup_id is not None:
                     step_row = cur.execute(
-                        "SELECT id, session_id, seq, ts, method, path, stage_after, response_status, headers_json, body_json, response_json FROM session_steps WHERE id=?",
+                        "SELECT ss.id, ss.session_id, ss.seq, ss.ts, ss.method, ss.path, ss.stage_after, ss.response_status, ss.headers_json, ss.body_json, ss.response_json, s.actor_id FROM session_steps ss JOIN sessions s ON s.session_id = ss.session_id WHERE ss.id=?",
                         (step_lookup_id,),
                     ).fetchone()
                     if step_row:
@@ -2751,7 +2751,10 @@ def actor_sessions(actor_id: str, request: Request):
         event_count = cur.fetchone()["cnt"]
 
         cur.execute(
-            "SELECT session_id, started_at, ended_at, stage_max, summary FROM sessions WHERE actor_id=? ORDER BY started_at DESC",
+            "SELECT s.session_id, s.started_at, s.ended_at, s.stage_max, s.summary, "
+            "COUNT(ss.id) as step_count FROM sessions s "
+            "LEFT JOIN session_steps ss ON ss.session_id = s.session_id "
+            "WHERE s.actor_id=? GROUP BY s.session_id ORDER BY s.started_at DESC",
             (actor_id,),
         )
         rows = [dict(r) for r in cur.fetchall()]
@@ -2810,12 +2813,35 @@ def session_detail(session_id: str, request: Request):
             except Exception:
                 sess["duration_ms"] = None
         open_cases = []
+        evidence_by_step: dict = {}
+        session_in_cases: list = []
         if _has_feature(licensing.Feature.CASES, action="overview_cases"):
             cur.execute("SELECT id, title, severity, status FROM cases WHERE status='open' ORDER BY updated_at DESC LIMIT 200")
             open_cases = [dict(r) for r in cur.fetchall()]
+            step_ids = [str(s["id"]) for s in steps]
+            if step_ids:
+                placeholders = ",".join("?" * len(step_ids))
+                ev_rows = cur.execute(
+                    f"SELECT ce.ref_id, ce.case_id, c.title FROM case_evidence ce "
+                    f"JOIN cases c ON c.id = ce.case_id "
+                    f"WHERE ce.ref_type='step' AND ce.ref_id IN ({placeholders})",
+                    step_ids,
+                ).fetchall()
+                for row in ev_rows:
+                    key = str(row[0])
+                    evidence_by_step.setdefault(key, []).append({"case_id": row[1], "title": row[2]})
+            si_rows = cur.execute(
+                "SELECT ce.case_id, c.title FROM case_evidence ce "
+                "JOIN cases c ON c.id = ce.case_id "
+                "WHERE ce.ref_type='session' AND ce.ref_id=?",
+                (session_id,),
+            ).fetchall()
+            session_in_cases = [{"case_id": row[0], "title": row[1]} for row in si_rows]
         return templates.TemplateResponse(
             "session_detail.html",
-            {"request": request, "session": sess, "steps": steps, "cases": open_cases, **_license_context()},
+            {"request": request, "session": sess, "steps": steps, "cases": open_cases,
+             "evidence_by_step": evidence_by_step, "session_in_cases": session_in_cases,
+             **_license_context()},
         )
     finally:
         conn.close()

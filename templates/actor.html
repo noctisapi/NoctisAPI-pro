@@ -18,7 +18,7 @@
       <div class="kpi-value">{{ actor.score }}</div>
     </div>
     <div class="kpi">
-      <div class="kpi-label">Visto</div>
+      <div class="kpi-label">Last Seen</div>
       <div class="kpi-value">{{ actor.last_seen_fmt }}</div>
     </div>
   </div>
@@ -27,19 +27,19 @@
 <div class="card actor-actions">
   <div class="actor-actions__info">
     <div class="actor-actions__eyebrow">Quick Actions</div>
-    <div class="actor-actions__title">Gestión express del actor</div>
-    <div class="actor-actions__subtitle">Archiva, vincula casos o revisa sus sesiones sin salir de esta vista.</div>
+    <div class="actor-actions__title">Manage actor</div>
+    <div class="actor-actions__subtitle">Archive, link to cases, or review sessions.</div>
   </div>
   <div class="actor-actions__buttons">
-    <button class="btn btn-ghost" type="button" data-action="archive" data-busy-text="Actualizando..." onclick="archiveActor(this)">
+    <button class="btn btn-ghost" type="button" data-action="archive" data-busy-text="Updating..." onclick="archiveActor(this)">
       <span class="btn-label">{% if actor.is_archived %}Unarchive{% else %}Archive{% endif %}</span>
     </button>
-    <button class="btn btn-primary{% if not cases_enabled %} is-disabled{% endif %}" type="button" data-action="open-case-modal" data-busy-text="Cargando..." onclick="openCaseModal(this)" {% if not cases_enabled %}disabled title="PRO feature"{% endif %}>
+    <button class="btn btn-primary{% if not cases_enabled %} is-disabled{% endif %}" type="button" data-action="open-case-modal" data-busy-text="Loading..." onclick="openCaseModal(this)" {% if not cases_enabled %}disabled title="PRO feature"{% endif %}>
       <span class="btn-label">Add to Case</span>
     </button>
     {% if actor.latest_session_id %}
     <a class="btn btn-outline" href="/dashboard/sessions/{{ actor.latest_session_id }}">
-      <span class="btn-label">Open Replay</span>
+      <span class="btn-label">Latest Session</span>
     </a>
     {% endif %}
     <a class="btn btn-outline" href="/dashboard/actors/{{ actor.actor_id }}/sessions">
@@ -80,9 +80,9 @@
     {% endif %}
     <div class="campaign-actions">
       {% if actor_campaign.representative_session_id %}
-        <a class="btn btn-primary btn-small" href="/dashboard/sessions/{{ actor_campaign.representative_session_id }}">Representative Replay</a>
+        <a class="btn btn-primary btn-small" href="/dashboard/sessions/{{ actor_campaign.representative_session_id }}">Representative Session</a>
       {% elif actor.latest_session_id %}
-        <a class="btn btn-outline btn-small" href="/dashboard/sessions/{{ actor.latest_session_id }}">Latest Replay</a>
+        <a class="btn btn-outline btn-small" href="/dashboard/sessions/{{ actor.latest_session_id }}">Latest Session</a>
       {% endif %}
     </div>
   </div>
@@ -164,7 +164,7 @@
       </table>
     </div>
   {% else %}
-    <div class="muted">Sin tokens</div>
+    <div class="muted">No tokens</div>
   {% endif %}
 </div>
 
@@ -219,11 +219,11 @@
       </table>
     </div>
   {% else %}
-    <div class="muted">Sin events</div>
+    <div class="muted">No events</div>
   {% endif %}
 </div>
 
-<!-- Auto-refresh (solo si la pestana esta visible) -->
+<!-- Auto-refresh (only when tab is visible) -->
 <script>
   const actor_id = "{{ actor.actor_id }}";
   let autoRefreshEnabled = true;
@@ -276,7 +276,7 @@
   }
 
   async function archiveActor(btn){
-    const busyText = (btn && btn.dataset && btn.dataset.busyText) ? btn.dataset.busyText : 'Actualizando...';
+    const busyText = (btn && btn.dataset && btn.dataset.busyText) ? btn.dataset.busyText : 'Updating...';
     setButtonBusy(btn, true, busyText);
     const is_archived = parseInt("{{ actor.is_archived|default('0') }}");
     const endpoint = is_archived ? 'unarchive' : 'archive';
@@ -308,7 +308,7 @@
     }
     if(caseModal.classList.contains('is-open')) return;
     autoRefreshEnabled = false;
-    const busyText = (btn && btn.dataset && btn.dataset.busyText) ? btn.dataset.busyText : 'Cargando...';
+    const busyText = (btn && btn.dataset && btn.dataset.busyText) ? btn.dataset.busyText : 'Loading...';
     setButtonBusy(btn, true, busyText);
     try{
       const res = await fetch(`/dashboard/actor_add_case/${actor_id}`);
@@ -320,18 +320,18 @@
         caseListHost.innerHTML = caseList.innerHTML;
         const count = caseListHost.querySelectorAll('.case-option').length;
         if(caseMeta){
-          caseMeta.textContent = count ? `Selecciona uno de los ${count} casos abiertos` : 'No hay casos abiertos.';
+          caseMeta.textContent = count ? `${count} open case${count !== 1 ? 's' : ''} available` : 'No open cases.';
         }
         caseModal.classList.add('is-open');
         caseModal.setAttribute('aria-hidden', 'false');
       }else{
         showToast('Error loading cases', 'error');
-        if(caseMeta){ caseMeta.textContent = 'No se pudo cargar la lista de casos.'; }
+        if(caseMeta){ caseMeta.textContent = 'Could not load cases.'; }
         autoRefreshEnabled = true;
       }
     }catch(e){
       showToast('Error: ' + e.message, 'error');
-      if(caseMeta){ caseMeta.textContent = 'No se pudo cargar la lista de casos.'; }
+      if(caseMeta){ caseMeta.textContent = 'Could not load cases.'; }
       autoRefreshEnabled = true;
     }finally{
       setButtonBusy(btn, false);
@@ -374,7 +374,7 @@
     }
     if(quickCreateBusy){ return; }
     quickCreateBusy = true;
-    const busyText = (btn && btn.dataset && btn.dataset.busyText) ? btn.dataset.busyText : 'Creando...';
+    const busyText = (btn && btn.dataset && btn.dataset.busyText) ? btn.dataset.busyText : 'Creating...';
     setButtonBusy(btn, true, busyText);
     try{
       const res = await fetch(`/dashboard/cases/quick?title=${encodeURIComponent(title)}&actor_id=${actor_id}`, {method:'POST'});
