@@ -450,8 +450,7 @@ def mark_campaign_status(
         "snapshot_hash": snapshot_hash or "",
         "updated_at": _utc_now_iso(),
     }
-    if expires_at is not None:
-        payload["expires_at"] = int(expires_at)
+    payload["expires_at"] = int(expires_at) if expires_at is not None else 0
     upsert_campaign_pro_state(conn, payload)
 
 
