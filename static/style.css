@@ -812,7 +812,7 @@ h1{ margin:6px 0 4px; font-size:26px; }
   gap:8px;
 }
 input[type="date"]::-webkit-calendar-picker-indicator{
-  filter:invert(1) opacity(.6);
+  filter:invert(1) opacity(.6) !important;
   cursor:pointer;
 }
 
