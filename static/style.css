@@ -594,6 +594,16 @@ h1{ margin:6px 0 4px; font-size:26px; }
   outline:none;
   border-color:rgba(200,200,200,.5);
 }
+.date-range-filter{
+  display:flex;
+  flex-direction:column;
+  gap:3px;
+}
+.date-range-filter .table-filter{
+  font-size:11px;
+  padding:4px 6px;
+  color-scheme:dark;
+}
 .table tr:hover td{ background: rgba(200,200,200,.06); }
 
 .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }

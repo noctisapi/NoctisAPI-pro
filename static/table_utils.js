@@ -1,4 +1,4 @@
-﻿(function(){
+(function(){
   const DEFAULT_DEBOUNCE = 140;
   const tableHelpers = new WeakMap();
 
@@ -14,6 +14,16 @@
     return thead.querySelector('tr.header') || thead.querySelector('tr');
   }
 
+  function makeDateInput(idx, role, ariaLabel){
+    const input = document.createElement('input');
+    input.type = 'date';
+    input.className = 'table-filter table-filter-date';
+    input.dataset.col = String(idx);
+    input.dataset.role = role;
+    input.setAttribute('aria-label', ariaLabel);
+    return input;
+  }
+
   function ensureFilterRow(thead, headerCells, noFilters){
     if(noFilters) return null;
     let filterRow = thead.querySelector('tr.table-filters');
@@ -22,19 +32,23 @@
     filterRow.className = 'table-filters';
     headerCells.forEach((th, idx) => {
       const cell = document.createElement('th');
-      const input = document.createElement('input');
-      input.className = 'table-filter';
-      input.dataset.col = String(idx);
       const type = (th.dataset && th.dataset.type) ? th.dataset.type : 'text';
       const label = (th.textContent || '').trim();
-      const placeholder = label ? `Filter ${label}` : 'Filter';
       if(type === 'date'){
-        input.type = 'date';
-      }else{
+        const wrapper = document.createElement('span');
+        wrapper.className = 'date-range-filter';
+        wrapper.appendChild(makeDateInput(idx, 'from', `${label} from`));
+        wrapper.appendChild(makeDateInput(idx, 'to',   `${label} to`));
+        cell.appendChild(wrapper);
+      } else {
+        const input = document.createElement('input');
+        input.className = 'table-filter';
+        input.dataset.col = String(idx);
+        const placeholder = label ? `Filter ${label}` : 'Filter';
         input.placeholder = placeholder;
+        input.setAttribute('aria-label', placeholder);
+        cell.appendChild(input);
       }
-      input.setAttribute('aria-label', placeholder);
-      cell.appendChild(input);
       filterRow.appendChild(cell);
     });
     thead.appendChild(filterRow);
@@ -156,20 +170,30 @@
 
     function collectFilters(){
       activeFilters = [];
+      const dateRanges = new Map(); // col idx -> {from, to}
       filterInputs.forEach(input => {
-        const filter = input.value.trim();
-        if(!filter) return;
         const idx = parseInt(input.dataset.col, 10);
         const type = headerCells[idx]?.dataset?.type || 'text';
-        const normalized = type === 'date' ? filter : filter.toLowerCase();
-        activeFilters.push({ idx, type, value: normalized });
+        if(type === 'date'){
+          if(!dateRanges.has(idx)) dateRanges.set(idx, {from:'', to:''});
+          const val = input.value.trim();
+          if(input.dataset.role === 'from') dateRanges.get(idx).from = val;
+          else if(input.dataset.role === 'to') dateRanges.get(idx).to = val;
+          return;
+        }
+        const filter = input.value.trim();
+        if(!filter) return;
+        activeFilters.push({ idx, type, value: filter.toLowerCase() });
+      });
+      dateRanges.forEach(({from, to}, idx) => {
+        if(from || to) activeFilters.push({ idx, type: 'date', from, to });
       });
     }
 
     function matchesFilter(row, filter){
-      const { idx, type, value } = filter;
+      const { idx, type } = filter;
       if(type === 'number'){
-        const m = value.match(/^(<=|>=|<|>|=)?\s*([-+]?\d+(\.\d+)?)/);
+        const m = filter.value.match(/^(<=|>=|<|>|=)?\s*([-+]?\d+(\.\d+)?)/);
         if(m){
           const op = m[1] || '=';
           const num = parseFloat(m[2]);
@@ -183,9 +207,12 @@
         }
       }
       if(type === 'date'){
-        return getDateKey(row, idx) === value;
+        const key = getDateKey(row, idx);
+        if(filter.from && key < filter.from) return false;
+        if(filter.to   && key > filter.to)   return false;
+        return true;
       }
-      return getLower(row, idx).includes(value);
+      return getLower(row, idx).includes(filter.value);
     }
 
     function applyFilters(){
