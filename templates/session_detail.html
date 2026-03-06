@@ -107,6 +107,14 @@
       <option value="8">S8</option>
     </select>
     <input type="text" id="filterPath" class="table-filter" style="width:160px;flex:none;" placeholder="Filter path…" oninput="applyStepFilters()" aria-label="Filter path">
+    <select id="filterStatus" class="table-filter" style="width:110px;flex:none;" onchange="applyStepFilters()" aria-label="Filter status">
+      <option value="">All status</option>
+      <option value="1">1xx</option>
+      <option value="2">2xx</option>
+      <option value="3">3xx</option>
+      <option value="4">4xx</option>
+      <option value="5">5xx</option>
+    </select>
     <span style="flex:1;min-width:4px;"></span>
     <input type="checkbox" id="selectAllSteps" aria-label="Select all steps">
     <button class="btn btn-ghost btn-small" type="button" onclick="selectAllSteps(true)">Select all</button>
@@ -296,20 +304,23 @@
   }
 
   function applyStepFilters() {
-    const method = document.getElementById('filterMethod')?.value || '';
-    const stage  = document.getElementById('filterStage')?.value ?? '';
-    const path   = (document.getElementById('filterPath')?.value || '').toLowerCase();
+    const method     = document.getElementById('filterMethod')?.value || '';
+    const stage      = document.getElementById('filterStage')?.value ?? '';
+    const path       = (document.getElementById('filterPath')?.value || '').toLowerCase();
+    const statusPfx  = document.getElementById('filterStatus')?.value || '';
     document.querySelectorAll('#stepsTable tbody tr').forEach(tr => {
       const cells = tr.querySelectorAll('td');
       if (cells.length < 7) return;
-      const rowMethod = cells[3].textContent.trim();
-      const rowPath   = cells[4].getAttribute('title') || cells[4].textContent.trim();
-      const stageTag  = cells[5].querySelector('.tag');
-      const rowStage  = stageTag ? stageTag.textContent.trim() : '';
-      const matchMethod = !method || rowMethod === method;
-      const matchPath   = !path   || rowPath.toLowerCase().includes(path);
-      const matchStage  = !stage  || rowStage === ('S' + stage);
-      tr.style.display = matchMethod && matchPath && matchStage ? '' : 'none';
+      const rowMethod  = cells[3].textContent.trim();
+      const rowPath    = cells[4].getAttribute('title') || cells[4].textContent.trim();
+      const stageTag   = cells[5].querySelector('.tag');
+      const rowStage   = stageTag ? stageTag.textContent.trim() : '';
+      const rowStatus  = cells[6].textContent.trim();
+      const matchMethod = !method    || rowMethod === method;
+      const matchPath   = !path      || rowPath.toLowerCase().includes(path);
+      const matchStage  = !stage     || rowStage === ('S' + stage);
+      const matchStatus = !statusPfx || rowStatus.startsWith(statusPfx);
+      tr.style.display = matchMethod && matchPath && matchStage && matchStatus ? '' : 'none';
     });
     updateSelectedCount();
   }

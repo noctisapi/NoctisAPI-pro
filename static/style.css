@@ -811,4 +811,8 @@ h1{ margin:6px 0 4px; font-size:26px; }
   align-items:center;
   gap:8px;
 }
+input[type="date"]::-webkit-calendar-picker-indicator{
+  filter:invert(1) opacity(.6);
+  cursor:pointer;
+}
 
