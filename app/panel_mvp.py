@@ -419,48 +419,8 @@ def dashboard_license_config():
 
 @app.post("/dashboard/license/config", include_in_schema=False, response_class=JSONResponse)
 def dashboard_license_config_update(payload: dict = Body(default={})):
-    if not isinstance(payload, dict):
-        raise HTTPException(status_code=400, detail="invalid_payload")
-
-    field_map = {
-        "app_version": "HP_APP_VERSION",
-        "app_id": "HP_APP_ID",
-        "deployment_id": "HP_DEPLOYMENT_ID",
-        "offline_license_path": "HP_OFFLINE_LICENSE_PATH",
-        "offline_license_state_path": "HP_OFFLINE_LICENSE_STATE_PATH",
-        "license_mode": "HP_LICENSE_MODE",
-    }
-    updates: dict[str, str] = {}
-    for field, env_key in field_map.items():
-        if field not in payload:
-            continue
-        raw = payload.get(field)
-        updates[env_key] = "" if raw is None else str(raw)
-    try:
-        if updates:
-            license_runtime.save_overrides(updates=updates, clear_all=False)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"license_config_save_failed:{exc.__class__.__name__}")
-
-    pro_license.clear_cache()
-    pro_ops.clear_cache()
-
-    licensing_snapshot = pro_license.get_backend_license_snapshot(force_refresh=True)
-    licensing_snapshot["refreshed"] = bool(licensing_snapshot.get("valid"))
-    licensing_snapshot["local_license_ok"] = bool(licensing_snapshot.get("valid"))
-    if licensing_snapshot.get("last_error"):
-        licensing_snapshot["refresh_error"] = licensing_snapshot.get("last_error")
-    hint = _license_error_hint(licensing_snapshot.get("refresh_error") or licensing_snapshot.get("last_error"))
-    licensing_snapshot["hint"] = hint
-
-    return {
-        "saved": True,
-        "config": _license_config_snapshot(),
-        "licensing": licensing_snapshot,
-        "hint": hint,
-    }
+    _ = payload
+    raise HTTPException(status_code=410, detail="license_runtime_config_locked")
 
 
 @app.post("/dashboard/license/upload", include_in_schema=False, response_class=JSONResponse)

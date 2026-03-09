@@ -139,27 +139,11 @@
           <button id="licenseUploadBtn" type="button" class="btn btn-outline" onclick="uploadLicenseFile(this)">Upload and validate</button>
         </div>
       </div>
-      <div class="modal-form">
-        <label for="licenseAppVersion">App version</label>
-        <input id="licenseAppVersion" class="input" type="text" placeholder="0.1.1" />
-
-        <label for="licenseAppId">App ID</label>
-        <input id="licenseAppId" class="input" type="text" placeholder="noctisapi-pro" />
-
-        <label for="licenseDeploymentId">Deployment ID (optional)</label>
-        <input id="licenseDeploymentId" class="input mono" type="text" placeholder="dep-prod-001" />
-
-        <label for="licenseOfflinePath">license.json path</label>
-        <input id="licenseOfflinePath" class="input mono" type="text" placeholder="/var/lib/myapp/license.json" />
-
-        <label for="licenseOfflineStatePath">license_state.json path</label>
-        <input id="licenseOfflineStatePath" class="input mono" type="text" placeholder="/var/lib/myapp/license_state.json" />
-      </div>
+      <div class="modal-hint">Runtime identity and storage paths are managed internally by the deployment.</div>
       <div id="licenseConfigSummary" class="modal-hint" style="margin-top:10px;"></div>
       <div id="licenseConfigIdentity" class="modal-hint"></div>
     </div>
     <div class="modal-actions">
-      <button id="licenseConfigSaveBtn" type="button" class="btn btn-primary" onclick="saveLicenseConfig(this)">Save and validate</button>
       <button type="button" class="btn btn-ghost" onclick="closeLicenseConfigModal()">Close</button>
     </div>
   </div>
@@ -259,29 +243,18 @@
 
   const applyLicenseConfigData = (data) => {
     const config = (data && data.config) ? data.config : {};
-    const effective = config.effective || {};
     const identity = config.identity || {};
     const sources = config.sources || {};
 
-    const appVersionInput = document.getElementById('licenseAppVersion');
-    const appIdInput = document.getElementById('licenseAppId');
-    const deploymentIdInput = document.getElementById('licenseDeploymentId');
-    const offlinePathInput = document.getElementById('licenseOfflinePath');
-    const offlineStatePathInput = document.getElementById('licenseOfflineStatePath');
     const hintEl = document.getElementById('licenseConfigHint');
     const summaryEl = document.getElementById('licenseConfigSummary');
     const identityEl = document.getElementById('licenseConfigIdentity');
 
-    if(appVersionInput){ appVersionInput.value = effective.app_version || ''; }
-    if(appIdInput){ appIdInput.value = effective.app_id || ''; }
-    if(deploymentIdInput){ deploymentIdInput.value = effective.deployment_id || ''; }
-    if(offlinePathInput){ offlinePathInput.value = effective.offline_license_path || ''; }
-    if(offlineStatePathInput){ offlineStatePathInput.value = effective.offline_license_state_path || ''; }
     if(hintEl){
       hintEl.textContent = data && data.hint ? data.hint : '';
     }
     if(summaryEl){
-      summaryEl.textContent = `Sources - license_path: ${sources.offline_license_path || 'default'}, state_path: ${sources.offline_license_state_path || 'default'}, app_version: ${sources.app_version || 'default'}, app_id: ${sources.app_id || 'default'}`;
+      summaryEl.textContent = `Sources - license_path: ${sources.offline_license_path || 'default'}, state_path: ${sources.offline_license_state_path || 'default'}`;
     }
     if(identityEl){
       identityEl.textContent = `Instance ID: ${identity.instance_id || 'n/a'} | Fingerprint: ${identity.instance_fingerprint_sha256 || 'n/a'}`;
@@ -314,46 +287,6 @@
     modal.setAttribute('aria-hidden', 'false');
     if(!licenseConfigLoaded){
       loadLicenseConfig();
-    }
-  }
-
-  async function saveLicenseConfig(btn){
-    const appVersionInput = document.getElementById('licenseAppVersion');
-    const appIdInput = document.getElementById('licenseAppId');
-    const deploymentIdInput = document.getElementById('licenseDeploymentId');
-    const offlinePathInput = document.getElementById('licenseOfflinePath');
-    const offlineStatePathInput = document.getElementById('licenseOfflineStatePath');
-    const hintEl = document.getElementById('licenseConfigHint');
-
-    const payload = {
-      app_version: appVersionInput ? appVersionInput.value.trim() : '',
-      app_id: appIdInput ? appIdInput.value.trim() : '',
-      deployment_id: deploymentIdInput ? deploymentIdInput.value.trim() : '',
-      offline_license_path: offlinePathInput ? offlinePathInput.value.trim() : '',
-      offline_license_state_path: offlineStatePathInput ? offlineStatePathInput.value.trim() : '',
-      license_mode: 'offline',
-    };
-
-    setButtonBusy(btn, true, 'Saving...');
-    if(hintEl){ hintEl.textContent = 'Saving config and validating license...'; }
-    try{
-      const res = await fetch('/dashboard/license/config', {
-        method: 'POST',
-        headers: {'content-type': 'application/json'},
-        body: JSON.stringify(payload),
-      });
-      if(!res.ok){
-        const text = await res.text();
-        if(hintEl){ hintEl.textContent = `Save failed: http_${res.status}: ${text}`; }
-        return;
-      }
-      const data = await res.json();
-      applyLicenseConfigData(data);
-      if(data && data.licensing){ renderLicenseStatus(data.licensing); }
-    }catch(e){
-      if(hintEl){ hintEl.textContent = `Save failed: ${e.message || 'request_failed'}`; }
-    }finally{
-      setButtonBusy(btn, false);
     }
   }
 
