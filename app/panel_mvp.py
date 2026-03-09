@@ -5,6 +5,7 @@ import os
 import time
 import threading
 import json
+import tempfile
 import sqlite3
 import urllib.request
 from app.tls_config import get_ssl_context
@@ -14,7 +15,7 @@ from datetime import datetime, timezone
 
 _logger = logging.getLogger(__name__)
 
-from fastapi import FastAPI, Request, HTTPException, Body
+from fastapi import FastAPI, Request, HTTPException, Body, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -29,6 +30,7 @@ from app import license_runtime
 from app import api_modular
 from app.honeypot_monitor import HoneypotAvailabilityMonitor, get_history as hp_get_history, get_summary as hp_get_summary
 from honey_licensing.client import compute_client_identity
+from honey_licensing.offline_license import LicenseVerifier, load_trusted_public_keys_from_env
 from app.server_config import RequestTimeoutMiddleware, get_request_timeout
 
 APP_NAME = "noctisapi-panel"
@@ -168,6 +170,27 @@ def _license_config_snapshot() -> dict:
         },
         "identity": identity,
     }
+
+
+def _write_json_atomic(path: str, payload: dict) -> None:
+    target = str(path or "").strip()
+    if not target:
+        raise ValueError("license_path_empty")
+    parent = os.path.dirname(target) or "."
+    os.makedirs(parent, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix="license-upload-", suffix=".tmp", dir=parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, target)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+        raise
 
 
 CAMPAIGN_JOB_LOCK = threading.Lock()
@@ -444,6 +467,73 @@ def dashboard_license_config_update(payload: dict = Body(default={})):
 
     return {
         "saved": True,
+        "config": _license_config_snapshot(),
+        "licensing": licensing_snapshot,
+        "hint": hint,
+    }
+
+
+@app.post("/dashboard/license/upload", include_in_schema=False, response_class=JSONResponse)
+async def dashboard_license_upload(file: UploadFile = File(...)):
+    filename = str(file.filename or "").strip()
+    if not filename:
+        raise HTTPException(status_code=400, detail="license_file_required")
+    if not filename.lower().endswith(".json"):
+        raise HTTPException(status_code=400, detail="license_file_must_be_json")
+
+    try:
+        raw = await file.read()
+    except Exception:
+        raise HTTPException(status_code=400, detail="license_file_read_failed")
+    finally:
+        try:
+            await file.close()
+        except Exception:
+            pass
+
+    if not raw:
+        raise HTTPException(status_code=400, detail="license_file_empty")
+    if len(raw) > (1024 * 1024):
+        raise HTTPException(status_code=400, detail="license_file_too_large")
+
+    try:
+        document = json.loads(raw.decode("utf-8-sig"))
+    except Exception:
+        raise HTTPException(status_code=400, detail="license_json_invalid")
+    if not isinstance(document, dict):
+        raise HTTPException(status_code=400, detail="license_json_invalid")
+
+    trusted_keys = load_trusted_public_keys_from_env()
+    verifier = LicenseVerifier(trusted_keys=trusted_keys)
+    ok_sig, payload, sig_reason = verifier.verify(document)
+    if not ok_sig or not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail=sig_reason)
+
+    cfg = _license_config_snapshot()
+    license_path = str((cfg.get("effective") or {}).get("offline_license_path") or "").strip()
+    if not license_path:
+        raise HTTPException(status_code=500, detail="offline_license_path_not_configured")
+
+    try:
+        _write_json_atomic(license_path, document)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"license_write_failed:{exc.__class__.__name__}")
+
+    pro_license.clear_cache()
+    pro_ops.clear_cache()
+    licensing_snapshot = pro_license.get_backend_license_snapshot(force_refresh=True)
+    licensing_snapshot["refreshed"] = bool(licensing_snapshot.get("valid"))
+    licensing_snapshot["local_license_ok"] = bool(licensing_snapshot.get("valid"))
+    if licensing_snapshot.get("last_error"):
+        licensing_snapshot["refresh_error"] = licensing_snapshot.get("last_error")
+    hint = _license_error_hint(licensing_snapshot.get("refresh_error") or licensing_snapshot.get("last_error"))
+    licensing_snapshot["hint"] = hint
+
+    return {
+        "saved": True,
+        "license_path": license_path,
+        "uploaded_filename": filename,
+        "upload_validation": "ok",
         "config": _license_config_snapshot(),
         "licensing": licensing_snapshot,
         "hint": hint,

@@ -132,6 +132,13 @@
     </div>
     <div class="modal-body">
       <div id="licenseConfigHint" class="modal-hint"></div>
+      <div class="modal-form" style="margin-bottom:12px;">
+        <label for="licenseUploadFile">Upload signed license.json</label>
+        <input id="licenseUploadFile" class="input" type="file" accept=".json,application/json" />
+        <div class="modal-inline-actions" style="margin-top:8px;">
+          <button id="licenseUploadBtn" type="button" class="btn btn-outline" onclick="uploadLicenseFile(this)">Upload and validate</button>
+        </div>
+      </div>
       <div class="modal-form">
         <label for="licenseAppVersion">App version</label>
         <input id="licenseAppVersion" class="input" type="text" placeholder="0.1.1" />
@@ -392,6 +399,40 @@
       if(data && data.licensing){ renderLicenseStatus(data.licensing); }
     }catch(e){
       if(hintEl){ hintEl.textContent = `Reset failed: ${e.message || 'request_failed'}`; }
+    }finally{
+      setButtonBusy(btn, false);
+    }
+  }
+
+  async function uploadLicenseFile(btn){
+    const input = document.getElementById('licenseUploadFile');
+    const hintEl = document.getElementById('licenseConfigHint');
+    if(!input || !input.files || !input.files.length){
+      if(hintEl){ hintEl.textContent = 'Select a license.json file first.'; }
+      return;
+    }
+    const file = input.files[0];
+    const formData = new FormData();
+    formData.append('file', file);
+
+    setButtonBusy(btn, true, 'Uploading...');
+    if(hintEl){ hintEl.textContent = 'Uploading and validating signed license.json...'; }
+    try{
+      const res = await fetch('/dashboard/license/upload', {
+        method: 'POST',
+        body: formData,
+      });
+      if(!res.ok){
+        const text = await res.text();
+        if(hintEl){ hintEl.textContent = `Upload failed: http_${res.status}: ${text}`; }
+        return;
+      }
+      const data = await res.json();
+      applyLicenseConfigData(data);
+      if(data && data.licensing){ renderLicenseStatus(data.licensing); }
+      input.value = '';
+    }catch(e){
+      if(hintEl){ hintEl.textContent = `Upload failed: ${e.message || 'request_failed'}`; }
     }finally{
       setButtonBusy(btn, false);
     }
