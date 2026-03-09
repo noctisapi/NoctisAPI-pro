@@ -109,12 +109,20 @@ def _merge_keys_from_path(keys: dict[str, str], path: str) -> None:
             keys[kid] = raw_key
 
 
+def _bundled_keys_path() -> str:
+    return (os.getenv("HP_OFFLINE_PUBLIC_KEYS_BUNDLE_PATH") or "/app/app/offline_public_keys.json").strip()
+
+
 def load_effective_trusted_public_keys() -> dict[str, str]:
     """
-    Build trusted key map using env + runtime overrides.
-    Runtime overrides win over plain env values.
+    Build trusted key map using bundled image keys + env + runtime overrides.
+    Runtime overrides win over plain env values, and env wins over bundled defaults.
     """
-    keys = load_trusted_public_keys_from_env()
+    keys: dict[str, str] = {}
+    _merge_keys_from_path(keys, _bundled_keys_path())
+    env_keys = load_trusted_public_keys_from_env()
+    for kid, raw_key in env_keys.items():
+        keys[str(kid)] = str(raw_key)
     _merge_keys_from_json_text(keys, license_runtime.get_effective("HP_OFFLINE_PUBLIC_KEYS_JSON"))
     _merge_keys_from_json_text(keys, os.getenv("LICENSING_OFFLINE_PUBLIC_KEYS_JSON") or "")
     _merge_keys_from_path(

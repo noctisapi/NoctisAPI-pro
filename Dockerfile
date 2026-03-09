@@ -8,7 +8,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     HP_ENFORCE_LICENSE=0 \
     HP_APP_ID=noctisapi-pro \
     INSTANCE_ID_PATH=/var/lib/myapp/instance_id \
-    LICENSING_PINNED_PUBLIC_KEY_PATH=/app/app/licensing_server_public_key.pem
+    HP_OFFLINE_PUBLIC_KEYS_BUNDLE_PATH=/app/app/offline_public_keys.json
 
 WORKDIR /app
 

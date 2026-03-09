@@ -126,7 +126,7 @@
     <div class="modal-head">
       <div>
         <h3 id="licenseConfigTitle">License Setup</h3>
-        <p class="modal-subtitle">Edit offline license settings and validate locally.</p>
+        <p class="modal-subtitle">Upload signed license.json and validate locally with embedded public keys.</p>
       </div>
       <button type="button" class="btn btn-icon" onclick="closeLicenseConfigModal()" aria-label="Close license setup">&times;</button>
     </div>
@@ -154,12 +154,6 @@
 
         <label for="licenseOfflineStatePath">license_state.json path</label>
         <input id="licenseOfflineStatePath" class="input mono" type="text" placeholder="/var/lib/myapp/license_state.json" />
-
-        <label for="licenseOfflineKeysPath">offline public keys path (optional)</label>
-        <input id="licenseOfflineKeysPath" class="input mono" type="text" placeholder="/var/lib/myapp/offline_public_keys.json" />
-
-        <label for="licenseOfflineKeysJson">offline public keys JSON (optional)</label>
-        <textarea id="licenseOfflineKeysJson" class="input mono" rows="4" placeholder='{"ed25519-kid":"BASE64URL_RAW_KEY"}'></textarea>
 
         <label for="licenseFingerprintOverride">Fingerprint override (optional, 64 hex)</label>
         <input id="licenseFingerprintOverride" class="input mono" type="text" placeholder="" />
@@ -278,8 +272,6 @@
     const deploymentIdInput = document.getElementById('licenseDeploymentId');
     const offlinePathInput = document.getElementById('licenseOfflinePath');
     const offlineStatePathInput = document.getElementById('licenseOfflineStatePath');
-    const offlineKeysPathInput = document.getElementById('licenseOfflineKeysPath');
-    const offlineKeysJsonInput = document.getElementById('licenseOfflineKeysJson');
     const fpInput = document.getElementById('licenseFingerprintOverride');
     const hintEl = document.getElementById('licenseConfigHint');
     const summaryEl = document.getElementById('licenseConfigSummary');
@@ -290,14 +282,12 @@
     if(deploymentIdInput){ deploymentIdInput.value = effective.deployment_id || ''; }
     if(offlinePathInput){ offlinePathInput.value = effective.offline_license_path || ''; }
     if(offlineStatePathInput){ offlineStatePathInput.value = effective.offline_license_state_path || ''; }
-    if(offlineKeysPathInput){ offlineKeysPathInput.value = effective.offline_public_keys_path || ''; }
-    if(offlineKeysJsonInput){ offlineKeysJsonInput.value = ''; }
     if(fpInput){ fpInput.value = effective.instance_fingerprint_sha256_override || ''; }
     if(hintEl){
       hintEl.textContent = data && data.hint ? data.hint : '';
     }
     if(summaryEl){
-      summaryEl.textContent = `Sources - license_path: ${sources.offline_license_path || 'default'}, state_path: ${sources.offline_license_state_path || 'default'}, keys_path: ${sources.offline_public_keys_path || 'default'}, keys_json: ${sources.offline_public_keys_json || 'default'}, app_version: ${sources.app_version || 'default'}, app_id: ${sources.app_id || 'default'}`;
+      summaryEl.textContent = `Sources - license_path: ${sources.offline_license_path || 'default'}, state_path: ${sources.offline_license_state_path || 'default'}, app_version: ${sources.app_version || 'default'}, app_id: ${sources.app_id || 'default'}`;
     }
     if(identityEl){
       identityEl.textContent = `Instance ID: ${identity.instance_id || 'n/a'} | Fingerprint: ${identity.instance_fingerprint_sha256 || 'n/a'}`;
@@ -339,8 +329,6 @@
     const deploymentIdInput = document.getElementById('licenseDeploymentId');
     const offlinePathInput = document.getElementById('licenseOfflinePath');
     const offlineStatePathInput = document.getElementById('licenseOfflineStatePath');
-    const offlineKeysPathInput = document.getElementById('licenseOfflineKeysPath');
-    const offlineKeysJsonInput = document.getElementById('licenseOfflineKeysJson');
     const fpInput = document.getElementById('licenseFingerprintOverride');
     const hintEl = document.getElementById('licenseConfigHint');
 
@@ -350,8 +338,6 @@
       deployment_id: deploymentIdInput ? deploymentIdInput.value.trim() : '',
       offline_license_path: offlinePathInput ? offlinePathInput.value.trim() : '',
       offline_license_state_path: offlineStatePathInput ? offlineStatePathInput.value.trim() : '',
-      offline_public_keys_path: offlineKeysPathInput ? offlineKeysPathInput.value.trim() : '',
-      offline_public_keys_json: offlineKeysJsonInput ? offlineKeysJsonInput.value.trim() : '',
       license_mode: 'offline',
       instance_fingerprint_sha256: fpInput ? fpInput.value.trim() : '',
     };

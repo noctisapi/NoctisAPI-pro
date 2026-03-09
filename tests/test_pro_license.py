@@ -36,6 +36,7 @@ class TestProLicenseOffline(unittest.TestCase):
             "HP_OFFLINE_LICENSE_PATH",
             "HP_OFFLINE_LICENSE_STATE_PATH",
             "HP_OFFLINE_PUBLIC_KEYS_JSON",
+            "HP_OFFLINE_PUBLIC_KEYS_BUNDLE_PATH",
             "HP_DEPLOYMENT_ID",
             "HP_LICENSE_STATUS_REFRESH_SECONDS",
             "HP_LICENSE_RUNTIME_CONFIG_PATH",
@@ -132,6 +133,21 @@ class TestProLicenseOffline(unittest.TestCase):
 
     def test_valid_license_enables_pro(self):
         self._write_license(generation=1, expires_at=int(time.time()) + 3600)
+        snap = pro_license.get_backend_license_snapshot(force_refresh=True)
+        self.assertTrue(snap.get("valid"))
+        self.assertTrue(snap.get("pro_enabled"))
+
+    def test_bundled_public_keys_path_is_used(self):
+        self._write_license(generation=1, expires_at=int(time.time()) + 3600)
+        os.environ.pop("HP_OFFLINE_PUBLIC_KEYS_JSON", None)
+        pub_raw = self.private_key.public_key().public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw,
+        )
+        bundle_path = os.path.join(self._tmp.name, "offline_public_keys.json")
+        with open(bundle_path, "w", encoding="utf-8") as f:
+            json.dump({self.kid: _b64url(pub_raw)}, f, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+        os.environ["HP_OFFLINE_PUBLIC_KEYS_BUNDLE_PATH"] = bundle_path
         snap = pro_license.get_backend_license_snapshot(force_refresh=True)
         self.assertTrue(snap.get("valid"))
         self.assertTrue(snap.get("pro_enabled"))

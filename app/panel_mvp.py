@@ -431,8 +431,6 @@ def dashboard_license_config_update(payload: dict = Body(default={})):
         "deployment_id": "HP_DEPLOYMENT_ID",
         "offline_license_path": "HP_OFFLINE_LICENSE_PATH",
         "offline_license_state_path": "HP_OFFLINE_LICENSE_STATE_PATH",
-        "offline_public_keys_path": "HP_OFFLINE_PUBLIC_KEYS_PATH",
-        "offline_public_keys_json": "HP_OFFLINE_PUBLIC_KEYS_JSON",
         "license_mode": "HP_LICENSE_MODE",
         "instance_fingerprint_sha256": "INSTANCE_FINGERPRINT_SHA256",
     }
@@ -504,6 +502,8 @@ async def dashboard_license_upload(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="license_json_invalid")
 
     trusted_keys = pro_license.load_effective_trusted_public_keys()
+    if not trusted_keys:
+        raise HTTPException(status_code=500, detail="offline_public_keys_not_configured")
     verifier = LicenseVerifier(trusted_keys=trusted_keys)
     ok_sig, payload, sig_reason = verifier.verify(document)
     if not ok_sig or not isinstance(payload, dict):
