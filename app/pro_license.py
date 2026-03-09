@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+import json
 import os
 import threading
 import time
@@ -73,9 +74,61 @@ def _runtime_deployment_id() -> Optional[str]:
         return None
 
 
+def _merge_keys_from_json_text(keys: dict[str, str], raw_json: str) -> None:
+    raw = str(raw_json or "").strip()
+    if not raw:
+        return
+    try:
+        obj = json.loads(raw)
+    except Exception:
+        return
+    if not isinstance(obj, dict):
+        return
+    for k, v in obj.items():
+        kid = str(k or "").strip()
+        raw_key = str(v or "").strip()
+        if kid and raw_key:
+            keys[kid] = raw_key
+
+
+def _merge_keys_from_path(keys: dict[str, str], path: str) -> None:
+    key_path = str(path or "").strip()
+    if not key_path:
+        return
+    try:
+        with open(key_path, "r", encoding="utf-8") as f:
+            obj = json.load(f)
+    except Exception:
+        return
+    if not isinstance(obj, dict):
+        return
+    for k, v in obj.items():
+        kid = str(k or "").strip()
+        raw_key = str(v or "").strip()
+        if kid and raw_key:
+            keys[kid] = raw_key
+
+
+def load_effective_trusted_public_keys() -> dict[str, str]:
+    """
+    Build trusted key map using env + runtime overrides.
+    Runtime overrides win over plain env values.
+    """
+    keys = load_trusted_public_keys_from_env()
+    _merge_keys_from_json_text(keys, license_runtime.get_effective("HP_OFFLINE_PUBLIC_KEYS_JSON"))
+    _merge_keys_from_json_text(keys, os.getenv("LICENSING_OFFLINE_PUBLIC_KEYS_JSON") or "")
+    _merge_keys_from_path(
+        keys,
+        license_runtime.get_effective("HP_OFFLINE_PUBLIC_KEYS_PATH")
+        or os.getenv("LICENSING_OFFLINE_PUBLIC_KEYS_PATH")
+        or "",
+    )
+    return keys
+
+
 def _fetch_local_license() -> tuple[bool, Optional[int], Optional[str], dict[str, Any]]:
     license_path, state_path = _license_paths()
-    trusted_keys = load_trusted_public_keys_from_env()
+    trusted_keys = load_effective_trusted_public_keys()
     decision = resolve_local_license_state(
         license_path=license_path,
         state_path=state_path,

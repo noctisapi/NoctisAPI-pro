@@ -8,6 +8,7 @@ import unittest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from app import license_runtime
 from app import pro_license
 
 
@@ -37,12 +38,15 @@ class TestProLicenseOffline(unittest.TestCase):
             "HP_OFFLINE_PUBLIC_KEYS_JSON",
             "HP_DEPLOYMENT_ID",
             "HP_LICENSE_STATUS_REFRESH_SECONDS",
+            "HP_LICENSE_RUNTIME_CONFIG_PATH",
         )}
 
         self.license_path = os.path.join(self._tmp.name, "license.json")
         self.state_path = os.path.join(self._tmp.name, "license_state.json")
+        self.runtime_config_path = os.path.join(self._tmp.name, "license_runtime_overrides.json")
         os.environ["HP_OFFLINE_LICENSE_PATH"] = self.license_path
         os.environ["HP_OFFLINE_LICENSE_STATE_PATH"] = self.state_path
+        os.environ["HP_LICENSE_RUNTIME_CONFIG_PATH"] = self.runtime_config_path
         os.environ["HP_DEPLOYMENT_ID"] = "dep-test-001"
         os.environ["HP_LICENSE_STATUS_REFRESH_SECONDS"] = "1"
 
@@ -53,10 +57,12 @@ class TestProLicenseOffline(unittest.TestCase):
             format=serialization.PublicFormat.Raw,
         )
         os.environ["HP_OFFLINE_PUBLIC_KEYS_JSON"] = json.dumps({self.kid: _b64url(pub_raw)})
+        license_runtime.clear_overrides()
         pro_license.clear_cache()
 
     def tearDown(self):
         pro_license.clear_cache()
+        license_runtime.clear_overrides()
         self._tmp.cleanup()
         for k, v in self._old_env.items():
             if v is None:
@@ -147,6 +153,21 @@ class TestProLicenseOffline(unittest.TestCase):
         self.assertFalse(snap.get("valid"))
         self.assertFalse(snap.get("pro_enabled"))
         self.assertEqual(str(snap.get("reason_code")), "LICENSE_SIGNATURE_INVALID")
+
+    def test_public_keys_json_override_is_used_for_validation(self):
+        self._write_license(generation=1, expires_at=int(time.time()) + 3600)
+        os.environ.pop("HP_OFFLINE_PUBLIC_KEYS_JSON", None)
+        pub_raw = self.private_key.public_key().public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw,
+        )
+        license_runtime.save_overrides(
+            updates={"HP_OFFLINE_PUBLIC_KEYS_JSON": json.dumps({self.kid: _b64url(pub_raw)})},
+            clear_all=False,
+        )
+        snap = pro_license.get_backend_license_snapshot(force_refresh=True)
+        self.assertTrue(snap.get("valid"))
+        self.assertTrue(snap.get("pro_enabled"))
 
 
 if __name__ == "__main__":

@@ -30,7 +30,7 @@ from app import license_runtime
 from app import api_modular
 from app.honeypot_monitor import HoneypotAvailabilityMonitor, get_history as hp_get_history, get_summary as hp_get_summary
 from honey_licensing.client import compute_client_identity
-from honey_licensing.offline_license import LicenseVerifier, load_trusted_public_keys_from_env
+from honey_licensing.offline_license import LicenseVerifier
 from app.server_config import RequestTimeoutMiddleware, get_request_timeout
 
 APP_NAME = "noctisapi-panel"
@@ -503,7 +503,7 @@ async def dashboard_license_upload(file: UploadFile = File(...)):
     if not isinstance(document, dict):
         raise HTTPException(status_code=400, detail="license_json_invalid")
 
-    trusted_keys = load_trusted_public_keys_from_env()
+    trusted_keys = pro_license.load_effective_trusted_public_keys()
     verifier = LicenseVerifier(trusted_keys=trusted_keys)
     ok_sig, payload, sig_reason = verifier.verify(document)
     if not ok_sig or not isinstance(payload, dict):
