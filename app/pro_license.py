@@ -171,14 +171,6 @@ def get_backend_license_snapshot(*, force_refresh: bool = False) -> dict[str, An
     return dict(snapshot)
 
 
-def get_backend_lease(*, force_refresh: bool = False) -> tuple[Optional[str], Optional[str], dict[str, Any]]:
-    del force_refresh
-    snapshot = get_backend_license_snapshot(force_refresh=False)
-    if bool(snapshot.get("valid")) and str(snapshot.get("decision") or "").upper() == "ALLOW":
-        return None, "OFFLINE_ONLY_NO_BACKEND_LEASE", {"source": "offline_license", "tier": snapshot.get("entitlements", {}).get("tier")}
-    return None, str(snapshot.get("reason_code") or "OFFLINE_INVALID"), {"source": "offline_license"}
-
-
 def is_pro_enabled() -> bool:
     snapshot = get_backend_license_snapshot(force_refresh=False)
     return bool(snapshot.get("pro_enabled"))

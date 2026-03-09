@@ -90,6 +90,33 @@ class TestProLicenseOffline(unittest.TestCase):
         with open(self.license_path, "w", encoding="utf-8") as f:
             json.dump(doc, f, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
+    def _write_invalid_signature_license(self) -> None:
+        payload = {
+            "schema_version": 2,
+            "license_id": "lic-test-invalid-signature",
+            "account_id": "acct-1",
+            "plan": "pro",
+            "tier": "pro",
+            "status": "active",
+            "issued_at": int(time.time()),
+            "expires_at": int(time.time()) + 3600,
+            "features": ["cases", "campaigns"],
+            "entitlements": ["pro", "cases", "campaigns"],
+            "license_generation": 1,
+            "deployment_binding": {
+                "mode": "soft",
+                "deployment_id": "dep-test-001",
+            },
+            "offline_policy": {
+                "offline_grace_seconds": 60,
+                "fallback_tier": "core",
+            },
+        }
+        doc = _signed_doc(private_key=self.private_key, kid=self.kid, payload=payload)
+        doc["signature"]["value"] = "invalid-signature"
+        with open(self.license_path, "w", encoding="utf-8") as f:
+            json.dump(doc, f, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+
     def test_missing_license_is_core(self):
         snap = pro_license.get_backend_license_snapshot(force_refresh=True)
         self.assertFalse(snap.get("pro_enabled"))
@@ -113,6 +140,13 @@ class TestProLicenseOffline(unittest.TestCase):
         second = pro_license.get_backend_license_snapshot(force_refresh=True)
         self.assertFalse(second.get("valid"))
         self.assertEqual(str(second.get("reason_code")), "ROLLBACK_DETECTED")
+
+    def test_invalid_signature_falls_back_to_core(self):
+        self._write_invalid_signature_license()
+        snap = pro_license.get_backend_license_snapshot(force_refresh=True)
+        self.assertFalse(snap.get("valid"))
+        self.assertFalse(snap.get("pro_enabled"))
+        self.assertEqual(str(snap.get("reason_code")), "LICENSE_SIGNATURE_INVALID")
 
 
 if __name__ == "__main__":

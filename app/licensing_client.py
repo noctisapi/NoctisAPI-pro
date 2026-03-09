@@ -15,9 +15,6 @@ from honey_licensing.client import (  # noqa: F401
     compute_instance_fingerprint_sha256_hex,
     get_default_manager,
     get_or_create_uuid_file,
-    load_pinned_public_key_pem,
-    post_json,
-    verify_jws_rs256_compact,
 )
 
 __all__ = [
@@ -30,8 +27,4 @@ __all__ = [
     "compute_instance_fingerprint_sha256_hex",
     "get_default_manager",
     "get_or_create_uuid_file",
-    "load_pinned_public_key_pem",
-    "post_json",
-    "verify_jws_rs256_compact",
 ]
-

@@ -5,52 +5,23 @@ import hashlib
 import json
 import os
 import sqlite3
-import threading
-import tempfile
 import time
 from datetime import datetime, timezone
 from typing import Any
 
-import httpx
-
-from honey_licensing.client import verify_jws_rs256_compact
-from app.proxy_config import build_httpx_mounts
-from app.tls_config import get_ssl_context
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives.serialization import load_pem_public_key
 
 
 PRO_STATE_TABLE = "campaign_pro_state"
 PRO_STATUS_VERIFIED = "verified"
 PRO_STATUS_PENDING = "pending"
 PRO_STATUS_UNVERIFIED = "unverified"
-CLIENT_CAP_SECONDS = 43200
-_LEASE_CACHE_LOCK = threading.Lock()
-_LEASE_CACHE: dict[str, Any] = {
-    "lease_jws": "",
-    "exp": 0,
-    "cached_at": 0,
-    "backend_url": "",
-    "app_id": "",
-    "app_version": "",
-    "instance_id": "",
-    "instance_fingerprint": "",
-    "license_key_hash": "",
-}
 
 
 class CampaignProError(RuntimeError):
     pass
-
-
-class CampaignProExplicitDeny(CampaignProError):
-    """Raised when the licensing server returns an explicit DENY decision (e.g. revoked, suspended).
-
-    Unlike a network or transport error, this must NOT trigger a fallback to cached leases:
-    the server has explicitly rejected the license and the client must reflect that immediately.
-    """
-
-    def __init__(self, reason_code: str) -> None:
-        super().__init__(f"explicit_deny:{reason_code}")
-        self.reason_code = str(reason_code or "DENIED").strip().upper()
 
 
 def _env_int(name: str, default: int, min_value: int | None = None, max_value: int | None = None) -> int:
@@ -89,140 +60,40 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def _lease_cache_path() -> str:
-    return (os.getenv("HP_PRO_LEASE_CACHE_PATH") or "/var/lib/myapp/pro_lease_cache.json").strip()
+def _decode_b64url(s: str) -> bytes:
+    raw = str(s or "").strip()
+    if not raw:
+        return b""
+    pad = "=" * ((4 - (len(raw) % 4)) % 4)
+    return base64.urlsafe_b64decode((raw + pad).encode("ascii"))
 
 
-def _decode_jws_payload_unverified(jws_compact: str) -> dict[str, Any]:
+def _verify_jws_rs256_compact(jws_compact: str, public_key_pem: bytes) -> dict[str, Any]:
     parts = (jws_compact or "").strip().split(".")
     if len(parts) != 3:
-        return {}
-    payload_b64 = str(parts[1] or "").strip()
-    if not payload_b64:
-        return {}
-    pad = "=" * ((4 - (len(payload_b64) % 4)) % 4)
+        raise ValueError("invalid_jws_format")
+
+    header_raw = _decode_b64url(parts[0])
+    payload_raw = _decode_b64url(parts[1])
+    signature = _decode_b64url(parts[2])
     try:
-        raw = base64.urlsafe_b64decode((payload_b64 + pad).encode("ascii"))
-        obj = json.loads(raw.decode("utf-8", errors="strict"))
-        return obj if isinstance(obj, dict) else {}
+        header = json.loads(header_raw.decode("utf-8", errors="strict"))
     except Exception:
-        return {}
+        raise ValueError("invalid_jws_header")
+    if not isinstance(header, dict) or str(header.get("alg") or "") != "RS256":
+        raise ValueError("invalid_jws_alg")
 
+    signing_input = (parts[0] + "." + parts[1]).encode("ascii")
+    pub = load_pem_public_key(public_key_pem)
+    pub.verify(signature, signing_input, padding.PKCS1v15(), hashes.SHA256())
 
-def _best_effort_lease_exp(lease_jws: str) -> int:
-    payload = _decode_jws_payload_unverified(lease_jws)
-    exp_raw = payload.get("exp") if payload.get("exp") is not None else payload.get("expires_at")
     try:
-        return int(exp_raw) if exp_raw is not None else 0
+        payload = json.loads(payload_raw.decode("utf-8", errors="strict"))
     except Exception:
-        return 0
-
-
-def _best_effort_lease_issued_at(lease_jws: str) -> int:
-    payload = _decode_jws_payload_unverified(lease_jws)
-    issued_at_raw = payload.get("issued_at") if payload.get("issued_at") is not None else payload.get("iat")
-    try:
-        return int(issued_at_raw) if issued_at_raw is not None else 0
-    except Exception:
-        return 0
-
-
-def _best_effort_offline_grace_seconds(lease_jws: str) -> int | None:
-    payload = _decode_jws_payload_unverified(lease_jws)
-    raw = payload.get("offline_grace_seconds")
-    if raw is None:
-        return None
-    try:
-        return int(raw)
-    except Exception:
-        return None
-
-
-def _effective_grace_seconds(raw_offline_grace_seconds: int | None) -> int:
-    if raw_offline_grace_seconds is None:
-        return int(CLIENT_CAP_SECONDS)
-    return min(max(0, int(raw_offline_grace_seconds)), int(CLIENT_CAP_SECONDS))
-
-
-def _cache_binding(
-    *,
-    backend_url: str,
-    license_key: str,
-    app_id: str,
-    app_version: str,
-    instance_id: str,
-    instance_fingerprint: str,
-) -> dict[str, str]:
-    return {
-        "backend_url": str(backend_url or "").strip().rstrip("/"),
-        "app_id": str(app_id or "").strip(),
-        "app_version": str(app_version or "").strip(),
-        "instance_id": str(instance_id or "").strip(),
-        "instance_fingerprint": str(instance_fingerprint or "").strip(),
-        "license_key_hash": sha256_hex_text(str(license_key or "").strip()),
-    }
-
-
-def _cache_entry_usable(
-    entry: dict[str, Any],
-    *,
-    now: int,
-    binding: dict[str, str],
-    require_offline_grace: bool,
-) -> bool:
-    lease_jws = str(entry.get("lease_jws") or "").strip()
-    if not lease_jws:
-        return False
-    exp = _best_effort_lease_exp(lease_jws)
-    if exp <= now + 30:
-        return False
-    for key in ("backend_url", "app_id", "app_version", "instance_id", "instance_fingerprint", "license_key_hash"):
-        expected = str(binding.get(key) or "")
-        if key == "backend_url" and not expected:
-            continue
-        if expected and str(entry.get(key) or "") != expected:
-            return False
-    if require_offline_grace:
-        issued_at = _best_effort_lease_issued_at(lease_jws)
-        if issued_at <= 0:
-            return False
-        grace_raw = _best_effort_offline_grace_seconds(lease_jws)
-        effective_grace = _effective_grace_seconds(grace_raw)
-        if (now - issued_at) > effective_grace:
-            return False
-    return True
-
-
-def _read_lease_cache_file(path: str) -> dict[str, Any]:
-    cache_path = str(path or "").strip()
-    if not cache_path:
-        return {}
-    try:
-        with open(cache_path, "r", encoding="utf-8") as f:
-            obj = json.load(f)
-            return obj if isinstance(obj, dict) else {}
-    except Exception:
-        return {}
-
-
-def _write_lease_cache_file(path: str, payload: dict[str, Any]) -> None:
-    cache_path = str(path or "").strip()
-    if not cache_path:
-        return
-    parent = os.path.dirname(cache_path) or "."
-    os.makedirs(parent, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(prefix="lease-cache-", suffix=".tmp", dir=parent)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False, sort_keys=True)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp_path, cache_path)
-    except Exception:
-        try:
-            os.unlink(tmp_path)
-        except Exception:
-            pass
+        raise ValueError("invalid_jws_payload")
+    if not isinstance(payload, dict):
+        raise ValueError("invalid_jws_payload")
+    return payload
 
 
 def stage_from_score(score: int) -> int:
@@ -552,143 +423,6 @@ def apply_verified_campaign_result(conn: sqlite3.Connection, result: dict[str, A
     return metrics
 
 
-def pro_backend_url() -> str:
-    # Legacy licensing backend path removed: runtime licensing is offline-only.
-    return ""
-
-
-def request_backend_lease(
-    *,
-    backend_url: str,
-    license_key: str,
-    app_id: str,
-    app_version: str,
-    instance_id: str,
-    instance_fingerprint: str,
-    timeout_s: float = 12.0,
-) -> dict[str, Any]:
-    _ = (backend_url, license_key, app_id, app_version, instance_id, instance_fingerprint, timeout_s)
-    raise CampaignProError("legacy_license_backend_flow_removed")
-
-
-def report_runtime_state(
-    *,
-    backend_url: str,
-    license_key: str,
-    app_id: str,
-    app_version: str,
-    instance_id: str,
-    instance_fingerprint: str,
-    valid: bool,
-    decision: str,
-    reason_code: str | None,
-    client_error: str | None,
-    expires_at: int | None,
-    entitlements: list[str],
-    timeout_s: float = 8.0,
-) -> str | None:
-    _ = (
-        backend_url,
-        license_key,
-        app_id,
-        app_version,
-        instance_id,
-        instance_fingerprint,
-        valid,
-        decision,
-        reason_code,
-        client_error,
-        expires_at,
-        entitlements,
-        timeout_s,
-    )
-    return "legacy_license_backend_flow_removed"
-
-
-def get_backend_lease_cached(
-    *,
-    backend_url: str,
-    license_key: str,
-    app_id: str,
-    app_version: str,
-    instance_id: str,
-    instance_fingerprint: str,
-    force_refresh: bool = False,
-) -> tuple[str, str]:
-    _ = (
-        backend_url,
-        license_key,
-        app_id,
-        app_version,
-        instance_id,
-        instance_fingerprint,
-        force_refresh,
-    )
-    raise CampaignProError("legacy_license_backend_flow_removed")
-
-
-def request_recompute_job(
-    *,
-    backend_url: str,
-    lease_jws: str,
-    app_id: str,
-    instance_id: str,
-    license_key_hash: str,
-    snapshot: dict[str, Any],
-    snapshot_hash: str,
-    timeout_s: float = 15.0,
-) -> dict[str, Any]:
-    payload = {
-        "app_id": app_id,
-        "instance_id": instance_id,
-        "license_key_hash": license_key_hash or None,
-        "snapshot_hash": snapshot_hash,
-        "snapshot": snapshot,
-    }
-    headers = {"authorization": f"Bearer {lease_jws}"}
-    try:
-        with httpx.Client(timeout=timeout_s, verify=get_ssl_context(), mounts=build_httpx_mounts(get_ssl_context())) as client:
-            resp = client.post(f"{backend_url}/v1/pro/campaigns/recompute", json=payload, headers=headers)
-    except Exception as exc:
-        raise CampaignProError(f"enqueue_transport_error:{exc.__class__.__name__}")
-    if resp.status_code != 200:
-        raise CampaignProError(f"enqueue_failed:{resp.status_code}:{resp.text[:200]}")
-    data = resp.json() if resp.content else {}
-    if not isinstance(data, dict) or not data.get("job_id"):
-        raise CampaignProError("enqueue_invalid_response")
-    return data
-
-
-def fetch_job_status(*, backend_url: str, lease_jws: str, job_id: str, timeout_s: float = 10.0) -> dict[str, Any]:
-    headers = {"authorization": f"Bearer {lease_jws}"}
-    try:
-        with httpx.Client(timeout=timeout_s, verify=get_ssl_context(), mounts=build_httpx_mounts(get_ssl_context())) as client:
-            resp = client.get(f"{backend_url}/v1/pro/jobs/{job_id}", headers=headers)
-    except Exception as exc:
-        raise CampaignProError(f"job_status_transport_error:{exc.__class__.__name__}")
-    if resp.status_code != 200:
-        raise CampaignProError(f"job_status_failed:{resp.status_code}:{resp.text[:200]}")
-    data = resp.json() if resp.content else {}
-    if not isinstance(data, dict):
-        raise CampaignProError("job_status_invalid_response")
-    return data
-
-
-def fetch_job_result(*, backend_url: str, lease_jws: str, job_id: str, timeout_s: float = 12.0) -> dict[str, Any]:
-    headers = {"authorization": f"Bearer {lease_jws}"}
-    try:
-        with httpx.Client(timeout=timeout_s, verify=get_ssl_context(), mounts=build_httpx_mounts(get_ssl_context())) as client:
-            resp = client.get(f"{backend_url}/v1/pro/jobs/{job_id}/result", headers=headers)
-    except Exception as exc:
-        raise CampaignProError(f"job_result_transport_error:{exc.__class__.__name__}")
-    if resp.status_code != 200:
-        raise CampaignProError(f"job_result_failed:{resp.status_code}:{resp.text[:200]}")
-    data = resp.json() if resp.content else {}
-    if not isinstance(data, dict):
-        raise CampaignProError("job_result_invalid_response")
-    return data
-
-
 def load_results_public_key_pem() -> bytes:
     path = (os.getenv("PRO_RESULTS_PUBLIC_KEY_PATH") or "/app/app/pro_results_public_key.pem").strip()
     with open(path, "rb") as f:
@@ -713,7 +447,7 @@ def verify_signed_campaign_result(
     except Exception as exc:
         raise CampaignProError(f"results_pubkey_load_failed:{exc.__class__.__name__}")
     try:
-        payload = verify_jws_rs256_compact(sig, public_key_pem)
+        payload = _verify_jws_rs256_compact(sig, public_key_pem)
     except Exception as exc:
         raise CampaignProError(f"invalid_result_signature:{exc.__class__.__name__}")
     now = int(time.time())
@@ -754,8 +488,3 @@ def verify_signed_campaign_result(
             raise CampaignProError("response_expired")
 
     return result, payload, exp
-
-
-def hash_license_key() -> str:
-    # Legacy licensing backend path removed: no runtime license key required.
-    return ""

@@ -1,8 +1,6 @@
 ﻿from __future__ import annotations
 
-import base64
 import hashlib
-import json
 import os
 import platform
 import re
@@ -13,11 +11,7 @@ import uuid
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Callable, Dict, Optional, Tuple
-
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import padding
-from cryptography.hazmat.primitives.serialization import load_pem_public_key
+from typing import Any, Dict, Optional
 
 from honey_licensing.offline_license import load_trusted_public_keys_from_env, resolve_local_license_state
 
@@ -42,47 +36,6 @@ def _env_int(name: str, default: int) -> int:
         return int(default)
 
 
-def _b64url_decode(s: str) -> bytes:
-    ss = (s or "").strip()
-    if not ss:
-        return b""
-    pad = "=" * ((4 - (len(ss) % 4)) % 4)
-    return base64.urlsafe_b64decode((ss + pad).encode("ascii"))
-
-
-def verify_jws_rs256_compact(jws_compact: str, public_key_pem: bytes) -> Dict[str, Any]:
-    parts = (jws_compact or "").strip().split(".")
-    if len(parts) != 3:
-        raise ValueError("invalid_jws_format")
-
-    header_raw = _b64url_decode(parts[0])
-    payload_raw = _b64url_decode(parts[1])
-    sig = _b64url_decode(parts[2])
-
-    try:
-        header = json.loads(header_raw.decode("utf-8", errors="strict"))
-    except Exception:
-        raise ValueError("invalid_jws_header_json")
-    if not isinstance(header, dict):
-        raise ValueError("invalid_jws_header_type")
-
-    alg = str(header.get("alg") or "")
-    if alg != "RS256":
-        raise ValueError("unsupported_jws_alg")
-
-    signing_input = (parts[0] + "." + parts[1]).encode("ascii")
-    pub = load_pem_public_key(public_key_pem)
-    pub.verify(sig, signing_input, padding.PKCS1v15(), hashes.SHA256())
-
-    try:
-        payload = json.loads(payload_raw.decode("utf-8", errors="strict"))
-    except Exception:
-        raise ValueError("invalid_jws_payload_json")
-    if not isinstance(payload, dict):
-        raise ValueError("invalid_jws_payload_type")
-    return payload
-
-
 def _read_text_file(path: str) -> Optional[str]:
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -90,12 +43,6 @@ def _read_text_file(path: str) -> Optional[str]:
             return val or None
     except Exception:
         return None
-
-
-def load_pinned_public_key_pem() -> bytes:
-    path = (os.getenv("LICENSING_PINNED_PUBLIC_KEY_PATH") or "/app/app/licensing_server_public_key.pem").strip()
-    with open(path, "rb") as f:
-        return f.read()
 
 
 def get_or_create_uuid_file(path: str) -> str:
@@ -181,16 +128,10 @@ class LicensingState:
     expires_at: Optional[int]
     entitlements: Dict[str, Any]
     recheck_after_seconds: Optional[int]
-    lease_jws: Optional[str] = None
 
 
 class LicensingStartupDenied(RuntimeError):
     pass
-
-
-def post_json(url: str, payload: Dict[str, Any], timeout: float) -> Tuple[int, Dict[str, Any]]:
-    _ = (url, payload, timeout)
-    return 0, {"_error": "offline_only_license_mode"}
 
 
 class LicensingManager:
@@ -215,9 +156,8 @@ class LicensingManager:
         enforce_on_startup: bool = False,
         limited_behavior: str = "core",
         deny_behavior: str = "disable",
-        post_json_func: Callable[[str, Dict[str, Any], float], Tuple[int, Dict[str, Any]]] = post_json,
     ) -> None:
-        _ = (licensing_url, license_key, app_id, app_version, http_timeout_seconds, limited_behavior, deny_behavior, post_json_func)
+        _ = (licensing_url, license_key, app_id, app_version, http_timeout_seconds, limited_behavior, deny_behavior)
         self._instance_id_path = (instance_id_path or "/var/lib/myapp/instance_id").strip()
         self._enforce_on_startup = bool(enforce_on_startup)
         self._min_recheck_seconds = max(5, int(min_recheck_seconds or 30))
@@ -233,7 +173,6 @@ class LicensingManager:
             expires_at=None,
             entitlements={},
             recheck_after_seconds=self._min_recheck_seconds,
-            lease_jws=None,
         )
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -296,7 +235,6 @@ class LicensingManager:
             expires_at=decision.expires_at,
             entitlements=decision.entitlements,
             recheck_after_seconds=self._min_recheck_seconds,
-            lease_jws=None,
         )
 
     def start(self) -> None:
@@ -330,9 +268,6 @@ class LicensingManager:
         with self._lock:
             return replace(self._state)
 
-    def get_lease_jws(self) -> Optional[str]:
-        return None
-
     def refresh_now(self) -> LicensingState:
         st = self._validate_once()
         with self._lock:
@@ -365,13 +300,3 @@ def get_default_manager() -> LicensingManager:
         if _DEFAULT_MANAGER is None:
             _DEFAULT_MANAGER = LicensingManager.from_env()
         return _DEFAULT_MANAGER
-
-
-def make_mock_post_json(responses: Dict[str, Tuple[int, Dict[str, Any]]]) -> Callable[[str, Dict[str, Any], float], Tuple[int, Dict[str, Any]]]:
-    def _mock(url: str, payload: Dict[str, Any], timeout: float) -> Tuple[int, Dict[str, Any]]:
-        _ = (payload, timeout)
-        if url in responses:
-            return responses[url]
-        return 404, {"_error": "not_mocked"}
-
-    return _mock

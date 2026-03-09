@@ -8,9 +8,6 @@ from .client import (  # noqa: F401
     compute_instance_fingerprint_sha256_hex,
     get_default_manager,
     get_or_create_uuid_file,
-    load_pinned_public_key_pem,
-    post_json,
-    verify_jws_rs256_compact,
 )
 from .feature_flags import (  # noqa: F401
     Feature,
@@ -34,9 +31,6 @@ __all__ = [
     "compute_instance_fingerprint_sha256_hex",
     "get_default_manager",
     "get_or_create_uuid_file",
-    "load_pinned_public_key_pem",
-    "post_json",
-    "verify_jws_rs256_compact",
     # feature_flags
     "Feature",
     "LicenseTier",
@@ -47,4 +41,3 @@ __all__ = [
     "is_pro_enabled",
     "set_pro_enabled_provider",
 ]
-
