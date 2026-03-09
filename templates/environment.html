@@ -156,23 +156,12 @@
   .diag-detail { font-size: 0.8rem; color: var(--muted); font-family: monospace; word-break: break-all; }
   .diag-placeholder { color: var(--muted); font-size: 0.85rem; padding: 14px 0; }
 
-  /* ── Egress ── */
-  .egress-row {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    padding: 7px 0;
-    border-bottom: 1px solid rgba(255,255,255,0.03);
-  }
-  .egress-row:last-child { border-bottom: none; }
-  .egress-host  { font-family: monospace; font-size: 0.85rem; }
-  .egress-checks { display: flex; gap: 8px; font-size: 0.78rem; }
 </style>
 
 <div class="page-head">
   <div>
     <h1>Environment</h1>
-    <div class="sub">Proxy, TLS, egress and logging configuration &middot; live diagnostics</div>
+    <div class="sub">TLS, logging and runtime configuration &middot; live diagnostics</div>
   </div>
 </div>
 
@@ -190,12 +179,7 @@
   </div>
 
   <div id="diag-results" style="padding:0 24px;">
-    <div class="diag-placeholder">Click "Run Diagnostics" to check DNS, HTTPS, proxy, and TLS trust store.</div>
-  </div>
-
-  <div id="egress-results" style="padding:0 24px;margin-top:16px;display:none;">
-    <div class="env-section-title" style="margin-top:0;">Egress Hosts</div>
-    <div id="egress-list"></div>
+    <div class="diag-placeholder">Click "Run Diagnostics" to check DNS and TLS trust store.</div>
   </div>
 </div>
 
@@ -264,7 +248,6 @@ function runDiagnostics() {
     .then(r => r.json())
     .then(data => {
       renderDiagnostics(data.diagnostics || []);
-      renderEgress(data.egress || []);
     })
     .catch(err => {
       diagEl.innerHTML = '<div class="diag-placeholder" style="color:#f2a6a6">Request failed: ' + escHtml(String(err)) + '</div>';
@@ -286,29 +269,6 @@ function renderDiagnostics(results) {
       <span class="diag-tag ${cls}">${tag}</span>
       <span class="diag-label">${escHtml(r.label)}</span>
       ${detail}
-    </div>`;
-  }).join('');
-}
-
-function renderEgress(results) {
-  const wrap = document.getElementById('egress-results');
-  const list = document.getElementById('egress-list');
-  if (!results.length) { wrap.style.display = 'none'; return; }
-  wrap.style.display = 'block';
-  list.innerHTML = results.map(r => {
-    const dnsOk = r.dns === 'ok';
-    const dns = `<span style="color:${dnsOk ? '#7ee2b8' : '#f2a6a6'}">dns [${dnsOk ? 'OK' : 'ERR'}]</span>`;
-    let tcp = '';
-    if (r.port !== null && r.port !== undefined) {
-      const tcpOk = r.tcp === 'ok';
-      tcp = `<span style="color:${tcpOk ? '#7ee2b8' : '#f2a6a6'}">tcp [${tcpOk ? 'OK' : 'ERR'}]</span>`;
-    }
-    const portStr = (r.port !== null && r.port !== undefined) ? ':' + r.port : '';
-    const errStr = r.error ? `<span style="color:#f2a6a6;font-family:monospace;font-size:0.78rem;">${escHtml(r.error)}</span>` : '';
-    return `<div class="egress-row">
-      <span class="egress-host">${escHtml(r.host)}${portStr}</span>
-      <div class="egress-checks">${dns}${tcp ? ' ' + tcp : ''}</div>
-      ${errStr}
     </div>`;
   }).join('');
 }

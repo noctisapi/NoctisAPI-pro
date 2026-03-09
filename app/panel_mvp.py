@@ -3686,14 +3686,13 @@ async def environment_save_setting(payload: dict = Body(...)):
 @app.post("/dashboard/environment/diagnostics")
 async def environment_run_diagnostics():
     from app.diagnostics import run_diagnostics
-    from app.egress import check_egress_hosts
     diag_results = run_diagnostics()
-    egress_results = check_egress_hosts()
+    hidden_labels = {"outbound HTTPS", "proxy"}
+    filtered = [r for r in diag_results if str(r.label or "") not in hidden_labels]
     return JSONResponse({
         "diagnostics": [
             {"label": r.label, "status": r.status, "detail": r.detail}
-            for r in diag_results
+            for r in filtered
         ],
-        "egress": egress_results,
     })
 

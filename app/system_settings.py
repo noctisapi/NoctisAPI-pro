@@ -74,9 +74,7 @@ KEY_LABELS: dict[str, str] = {
 
 # Group keys by category for ordered display in the UI
 KEY_GROUPS: list[tuple[str, list[str]]] = [
-    ("Outbound Proxy", ["HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY"]),
     ("TLS Trust Store", ["SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "HP_EXTRA_CERTS_DIR"]),
-    ("Egress", ["EGRESS_REQUIRED_HOSTS", "EGRESS_CONNECT_TIMEOUT"]),
     ("Logging", ["LOG_LEVEL", "LOG_FORMAT", "LOG_SYSLOG_HOST", "LOG_SYSLOG_PORT", "LOG_SYSLOG_SOCKTYPE", "LOG_SYSLOG_FACILITY"]),
     ("Reverse Proxy", ["PUBLIC_BASE_URL", "TRUSTED_PROXIES"]),
     ("Timeouts", ["REQUEST_TIMEOUT", "KEEPALIVE_TIMEOUT"]),
