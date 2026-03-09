@@ -154,16 +154,12 @@
 
         <label for="licenseOfflineStatePath">license_state.json path</label>
         <input id="licenseOfflineStatePath" class="input mono" type="text" placeholder="/var/lib/myapp/license_state.json" />
-
-        <label for="licenseFingerprintOverride">Fingerprint override (optional, 64 hex)</label>
-        <input id="licenseFingerprintOverride" class="input mono" type="text" placeholder="" />
       </div>
       <div id="licenseConfigSummary" class="modal-hint" style="margin-top:10px;"></div>
       <div id="licenseConfigIdentity" class="modal-hint"></div>
     </div>
     <div class="modal-actions">
       <button id="licenseConfigSaveBtn" type="button" class="btn btn-primary" onclick="saveLicenseConfig(this)">Save and validate</button>
-      <button id="licenseConfigResetBtn" type="button" class="btn btn-outline" onclick="resetLicenseOverrides(this)">Use only .env</button>
       <button type="button" class="btn btn-ghost" onclick="closeLicenseConfigModal()">Close</button>
     </div>
   </div>
@@ -272,7 +268,6 @@
     const deploymentIdInput = document.getElementById('licenseDeploymentId');
     const offlinePathInput = document.getElementById('licenseOfflinePath');
     const offlineStatePathInput = document.getElementById('licenseOfflineStatePath');
-    const fpInput = document.getElementById('licenseFingerprintOverride');
     const hintEl = document.getElementById('licenseConfigHint');
     const summaryEl = document.getElementById('licenseConfigSummary');
     const identityEl = document.getElementById('licenseConfigIdentity');
@@ -282,7 +277,6 @@
     if(deploymentIdInput){ deploymentIdInput.value = effective.deployment_id || ''; }
     if(offlinePathInput){ offlinePathInput.value = effective.offline_license_path || ''; }
     if(offlineStatePathInput){ offlineStatePathInput.value = effective.offline_license_state_path || ''; }
-    if(fpInput){ fpInput.value = effective.instance_fingerprint_sha256_override || ''; }
     if(hintEl){
       hintEl.textContent = data && data.hint ? data.hint : '';
     }
@@ -329,7 +323,6 @@
     const deploymentIdInput = document.getElementById('licenseDeploymentId');
     const offlinePathInput = document.getElementById('licenseOfflinePath');
     const offlineStatePathInput = document.getElementById('licenseOfflineStatePath');
-    const fpInput = document.getElementById('licenseFingerprintOverride');
     const hintEl = document.getElementById('licenseConfigHint');
 
     const payload = {
@@ -339,7 +332,6 @@
       offline_license_path: offlinePathInput ? offlinePathInput.value.trim() : '',
       offline_license_state_path: offlineStatePathInput ? offlineStatePathInput.value.trim() : '',
       license_mode: 'offline',
-      instance_fingerprint_sha256: fpInput ? fpInput.value.trim() : '',
     };
 
     setButtonBusy(btn, true, 'Saving...');
@@ -360,31 +352,6 @@
       if(data && data.licensing){ renderLicenseStatus(data.licensing); }
     }catch(e){
       if(hintEl){ hintEl.textContent = `Save failed: ${e.message || 'request_failed'}`; }
-    }finally{
-      setButtonBusy(btn, false);
-    }
-  }
-
-  async function resetLicenseOverrides(btn){
-    const hintEl = document.getElementById('licenseConfigHint');
-    setButtonBusy(btn, true, 'Resetting...');
-    if(hintEl){ hintEl.textContent = 'Clearing runtime overrides and validating...'; }
-    try{
-      const res = await fetch('/dashboard/license/config', {
-        method: 'POST',
-        headers: {'content-type': 'application/json'},
-        body: JSON.stringify({clear_overrides: true}),
-      });
-      if(!res.ok){
-        const text = await res.text();
-        if(hintEl){ hintEl.textContent = `Reset failed: http_${res.status}: ${text}`; }
-        return;
-      }
-      const data = await res.json();
-      applyLicenseConfigData(data);
-      if(data && data.licensing){ renderLicenseStatus(data.licensing); }
-    }catch(e){
-      if(hintEl){ hintEl.textContent = `Reset failed: ${e.message || 'request_failed'}`; }
     }finally{
       setButtonBusy(btn, false);
     }

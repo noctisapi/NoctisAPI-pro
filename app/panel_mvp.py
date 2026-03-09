@@ -127,7 +127,6 @@ def _license_config_snapshot() -> dict:
         or os.getenv("HP_API_VERSION")
         or ""
     ).strip()
-    fp_override = license_runtime.get_effective("INSTANCE_FINGERPRINT_SHA256").strip()
     deployment_id = (license_runtime.get_effective("HP_DEPLOYMENT_ID") or os.getenv("HP_DEPLOYMENT_ID") or "").strip()
     license_path = (
         license_runtime.get_effective("HP_OFFLINE_LICENSE_PATH")
@@ -156,7 +155,6 @@ def _license_config_snapshot() -> dict:
             "offline_license_state_path": state_path,
             "offline_public_keys_path": keys_path,
             "offline_public_keys_json_configured": bool(keys_json),
-            "instance_fingerprint_sha256_override": fp_override,
         },
         "sources": {
             "app_id": _source("HP_APP_ID"),
@@ -166,7 +164,6 @@ def _license_config_snapshot() -> dict:
             "offline_license_state_path": _source("HP_OFFLINE_LICENSE_STATE_PATH"),
             "offline_public_keys_path": _source("HP_OFFLINE_PUBLIC_KEYS_PATH"),
             "offline_public_keys_json": _source("HP_OFFLINE_PUBLIC_KEYS_JSON"),
-            "instance_fingerprint_sha256_override": _source("INSTANCE_FINGERPRINT_SHA256"),
         },
         "identity": identity,
     }
@@ -432,7 +429,6 @@ def dashboard_license_config_update(payload: dict = Body(default={})):
         "offline_license_path": "HP_OFFLINE_LICENSE_PATH",
         "offline_license_state_path": "HP_OFFLINE_LICENSE_STATE_PATH",
         "license_mode": "HP_LICENSE_MODE",
-        "instance_fingerprint_sha256": "INSTANCE_FINGERPRINT_SHA256",
     }
     updates: dict[str, str] = {}
     for field, env_key in field_map.items():
@@ -440,11 +436,7 @@ def dashboard_license_config_update(payload: dict = Body(default={})):
             continue
         raw = payload.get(field)
         updates[env_key] = "" if raw is None else str(raw)
-
-    clear_all = bool(payload.get("clear_overrides"))
     try:
-        if clear_all:
-            license_runtime.clear_overrides()
         if updates:
             license_runtime.save_overrides(updates=updates, clear_all=False)
     except ValueError as exc:
