@@ -126,30 +126,36 @@
     <div class="modal-head">
       <div>
         <h3 id="licenseConfigTitle">License Setup</h3>
-        <p class="modal-subtitle">Edit runtime license settings and validate immediately.</p>
+        <p class="modal-subtitle">Edit offline license settings and validate locally.</p>
       </div>
       <button type="button" class="btn btn-icon" onclick="closeLicenseConfigModal()" aria-label="Close license setup">&times;</button>
     </div>
     <div class="modal-body">
       <div id="licenseConfigHint" class="modal-hint"></div>
       <div class="modal-form">
-        <label for="licenseBackendUrl">PRO backend URL</label>
-        <input id="licenseBackendUrl" class="input" type="url" placeholder="https://licensing.example.com" />
-
-        <label for="licenseReportUrl">License report URL (optional, recommended when backend is separate)</label>
-        <input id="licenseReportUrl" class="input" type="url" placeholder="https://license.example.com" />
-
         <label for="licenseAppVersion">App version</label>
         <input id="licenseAppVersion" class="input" type="text" placeholder="0.1.1" />
 
         <label for="licenseAppId">App ID</label>
         <input id="licenseAppId" class="input" type="text" placeholder="noctisapi-pro" />
 
+        <label for="licenseDeploymentId">Deployment ID (optional)</label>
+        <input id="licenseDeploymentId" class="input mono" type="text" placeholder="dep-prod-001" />
+
+        <label for="licenseOfflinePath">license.json path</label>
+        <input id="licenseOfflinePath" class="input mono" type="text" placeholder="/var/lib/myapp/license.json" />
+
+        <label for="licenseOfflineStatePath">license_state.json path</label>
+        <input id="licenseOfflineStatePath" class="input mono" type="text" placeholder="/var/lib/myapp/license_state.json" />
+
+        <label for="licenseOfflineKeysPath">offline public keys path (optional)</label>
+        <input id="licenseOfflineKeysPath" class="input mono" type="text" placeholder="/var/lib/myapp/offline_public_keys.json" />
+
+        <label for="licenseOfflineKeysJson">offline public keys JSON (optional)</label>
+        <textarea id="licenseOfflineKeysJson" class="input mono" rows="4" placeholder='{"ed25519-kid":"BASE64URL_RAW_KEY"}'></textarea>
+
         <label for="licenseFingerprintOverride">Fingerprint override (optional, 64 hex)</label>
         <input id="licenseFingerprintOverride" class="input mono" type="text" placeholder="" />
-
-        <label for="licenseKeyInput">License key (optional, only updates if provided)</label>
-        <input id="licenseKeyInput" class="input mono" type="password" placeholder="" autocomplete="off" />
       </div>
       <div id="licenseConfigSummary" class="modal-hint" style="margin-top:10px;"></div>
       <div id="licenseConfigIdentity" class="modal-hint"></div>
@@ -260,31 +266,31 @@
     const identity = config.identity || {};
     const sources = config.sources || {};
 
-    const backendInput = document.getElementById('licenseBackendUrl');
     const appVersionInput = document.getElementById('licenseAppVersion');
     const appIdInput = document.getElementById('licenseAppId');
-    const reportUrlInput = document.getElementById('licenseReportUrl');
+    const deploymentIdInput = document.getElementById('licenseDeploymentId');
+    const offlinePathInput = document.getElementById('licenseOfflinePath');
+    const offlineStatePathInput = document.getElementById('licenseOfflineStatePath');
+    const offlineKeysPathInput = document.getElementById('licenseOfflineKeysPath');
+    const offlineKeysJsonInput = document.getElementById('licenseOfflineKeysJson');
     const fpInput = document.getElementById('licenseFingerprintOverride');
-    const keyInput = document.getElementById('licenseKeyInput');
     const hintEl = document.getElementById('licenseConfigHint');
     const summaryEl = document.getElementById('licenseConfigSummary');
     const identityEl = document.getElementById('licenseConfigIdentity');
 
-    if(backendInput){ backendInput.value = effective.backend_url || ''; }
-    if(reportUrlInput){ reportUrlInput.value = effective.report_url || ''; }
     if(appVersionInput){ appVersionInput.value = effective.app_version || ''; }
     if(appIdInput){ appIdInput.value = effective.app_id || ''; }
+    if(deploymentIdInput){ deploymentIdInput.value = effective.deployment_id || ''; }
+    if(offlinePathInput){ offlinePathInput.value = effective.offline_license_path || ''; }
+    if(offlineStatePathInput){ offlineStatePathInput.value = effective.offline_license_state_path || ''; }
+    if(offlineKeysPathInput){ offlineKeysPathInput.value = effective.offline_public_keys_path || ''; }
+    if(offlineKeysJsonInput){ offlineKeysJsonInput.value = ''; }
     if(fpInput){ fpInput.value = effective.instance_fingerprint_sha256_override || ''; }
-    if(keyInput){
-      keyInput.value = '';
-      const preview = effective.license_key_preview || '';
-      keyInput.placeholder = effective.license_key_configured ? `Configured (${preview})` : 'sk_live_...';
-    }
     if(hintEl){
       hintEl.textContent = data && data.hint ? data.hint : '';
     }
     if(summaryEl){
-      summaryEl.textContent = `Sources - backend: ${sources.backend_url || 'default'}, report: ${sources.report_url || 'default'}, app_version: ${sources.app_version || 'default'}, app_id: ${sources.app_id || 'default'}, license_key: ${sources.license_key || 'default'}`;
+      summaryEl.textContent = `Sources - license_path: ${sources.offline_license_path || 'default'}, state_path: ${sources.offline_license_state_path || 'default'}, keys_path: ${sources.offline_public_keys_path || 'default'}, keys_json: ${sources.offline_public_keys_json || 'default'}, app_version: ${sources.app_version || 'default'}, app_id: ${sources.app_id || 'default'}`;
     }
     if(identityEl){
       identityEl.textContent = `Instance ID: ${identity.instance_id || 'n/a'} | Fingerprint: ${identity.instance_fingerprint_sha256 || 'n/a'}`;
@@ -321,25 +327,27 @@
   }
 
   async function saveLicenseConfig(btn){
-    const backendInput = document.getElementById('licenseBackendUrl');
     const appVersionInput = document.getElementById('licenseAppVersion');
     const appIdInput = document.getElementById('licenseAppId');
-    const reportUrlInput = document.getElementById('licenseReportUrl');
+    const deploymentIdInput = document.getElementById('licenseDeploymentId');
+    const offlinePathInput = document.getElementById('licenseOfflinePath');
+    const offlineStatePathInput = document.getElementById('licenseOfflineStatePath');
+    const offlineKeysPathInput = document.getElementById('licenseOfflineKeysPath');
+    const offlineKeysJsonInput = document.getElementById('licenseOfflineKeysJson');
     const fpInput = document.getElementById('licenseFingerprintOverride');
-    const keyInput = document.getElementById('licenseKeyInput');
     const hintEl = document.getElementById('licenseConfigHint');
 
     const payload = {
-      backend_url: backendInput ? backendInput.value.trim() : '',
-      report_url: reportUrlInput ? reportUrlInput.value.trim() : '',
       app_version: appVersionInput ? appVersionInput.value.trim() : '',
       app_id: appIdInput ? appIdInput.value.trim() : '',
+      deployment_id: deploymentIdInput ? deploymentIdInput.value.trim() : '',
+      offline_license_path: offlinePathInput ? offlinePathInput.value.trim() : '',
+      offline_license_state_path: offlineStatePathInput ? offlineStatePathInput.value.trim() : '',
+      offline_public_keys_path: offlineKeysPathInput ? offlineKeysPathInput.value.trim() : '',
+      offline_public_keys_json: offlineKeysJsonInput ? offlineKeysJsonInput.value.trim() : '',
+      license_mode: 'offline',
       instance_fingerprint_sha256: fpInput ? fpInput.value.trim() : '',
     };
-    const keyValue = keyInput ? keyInput.value.trim() : '';
-    if(keyValue){
-      payload.license_key = keyValue;
-    }
 
     setButtonBusy(btn, true, 'Saving...');
     if(hintEl){ hintEl.textContent = 'Saving config and validating license...'; }

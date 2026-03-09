@@ -14,7 +14,6 @@ from typing import Any
 import httpx
 
 from honey_licensing.client import verify_jws_rs256_compact
-from app import license_runtime
 from app.proxy_config import build_httpx_mounts
 from app.tls_config import get_ssl_context
 
@@ -554,7 +553,8 @@ def apply_verified_campaign_result(conn: sqlite3.Connection, result: dict[str, A
 
 
 def pro_backend_url() -> str:
-    return license_runtime.get_effective("PRO_BACKEND_URL").strip().rstrip("/")
+    # Legacy licensing backend path removed: runtime licensing is offline-only.
+    return ""
 
 
 def request_backend_lease(
@@ -567,31 +567,8 @@ def request_backend_lease(
     instance_fingerprint: str,
     timeout_s: float = 12.0,
 ) -> dict[str, Any]:
-    payload = {
-        "license_key": license_key,
-        "app_id": app_id,
-        "app_version": app_version,
-        "instance_id": instance_id,
-        "instance_fingerprint": instance_fingerprint,
-    }
-    try:
-        with httpx.Client(timeout=timeout_s, verify=get_ssl_context(), mounts=build_httpx_mounts(get_ssl_context())) as client:
-            resp = client.post(f"{backend_url}/v1/licenses/validate", json=payload)
-    except Exception as exc:
-        raise CampaignProError(f"lease_transport_error:{exc.__class__.__name__}")
-    if resp.status_code != 200:
-        raise CampaignProError(f"lease_failed:{resp.status_code}:{resp.text[:200]}")
-    data = resp.json() if resp.content else {}
-    if not isinstance(data, dict):
-        raise CampaignProError("lease_invalid_response")
-    lease_jws = str(data.get("lease_jws") or "").strip()
-    if not lease_jws:
-        decision = str(data.get("decision") or "").strip().upper()
-        if decision == "DENY":
-            reason_code = str(data.get("reason_code") or "DENIED").strip()
-            raise CampaignProExplicitDeny(reason_code)
-        raise CampaignProError("lease_missing_jws")
-    return data
+    _ = (backend_url, license_key, app_id, app_version, instance_id, instance_fingerprint, timeout_s)
+    raise CampaignProError("legacy_license_backend_flow_removed")
 
 
 def report_runtime_state(
@@ -610,29 +587,22 @@ def report_runtime_state(
     entitlements: list[str],
     timeout_s: float = 8.0,
 ) -> str | None:
-    if not backend_url:
-        return "missing_PRO_BACKEND_URL"
-    payload: dict[str, Any] = {
-        "license_key": license_key,
-        "app_id": app_id,
-        "app_version": app_version,
-        "instance_id": instance_id,
-        "instance_fingerprint_sha256": instance_fingerprint,
-        "valid": bool(valid),
-        "decision": str(decision or "").strip().upper() or ("ALLOW" if valid else "DENY"),
-        "reason_code": (str(reason_code or "").strip() or None),
-        "client_error": (str(client_error or "").strip() or None),
-        "expires_at": int(expires_at) if expires_at is not None else None,
-        "entitlements": [str(x or "").strip() for x in (entitlements or []) if str(x or "").strip()],
-    }
-    try:
-        with httpx.Client(timeout=timeout_s, verify=get_ssl_context(), mounts=build_httpx_mounts(get_ssl_context())) as client:
-            resp = client.post(f"{backend_url}/v1/runtime/report", json=payload)
-    except Exception as exc:
-        return f"runtime_report_transport_error:{exc.__class__.__name__}"
-    if resp.status_code != 200:
-        return f"runtime_report_failed:{resp.status_code}:{resp.text[:120]}"
-    return None
+    _ = (
+        backend_url,
+        license_key,
+        app_id,
+        app_version,
+        instance_id,
+        instance_fingerprint,
+        valid,
+        decision,
+        reason_code,
+        client_error,
+        expires_at,
+        entitlements,
+        timeout_s,
+    )
+    return "legacy_license_backend_flow_removed"
 
 
 def get_backend_lease_cached(
@@ -645,95 +615,16 @@ def get_backend_lease_cached(
     instance_fingerprint: str,
     force_refresh: bool = False,
 ) -> tuple[str, str]:
-    cache_path = _lease_cache_path()
-    now = int(time.time())
-    binding = _cache_binding(
-        backend_url=backend_url,
-        license_key=license_key,
-        app_id=app_id,
-        app_version=app_version,
-        instance_id=instance_id,
-        instance_fingerprint=instance_fingerprint,
+    _ = (
+        backend_url,
+        license_key,
+        app_id,
+        app_version,
+        instance_id,
+        instance_fingerprint,
+        force_refresh,
     )
-
-    with _LEASE_CACHE_LOCK:
-        mem_entry = dict(_LEASE_CACHE)
-    if (not force_refresh) and _cache_entry_usable(
-        mem_entry,
-        now=now,
-        binding=binding,
-        require_offline_grace=True,
-    ):
-        return str(mem_entry.get("lease_jws") or ""), "cache"
-
-    disk_entry = _read_lease_cache_file(cache_path)
-    if (not force_refresh) and _cache_entry_usable(
-        disk_entry,
-        now=now,
-        binding=binding,
-        require_offline_grace=True,
-    ):
-        with _LEASE_CACHE_LOCK:
-            _LEASE_CACHE.update(disk_entry)
-        return str(disk_entry.get("lease_jws") or ""), "cache"
-
-    if not backend_url:
-        for entry in (mem_entry, disk_entry):
-            if _cache_entry_usable(
-                entry,
-                now=now,
-                binding=binding,
-                require_offline_grace=True,
-            ):
-                return str(entry.get("lease_jws") or ""), "cache"
-        raise CampaignProError("missing_PRO_BACKEND_URL")
-
-    try:
-        data = request_backend_lease(
-            backend_url=backend_url,
-            license_key=license_key,
-            app_id=app_id,
-            app_version=app_version,
-            instance_id=instance_id,
-            instance_fingerprint=instance_fingerprint,
-        )
-    except CampaignProExplicitDeny:
-        # Server explicitly denied (revoked / suspended / plan change): never fall back to a
-        # cached lease.  The client must reflect the server's decision immediately.
-        raise
-    except CampaignProError as exc:
-        for entry in (mem_entry, disk_entry):
-            if _cache_entry_usable(
-                entry,
-                now=now,
-                binding=binding,
-                require_offline_grace=True,
-            ):
-                return str(entry.get("lease_jws") or ""), "cache"
-        raise exc
-
-    lease_jws = str(data.get("lease_jws") or "").strip()
-    exp = _best_effort_lease_exp(lease_jws)
-    if exp <= 0:
-        try:
-            exp = int(data.get("exp") or 0)
-        except Exception:
-            exp = 0
-    issued_at = _best_effort_lease_issued_at(lease_jws)
-    offline_grace_seconds = _best_effort_offline_grace_seconds(lease_jws)
-
-    cache_entry = {
-        "lease_jws": lease_jws,
-        "exp": int(exp or 0),
-        "issued_at": int(issued_at or 0),
-        "offline_grace_seconds": offline_grace_seconds,
-        "cached_at": now,
-        **binding,
-    }
-    with _LEASE_CACHE_LOCK:
-        _LEASE_CACHE.update(cache_entry)
-    _write_lease_cache_file(cache_path, cache_entry)
-    return lease_jws, "backend"
+    raise CampaignProError("legacy_license_backend_flow_removed")
 
 
 def request_recompute_job(
@@ -866,7 +757,5 @@ def verify_signed_campaign_result(
 
 
 def hash_license_key() -> str:
-    key = license_runtime.get_effective("LICENSE_KEY").strip()
-    if not key:
-        return ""
-    return sha256_hex_text(key)
+    # Legacy licensing backend path removed: no runtime license key required.
+    return ""

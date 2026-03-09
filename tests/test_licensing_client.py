@@ -1,11 +1,13 @@
+﻿import base64
+import json
 import os
+import tempfile
 import time
 import unittest
-import tempfile
 from uuid import UUID
 
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from honey_licensing.client import (
     LicensingManager,
@@ -16,22 +18,25 @@ from honey_licensing.client import (
 )
 
 
-def _b64url(b: bytes) -> str:
-    import base64
-
-    return base64.urlsafe_b64encode(b).decode("ascii").rstrip("=")
+def _b64url(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
 
 
-def _make_jws_rs256(payload: dict, private_key) -> str:
-    import json
+def _canonical_json_bytes(obj: dict) -> bytes:
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
-    header = {"alg": "RS256", "typ": "JWT"}
-    h = _b64url(json.dumps(header, separators=(",", ":"), sort_keys=True).encode("utf-8"))
-    p = _b64url(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8"))
-    signing_input = (h + "." + p).encode("ascii")
-    sig = private_key.sign(signing_input, padding.PKCS1v15(), hashes.SHA256())
-    s = _b64url(sig)
-    return h + "." + p + "." + s
+
+def _make_signed_license_document(*, private_key: Ed25519PrivateKey, kid: str, payload: dict) -> dict:
+    sig = private_key.sign(_canonical_json_bytes(payload))
+    return {
+        "schema": "license.json/v2",
+        "payload": payload,
+        "signature": {
+            "alg": "Ed25519",
+            "kid": kid,
+            "value": _b64url(sig),
+        },
+    }
 
 
 class TestUUIDFile(unittest.TestCase):
@@ -71,271 +76,97 @@ class TestFingerprint(unittest.TestCase):
         int(ident["instance_fingerprint_sha256"], 16)
 
 
-class TestLicensingManager(unittest.TestCase):
-    def _with_keypair(self):
-        priv = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-        pub_pem = priv.public_key().public_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+class TestLicensingManagerOffline(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self._old_env = {k: os.environ.get(k) for k in (
+            "HP_OFFLINE_LICENSE_PATH",
+            "HP_OFFLINE_LICENSE_STATE_PATH",
+            "HP_OFFLINE_PUBLIC_KEYS_JSON",
+            "HP_DEPLOYMENT_ID",
+            "INSTANCE_ID_PATH",
+            "HP_ENFORCE_LICENSE",
+        )}
+
+        self.license_path = os.path.join(self._tmp.name, "license.json")
+        self.state_path = os.path.join(self._tmp.name, "license_state.json")
+        self.instance_id_path = os.path.join(self._tmp.name, "instance_id")
+        self.deployment_id = get_or_create_uuid_file(self.instance_id_path)
+
+        os.environ["HP_OFFLINE_LICENSE_PATH"] = self.license_path
+        os.environ["HP_OFFLINE_LICENSE_STATE_PATH"] = self.state_path
+        os.environ["INSTANCE_ID_PATH"] = self.instance_id_path
+        os.environ["HP_DEPLOYMENT_ID"] = self.deployment_id
+        os.environ["HP_ENFORCE_LICENSE"] = "0"
+
+        self.private_key = Ed25519PrivateKey.generate()
+        self.kid = "test-ed25519-1"
+        pub_raw = self.private_key.public_key().public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw,
         )
-        return priv, pub_pem
+        os.environ["HP_OFFLINE_PUBLIC_KEYS_JSON"] = json.dumps({self.kid: _b64url(pub_raw)})
 
-    def _set_pinned_pubkey_path(self, pub_pem: bytes):
-        old_path = os.environ.get("LICENSING_PINNED_PUBLIC_KEY_PATH")
-        td = tempfile.TemporaryDirectory()
-        pub_path = os.path.join(td.name, "licensing_server_public_key.pem")
-        with open(pub_path, "wb") as f:
-            f.write(pub_pem)
-        os.environ["LICENSING_PINNED_PUBLIC_KEY_PATH"] = pub_path
-        return td, old_path
-
-    def test_startup_allow_enables_pro_when_enforced(self):
-        priv, pub_pem = self._with_keypair()
-        key_dir, old_path = self._set_pinned_pubkey_path(pub_pem)
-        try:
-            with tempfile.TemporaryDirectory() as td:
-                licensing_url = "https://licensing.example.com"
-                validate_url = licensing_url + "/v1/licenses/validate"
-
-                def mock(url: str, payload: dict, timeout: float):
-                    _ = timeout
-                    if url != validate_url:
-                        return 404, {"detail": "not found"}
-                    signed = {
-                        "request_nonce": payload["nonce"],
-                        "request_timestamp": payload["timestamp"],
-                        "valid": True,
-                        "decision": "ALLOW",
-                        "reason_code": "ok",
-                        "expires_at": int(time.time()) + 3600,
-                        "entitlements": {"plan": "pro"},
-                        "recheck_after_seconds": 1,
-                    }
-                    return 200, {"server_signature": _make_jws_rs256(signed, priv)}
-
-                mgr = LicensingManager(
-                    licensing_url=licensing_url,
-                    license_key="sk_live_test",
-                    app_id="noctisapi-pro",
-                    app_version="1.2.3",
-                    instance_id_path=td + "/instance_id",
-                    http_timeout_seconds=0.1,
-                    min_recheck_seconds=1,
-                    enforce_on_startup=True,
-                    post_json_func=mock,
-                )
-                mgr.start()
-                try:
-                    self.assertTrue(mgr.is_pro_enabled())
-                    st = mgr.get_state()
-                    self.assertEqual(st.decision, "ALLOW")
-                    self.assertTrue(st.valid)
-                finally:
-                    mgr.stop()
-        finally:
-            key_dir.cleanup()
-            if old_path is None:
-                os.environ.pop("LICENSING_PINNED_PUBLIC_KEY_PATH", None)
+    def tearDown(self):
+        self._tmp.cleanup()
+        for k, v in self._old_env.items():
+            if v is None:
+                os.environ.pop(k, None)
             else:
-                os.environ["LICENSING_PINNED_PUBLIC_KEY_PATH"] = old_path
+                os.environ[k] = v
 
-    def test_startup_deny_raises_when_enforced(self):
-        priv, pub_pem = self._with_keypair()
-        key_dir, old_path = self._set_pinned_pubkey_path(pub_pem)
+    def _write_license(self, *, expires_at: int) -> None:
+        payload = {
+            "schema_version": 2,
+            "license_id": "lic-test-1",
+            "account_id": "acct-1",
+            "plan": "pro",
+            "tier": "pro",
+            "status": "active",
+            "issued_at": int(time.time()),
+            "expires_at": int(expires_at),
+            "features": ["campaigns", "cases"],
+            "entitlements": ["pro", "campaigns", "cases"],
+            "license_generation": 1,
+            "deployment_binding": {
+                "mode": "soft",
+                "deployment_id": self.deployment_id,
+            },
+            "offline_policy": {
+                "offline_grace_seconds": 60,
+                "fallback_tier": "core",
+            },
+        }
+        doc = _make_signed_license_document(private_key=self.private_key, kid=self.kid, payload=payload)
+        with open(self.license_path, "w", encoding="utf-8") as f:
+            json.dump(doc, f, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+
+    def test_startup_denied_when_enforced_and_missing_license(self):
+        os.environ["HP_ENFORCE_LICENSE"] = "1"
+        mgr = LicensingManager.from_env()
+        with self.assertRaises(LicensingStartupDenied):
+            mgr.start()
+
+    def test_startup_allow_with_valid_signed_license(self):
+        self._write_license(expires_at=int(time.time()) + 3600)
+        mgr = LicensingManager.from_env()
+        mgr.start()
         try:
-            with tempfile.TemporaryDirectory() as td:
-                licensing_url = "https://licensing.example.com"
-                validate_url = licensing_url + "/v1/licenses/validate"
-
-                def mock(url: str, payload: dict, timeout: float):
-                    _ = timeout
-                    if url != validate_url:
-                        return 404, {"detail": "not found"}
-                    signed = {
-                        "request_nonce": payload["nonce"],
-                        "request_timestamp": payload["timestamp"],
-                        "valid": True,
-                        "decision": "DENY",
-                        "reason_code": "revoked",
-                        "expires_at": int(time.time()) + 3600,
-                        "entitlements": {},
-                        "recheck_after_seconds": 1,
-                    }
-                    return 200, {"server_signature": _make_jws_rs256(signed, priv)}
-
-                mgr = LicensingManager(
-                    licensing_url=licensing_url,
-                    license_key="sk_live_test",
-                    app_id="noctisapi-pro",
-                    app_version="1.2.3",
-                    instance_id_path=td + "/instance_id",
-                    http_timeout_seconds=0.1,
-                    min_recheck_seconds=1,
-                    enforce_on_startup=True,
-                    post_json_func=mock,
-                )
-                with self.assertRaises(LicensingStartupDenied):
-                    mgr.start()
+            self.assertTrue(mgr.is_pro_enabled())
+            st = mgr.get_state()
+            self.assertTrue(st.valid)
+            self.assertEqual(st.decision, "ALLOW")
+            self.assertEqual(st.reason_code, "OK")
         finally:
-            key_dir.cleanup()
-            if old_path is None:
-                os.environ.pop("LICENSING_PINNED_PUBLIC_KEY_PATH", None)
-            else:
-                os.environ["LICENSING_PINNED_PUBLIC_KEY_PATH"] = old_path
+            mgr.stop()
 
-    def test_nonce_mismatch_sets_invalid_state_when_not_enforced(self):
-        priv, pub_pem = self._with_keypair()
-        key_dir, old_path = self._set_pinned_pubkey_path(pub_pem)
-        try:
-            with tempfile.TemporaryDirectory() as td:
-                licensing_url = "https://licensing.example.com"
-                validate_url = licensing_url + "/v1/licenses/validate"
-
-                def mock(url: str, payload: dict, timeout: float):
-                    _ = timeout
-                    if url != validate_url:
-                        return 404, {"detail": "not found"}
-                    signed = {
-                        "request_nonce": "WRONG_NONCE",
-                        "request_timestamp": payload["timestamp"],
-                        "valid": True,
-                        "decision": "ALLOW",
-                        "reason_code": "ok",
-                        "expires_at": int(time.time()) + 3600,
-                        "entitlements": {},
-                        "recheck_after_seconds": 1,
-                    }
-                    return 200, {"server_signature": _make_jws_rs256(signed, priv)}
-
-                mgr = LicensingManager(
-                    licensing_url=licensing_url,
-                    license_key="sk_live_test",
-                    app_id="noctisapi-pro",
-                    app_version="1.2.3",
-                    instance_id_path=td + "/instance_id",
-                    http_timeout_seconds=0.1,
-                    min_recheck_seconds=1,
-                    enforce_on_startup=False,
-                    post_json_func=mock,
-                )
-                mgr.start()
-                try:
-                    self.assertFalse(mgr.is_pro_enabled())
-                    st = mgr.get_state()
-                    self.assertFalse(st.valid)
-                    self.assertEqual(st.last_error, "nonce_mismatch")
-                finally:
-                    mgr.stop()
-        finally:
-            key_dir.cleanup()
-            if old_path is None:
-                os.environ.pop("LICENSING_PINNED_PUBLIC_KEY_PATH", None)
-            else:
-                os.environ["LICENSING_PINNED_PUBLIC_KEY_PATH"] = old_path
-
-    def test_403_with_signature_is_processed(self):
-        priv, pub_pem = self._with_keypair()
-        key_dir, old_path = self._set_pinned_pubkey_path(pub_pem)
-        try:
-            with tempfile.TemporaryDirectory() as td:
-                licensing_url = "https://licensing.example.com"
-                validate_url = licensing_url + "/v1/licenses/validate"
-
-                def mock(url: str, payload: dict, timeout: float):
-                    _ = timeout
-                    if url != validate_url:
-                        return 404, {"detail": "not found"}
-                    signed = {
-                        "request_nonce": payload["nonce"],
-                        "request_timestamp": payload["timestamp"],
-                        "valid": False,
-                        "decision": "DENY",
-                        "reason_code": "revoked",
-                        "expires_at": int(time.time()) + 3600,
-                        "entitlements": {},
-                        "recheck_after_seconds": 1,
-                    }
-                    return 403, {"server_signature": _make_jws_rs256(signed, priv)}
-
-                mgr = LicensingManager(
-                    licensing_url=licensing_url,
-                    license_key="sk_live_test",
-                    app_id="noctisapi-pro",
-                    app_version="1.2.3",
-                    instance_id_path=td + "/instance_id",
-                    http_timeout_seconds=0.1,
-                    min_recheck_seconds=1,
-                    enforce_on_startup=False,
-                    post_json_func=mock,
-                )
-                mgr.start()
-                try:
-                    st = mgr.get_state()
-                    self.assertEqual(st.decision, "DENY")
-                    self.assertEqual(st.reason_code, "revoked")
-                    self.assertIsNone(st.last_error)
-                    self.assertFalse(mgr.is_pro_enabled())
-                finally:
-                    mgr.stop()
-        finally:
-            key_dir.cleanup()
-            if old_path is None:
-                os.environ.pop("LICENSING_PINNED_PUBLIC_KEY_PATH", None)
-            else:
-                os.environ["LICENSING_PINNED_PUBLIC_KEY_PATH"] = old_path
-
-    def test_refresh_now_updates_state_immediately(self):
-        priv, pub_pem = self._with_keypair()
-        key_dir, old_path = self._set_pinned_pubkey_path(pub_pem)
-        try:
-            with tempfile.TemporaryDirectory() as td:
-                licensing_url = "https://licensing.example.com"
-                validate_url = licensing_url + "/v1/licenses/validate"
-                calls = {"n": 0}
-
-                def mock(url: str, payload: dict, timeout: float):
-                    _ = timeout
-                    if url != validate_url:
-                        return 404, {"detail": "not found"}
-                    calls["n"] += 1
-                    signed = {
-                        "request_nonce": payload["nonce"],
-                        "request_timestamp": payload["timestamp"],
-                        "valid": True,
-                        "decision": "ALLOW",
-                        "reason_code": "ok",
-                        "expires_at": int(time.time()) + 3600,
-                        "entitlements": {},
-                        "recheck_after_seconds": 3600,
-                    }
-                    return 200, {"server_signature": _make_jws_rs256(signed, priv)}
-
-                mgr = LicensingManager(
-                    licensing_url=licensing_url,
-                    license_key="sk_live_test",
-                    app_id="noctisapi-pro",
-                    app_version="1.2.3",
-                    instance_id_path=td + "/instance_id",
-                    http_timeout_seconds=0.1,
-                    min_recheck_seconds=1000,
-                    enforce_on_startup=False,
-                    post_json_func=mock,
-                )
-                mgr.start()
-                try:
-                    first = calls["n"]
-                    self.assertGreaterEqual(first, 1)
-                    mgr.refresh_now()
-                    self.assertGreaterEqual(calls["n"], first + 1)
-                    self.assertTrue(mgr.is_pro_enabled())
-                finally:
-                    mgr.stop()
-        finally:
-            key_dir.cleanup()
-            if old_path is None:
-                os.environ.pop("LICENSING_PINNED_PUBLIC_KEY_PATH", None)
-            else:
-                os.environ["LICENSING_PINNED_PUBLIC_KEY_PATH"] = old_path
+    def test_expired_license_falls_back_to_core(self):
+        self._write_license(expires_at=int(time.time()) - 3600)
+        mgr = LicensingManager.from_env()
+        st = mgr.refresh_now()
+        self.assertFalse(st.valid)
+        self.assertIn("LICENSE_EXPIRED", str(st.reason_code or ""))
+        self.assertFalse(mgr.is_pro_enabled())
 
 
 if __name__ == "__main__":

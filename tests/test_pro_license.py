@@ -1,284 +1,118 @@
+﻿import base64
+import json
 import os
+import tempfile
 import time
 import unittest
-from unittest import mock
+
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from app import pro_license
 
 
-class TestProLicenseLeaseValidation(unittest.TestCase):
+def _b64url(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
+
+
+def _canonical_json_bytes(obj: dict) -> bytes:
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+
+def _signed_doc(*, private_key: Ed25519PrivateKey, kid: str, payload: dict) -> dict:
+    sig = private_key.sign(_canonical_json_bytes(payload))
+    return {
+        "schema": "license.json/v2",
+        "payload": payload,
+        "signature": {"alg": "Ed25519", "kid": kid, "value": _b64url(sig)},
+    }
+
+
+class TestProLicenseOffline(unittest.TestCase):
     def setUp(self):
-        self._old_license_key = os.environ.get("LICENSE_KEY")
-        self._old_app_version = os.environ.get("HP_APP_VERSION")
-        self._old_backend_url = os.environ.get("PRO_BACKEND_URL")
-        self._old_report = os.environ.get("HP_LICENSE_REPORT_TO_SERVER")
-        self._old_report_url = os.environ.get("HP_LICENSE_REPORT_URL")
-        os.environ["LICENSE_KEY"] = "sk_test_123"
-        os.environ["HP_APP_VERSION"] = "1.2.3"
-        os.environ["PRO_BACKEND_URL"] = "https://pro.example.com"
-        os.environ["HP_LICENSE_SYNC_ON_STATE_CHANGE"] = "1"
-        os.environ["HP_LICENSE_REPORT_TO_SERVER"] = "0"
+        self._tmp = tempfile.TemporaryDirectory()
+        self._old_env = {k: os.environ.get(k) for k in (
+            "HP_OFFLINE_LICENSE_PATH",
+            "HP_OFFLINE_LICENSE_STATE_PATH",
+            "HP_OFFLINE_PUBLIC_KEYS_JSON",
+            "HP_DEPLOYMENT_ID",
+            "HP_LICENSE_STATUS_REFRESH_SECONDS",
+        )}
+
+        self.license_path = os.path.join(self._tmp.name, "license.json")
+        self.state_path = os.path.join(self._tmp.name, "license_state.json")
+        os.environ["HP_OFFLINE_LICENSE_PATH"] = self.license_path
+        os.environ["HP_OFFLINE_LICENSE_STATE_PATH"] = self.state_path
+        os.environ["HP_DEPLOYMENT_ID"] = "dep-test-001"
+        os.environ["HP_LICENSE_STATUS_REFRESH_SECONDS"] = "1"
+
+        self.private_key = Ed25519PrivateKey.generate()
+        self.kid = "test-ed25519-1"
+        pub_raw = self.private_key.public_key().public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw,
+        )
+        os.environ["HP_OFFLINE_PUBLIC_KEYS_JSON"] = json.dumps({self.kid: _b64url(pub_raw)})
         pro_license.clear_cache()
 
     def tearDown(self):
-        if self._old_license_key is None:
-            os.environ.pop("LICENSE_KEY", None)
-        else:
-            os.environ["LICENSE_KEY"] = self._old_license_key
-        if self._old_app_version is None:
-            os.environ.pop("HP_APP_VERSION", None)
-        else:
-            os.environ["HP_APP_VERSION"] = self._old_app_version
-        if self._old_backend_url is None:
-            os.environ.pop("PRO_BACKEND_URL", None)
-        else:
-            os.environ["PRO_BACKEND_URL"] = self._old_backend_url
-        if self._old_report is None:
-            os.environ.pop("HP_LICENSE_REPORT_TO_SERVER", None)
-        else:
-            os.environ["HP_LICENSE_REPORT_TO_SERVER"] = self._old_report
-        if self._old_report_url is None:
-            os.environ.pop("HP_LICENSE_REPORT_URL", None)
-        else:
-            os.environ["HP_LICENSE_REPORT_URL"] = self._old_report_url
-        os.environ.pop("HP_LICENSE_SYNC_ON_STATE_CHANGE", None)
+        pro_license.clear_cache()
+        self._tmp.cleanup()
+        for k, v in self._old_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
 
-    @staticmethod
-    def _identity():
-        return {"instance_id": "instance-1", "instance_fingerprint_sha256": "f" * 64}
-
-    @staticmethod
-    def _base_payload(now: int) -> dict:
-        return {
-            "exp": now + 3600,
-            "issued_at": now - 60,
+    def _write_license(self, *, generation: int, expires_at: int) -> None:
+        payload = {
+            "schema_version": 2,
+            "license_id": "lic-test-1",
+            "account_id": "acct-1",
+            "plan": "pro",
             "tier": "pro",
-            "features": ["campaigns", "cases"],
-            "instance_id": "instance-1",
-            "fingerprint_sha256": "f" * 64,
+            "status": "active",
+            "issued_at": int(time.time()),
+            "expires_at": int(expires_at),
+            "features": ["cases", "campaigns"],
+            "entitlements": ["pro", "cases", "campaigns"],
+            "license_generation": int(generation),
+            "deployment_binding": {
+                "mode": "soft",
+                "deployment_id": "dep-test-001",
+            },
+            "offline_policy": {
+                "offline_grace_seconds": 60,
+                "fallback_tier": "core",
+            },
         }
+        doc = _signed_doc(private_key=self.private_key, kid=self.kid, payload=payload)
+        with open(self.license_path, "w", encoding="utf-8") as f:
+            json.dump(doc, f, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
-    def test_offline_grace_expired_falls_back_to_core(self):
-        now = int(time.time())
-        payload = self._base_payload(now)
-        payload["issued_at"] = now - (pro_license.CLIENT_CAP_SECONDS + 10)
-
-        with (
-            mock.patch("app.pro_license.compute_client_identity", return_value=self._identity()),
-            mock.patch("app.pro_license.campaigns_pro.get_backend_lease_cached", return_value=("lease-jws", "cache")),
-            mock.patch("app.pro_license._lease_payload", return_value=payload),
-        ):
-            lease_jws, exp, error, _meta = pro_license._fetch_backend_lease(force_refresh=False)
-
-        self.assertIsNone(lease_jws)
-        self.assertEqual(error, "offline_grace_expired")
-        self.assertIsNotNone(exp)
-
-    def test_cache_mode_within_offline_grace_is_valid(self):
-        now = int(time.time())
-        payload = self._base_payload(now)
-        payload["offline_grace_seconds"] = 300
-        payload["issued_at"] = now - 120
-
-        with (
-            mock.patch("app.pro_license.compute_client_identity", return_value=self._identity()),
-            mock.patch("app.pro_license.campaigns_pro.get_backend_lease_cached", return_value=("lease-jws", "cache")),
-            mock.patch("app.pro_license._lease_payload", return_value=payload),
-        ):
-            lease_jws, exp, error, meta = pro_license._fetch_backend_lease(force_refresh=False)
-
-        self.assertEqual(lease_jws, "lease-jws")
-        self.assertIsNone(error)
-        self.assertEqual(meta.get("lease_source"), "cache")
-        self.assertEqual(meta.get("lease_effective_grace_seconds"), 300)
-        self.assertEqual(exp, payload["exp"])
-
-    def test_missing_issued_at_is_rejected(self):
-        now = int(time.time())
-        payload = self._base_payload(now)
-        payload.pop("issued_at", None)
-
-        with (
-            mock.patch("app.pro_license.compute_client_identity", return_value=self._identity()),
-            mock.patch("app.pro_license.campaigns_pro.get_backend_lease_cached", return_value=("lease-jws", "backend")),
-            mock.patch("app.pro_license._lease_payload", return_value=payload),
-        ):
-            lease_jws, _exp, error, _meta = pro_license._fetch_backend_lease(force_refresh=False)
-
-        self.assertIsNone(lease_jws)
-        self.assertEqual(error, "lease_missing_issued_at")
-
-    def test_expires_at_fallback_is_accepted(self):
-        now = int(time.time())
-        payload = self._base_payload(now)
-        payload["expires_at"] = payload.pop("exp")
-
-        with (
-            mock.patch("app.pro_license.compute_client_identity", return_value=self._identity()),
-            mock.patch("app.pro_license.campaigns_pro.get_backend_lease_cached", return_value=("lease-jws", "backend")),
-            mock.patch("app.pro_license._lease_payload", return_value=payload),
-        ):
-            lease_jws, exp, error, _meta = pro_license._fetch_backend_lease(force_refresh=False)
-
-        self.assertEqual(lease_jws, "lease-jws")
-        self.assertIsNone(error)
-        self.assertEqual(exp, payload["expires_at"])
-
-    def test_iat_fallback_is_accepted(self):
-        now = int(time.time())
-        payload = self._base_payload(now)
-        payload["iat"] = payload.pop("issued_at")
-
-        with (
-            mock.patch("app.pro_license.compute_client_identity", return_value=self._identity()),
-            mock.patch("app.pro_license.campaigns_pro.get_backend_lease_cached", return_value=("lease-jws", "backend")),
-            mock.patch("app.pro_license._lease_payload", return_value=payload),
-        ):
-            lease_jws, exp, error, _meta = pro_license._fetch_backend_lease(force_refresh=False)
-
-        self.assertEqual(lease_jws, "lease-jws")
-        self.assertIsNone(error)
-        self.assertEqual(exp, payload["exp"])
-
-    def test_expires_at_iso_fallback_is_accepted(self):
-        now = int(time.time())
-        payload = self._base_payload(now)
-        payload["expires_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(payload.pop("exp")))
-
-        with (
-            mock.patch("app.pro_license.compute_client_identity", return_value=self._identity()),
-            mock.patch("app.pro_license.campaigns_pro.get_backend_lease_cached", return_value=("lease-jws", "backend")),
-            mock.patch("app.pro_license._lease_payload", return_value=payload),
-        ):
-            lease_jws, exp, error, _meta = pro_license._fetch_backend_lease(force_refresh=False)
-
-        self.assertEqual(lease_jws, "lease-jws")
-        self.assertIsNone(error)
-        self.assertGreater(int(exp or 0), now)
-
-    def test_request_timestamp_fallback_is_accepted(self):
-        now = int(time.time())
-        payload = self._base_payload(now)
-        payload.pop("issued_at", None)
-        payload["request_timestamp"] = now - 30
-
-        with (
-            mock.patch("app.pro_license.compute_client_identity", return_value=self._identity()),
-            mock.patch("app.pro_license.campaigns_pro.get_backend_lease_cached", return_value=("lease-jws", "backend")),
-            mock.patch("app.pro_license._lease_payload", return_value=payload),
-        ):
-            lease_jws, exp, error, _meta = pro_license._fetch_backend_lease(force_refresh=False)
-
-        self.assertEqual(lease_jws, "lease-jws")
-        self.assertIsNone(error)
-        self.assertEqual(exp, payload["exp"])
-
-    def test_snapshot_change_triggers_force_refresh_to_backend(self):
-        now = int(time.time())
-        cached = {
-            "pro_enabled": False,
-            "valid": False,
-            "decision": "DENY",
-            "reason_code": "backend_validation_failed",
-            "last_error": "old_error",
-            "last_ok_at": None,
-            "expires_at": None,
-            "expires_in_seconds": None,
-            "recheck_after_seconds": 15,
-            "entitlements": {"tier": None, "features": []},
-            "source": "backend_lease",
-        }
-        with pro_license._STATUS_LOCK:
-            pro_license._STATUS_CACHE["checked_at"] = now - 999
-            pro_license._STATUS_CACHE["snapshot"] = cached
-
-        calls: list[bool] = []
-
-        def _fake_fetch(*, force_refresh: bool):
-            calls.append(bool(force_refresh))
-            # Both calls are now forced (lease-level cache always bypassed on snapshot refresh).
-            return "lease-jws", now + 3600, None, {"lease_tier": "pro", "lease_features": ["cases"]}
-
-        with mock.patch("app.pro_license._fetch_backend_lease", side_effect=_fake_fetch):
-            snap = pro_license.get_backend_license_snapshot(force_refresh=False)
-
-        # First call: always force_refresh=True (server check every 15 s).
-        # State changed vs cached → sync_on_change triggers a second force_refresh=True.
-        self.assertEqual(calls, [True, True])
-        self.assertTrue(snap.get("valid"))
-        self.assertEqual(snap.get("decision"), "ALLOW")
-
-    def test_snapshot_unchanged_does_not_force_refresh_again(self):
-        now = int(time.time())
-        cached = {
-            "pro_enabled": False,
-            "valid": False,
-            "decision": "DENY",
-            "reason_code": "backend_validation_failed",
-            "last_error": "lease_missing_exp",
-            "last_ok_at": None,
-            "expires_at": None,
-            "expires_in_seconds": None,
-            "recheck_after_seconds": 15,
-            "entitlements": {"tier": None, "features": []},
-            "source": "backend_lease",
-        }
-        with pro_license._STATUS_LOCK:
-            pro_license._STATUS_CACHE["checked_at"] = now - 999
-            pro_license._STATUS_CACHE["snapshot"] = cached
-
-        calls: list[bool] = []
-
-        def _fake_fetch(*, force_refresh: bool):
-            calls.append(bool(force_refresh))
-            return None, None, "lease_missing_exp", {"lease_tier": None, "lease_features": []}
-
-        with mock.patch("app.pro_license._fetch_backend_lease", side_effect=_fake_fetch):
-            snap = pro_license.get_backend_license_snapshot(force_refresh=False)
-
-        # Snapshot cache expired → first call is now always force_refresh=True.
-        # State unchanged (same DENY/lease_missing_exp) → no second sync_on_change call.
-        self.assertEqual(calls, [True])
+    def test_missing_license_is_core(self):
+        snap = pro_license.get_backend_license_snapshot(force_refresh=True)
+        self.assertFalse(snap.get("pro_enabled"))
         self.assertFalse(snap.get("valid"))
-        self.assertEqual(snap.get("last_error"), "lease_missing_exp")
+        self.assertEqual(str(snap.get("source")), "offline_license")
+        self.assertEqual(str(snap.get("reason_code")), "OFFLINE_LICENSE_MISSING")
 
-    def test_force_refresh_reports_snapshot_to_server(self):
-        now = int(time.time())
-        os.environ["HP_LICENSE_REPORT_TO_SERVER"] = "1"
-        with pro_license._STATUS_LOCK:
-            pro_license._STATUS_CACHE["checked_at"] = now - 999
-            pro_license._STATUS_CACHE["snapshot"] = {}
-
-        with (
-            mock.patch("app.pro_license._fetch_backend_lease", return_value=("lease-jws", now + 3600, None, {"lease_tier": "pro", "lease_features": ["cases"]})),
-            mock.patch("app.pro_license._report_runtime_status", return_value=None) as rep,
-        ):
-            snap = pro_license.get_backend_license_snapshot(force_refresh=True)
-
+    def test_valid_license_enables_pro(self):
+        self._write_license(generation=1, expires_at=int(time.time()) + 3600)
+        snap = pro_license.get_backend_license_snapshot(force_refresh=True)
         self.assertTrue(snap.get("valid"))
-        rep.assert_called_once()
+        self.assertTrue(snap.get("pro_enabled"))
+        self.assertEqual(str((snap.get("entitlements") or {}).get("tier")), "pro")
 
-    def test_report_uses_dedicated_report_url_when_configured(self):
-        now = int(time.time())
-        os.environ["HP_LICENSE_REPORT_TO_SERVER"] = "1"
-        os.environ["HP_LICENSE_REPORT_URL"] = "https://report.example.com/"
-        with pro_license._STATUS_LOCK:
-            pro_license._STATUS_CACHE["checked_at"] = now - 999
-            pro_license._STATUS_CACHE["snapshot"] = {}
+    def test_rollback_detected_for_older_generation(self):
+        self._write_license(generation=2, expires_at=int(time.time()) + 3600)
+        first = pro_license.get_backend_license_snapshot(force_refresh=True)
+        self.assertTrue(first.get("valid"))
 
-        def _identity():
-            return {"instance_id": "instance-1", "instance_fingerprint_sha256": "f" * 64}
-
-        with (
-            mock.patch("app.pro_license.compute_client_identity", side_effect=_identity),
-            mock.patch("app.pro_license._fetch_backend_lease", return_value=("lease-jws", now + 3600, None, {"lease_tier": "pro", "lease_features": ["cases"]})),
-            mock.patch("app.pro_license.campaigns_pro.report_runtime_state", return_value=None) as rep,
-        ):
-            pro_license.get_backend_license_snapshot(force_refresh=True)
-
-        self.assertEqual(rep.call_count, 1)
-        kwargs = rep.call_args.kwargs
-        self.assertEqual(kwargs.get("backend_url"), "https://report.example.com")
+        self._write_license(generation=1, expires_at=int(time.time()) + 3600)
+        second = pro_license.get_backend_license_snapshot(force_refresh=True)
+        self.assertFalse(second.get("valid"))
+        self.assertEqual(str(second.get("reason_code")), "ROLLBACK_DETECTED")
 
 
 if __name__ == "__main__":

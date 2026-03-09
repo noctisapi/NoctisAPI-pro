@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import os
@@ -11,12 +11,15 @@ from typing import Any
 _LOCK = threading.Lock()
 _HEX64_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 _ALLOWED_KEYS = {
-    "PRO_BACKEND_URL",
-    "HP_LICENSE_REPORT_URL",
-    "LICENSE_KEY",
     "HP_APP_VERSION",
     "HP_APP_ID",
     "INSTANCE_FINGERPRINT_SHA256",
+    "HP_DEPLOYMENT_ID",
+    "HP_OFFLINE_LICENSE_PATH",
+    "HP_OFFLINE_LICENSE_STATE_PATH",
+    "HP_OFFLINE_PUBLIC_KEYS_PATH",
+    "HP_OFFLINE_PUBLIC_KEYS_JSON",
+    "HP_LICENSE_MODE",
 }
 
 
@@ -28,13 +31,32 @@ def _normalize_value(key: str, value: Any) -> str:
     out = str(value or "").strip()
     if not out:
         return ""
-    if key in ("PRO_BACKEND_URL", "HP_LICENSE_REPORT_URL"):
-        return out.rstrip("/")
     if key == "INSTANCE_FINGERPRINT_SHA256":
         lowered = out.lower()
         if not _HEX64_RE.match(lowered):
             raise ValueError("invalid_INSTANCE_FINGERPRINT_SHA256")
         return lowered
+    if key == "HP_LICENSE_MODE":
+        lowered = out.lower()
+        if lowered != "offline":
+            raise ValueError("invalid_HP_LICENSE_MODE")
+        return lowered
+    if key == "HP_OFFLINE_PUBLIC_KEYS_JSON":
+        try:
+            obj = json.loads(out)
+        except Exception:
+            raise ValueError("invalid_HP_OFFLINE_PUBLIC_KEYS_JSON")
+        if not isinstance(obj, dict):
+            raise ValueError("invalid_HP_OFFLINE_PUBLIC_KEYS_JSON")
+        clean: dict[str, str] = {}
+        for k, v in obj.items():
+            kk = str(k or "").strip()
+            vv = str(v or "").strip()
+            if kk and vv:
+                clean[kk] = vv
+        if not clean:
+            raise ValueError("invalid_HP_OFFLINE_PUBLIC_KEYS_JSON")
+        return json.dumps(clean, separators=(",", ":"), sort_keys=True)
     return out
 
 
@@ -134,6 +156,5 @@ def get_effective(name: str, default: str = "") -> str:
     env_val = str(env_raw).strip()
     if not env_val:
         return default
-    if name in ("PRO_BACKEND_URL", "HP_LICENSE_REPORT_URL"):
-        return env_val.rstrip("/")
     return env_val
+

@@ -47,10 +47,8 @@ def authorize_pro_feature(*, feature: str, action: str = "access", force_refresh
     if feature_name not in _ALLOWLIST:
         return False, "unknown_feature"
 
-    # Use the snapshot cache so revocation/suspension is always detected within
-    # HP_BACKEND_LICENSE_STATUS_REFRESH_SECONDS (default 15 s). The snapshot forces
-    # a live server call whenever its TTL expires, so explicit DENY propagates
-    # regardless of any lower-level lease cache that might still be warm.
+    # Authoritative decision now comes from local signed license.json validation.
+    # Snapshot cache only controls local re-check frequency.
     snapshot = pro_license.get_backend_license_snapshot(force_refresh=force_refresh)
     if not snapshot.get("pro_enabled") or not snapshot.get("valid"):
         reason = snapshot.get("reason_code") or snapshot.get("last_error") or "pro_not_enabled"

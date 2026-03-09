@@ -1,15 +1,15 @@
-"""System settings: DB-persisted overrides for environment variables.
+﻿"""System settings: DB-persisted overrides for environment variables.
 
 Operators may edit a safe subset of env vars from the admin panel without
 SSH access.  Values are stored in the ``system_settings`` SQLite table and
 applied to ``os.environ`` early in startup, before any lazy modules (proxy,
 TLS, egress, diagnostics) read them.
 
-A container restart is required for changes to take effect — the panel
+A container restart is required for changes to take effect â€” the panel
 shows a "restart required" banner after any save.
 
 Only keys listed in ``_EDITABLE_KEYS`` are readable or writable through
-this module.  Secrets (HP_SEED, LICENSE_KEY, HP_DB_PATH, …) are never
+this module.  Secrets (HP_SEED, HP_OFFLINE_PUBLIC_KEYS_JSON, HP_DB_PATH, ...) are never
 exposed here.
 """
 
@@ -149,3 +149,4 @@ def delete_setting(conn: sqlite3.Connection, key: str) -> None:
         raise ValueError(f"Key {key!r} is not editable")
     conn.execute("DELETE FROM system_settings WHERE key=?", (key,))
     conn.commit()
+

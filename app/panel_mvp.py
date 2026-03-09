@@ -1,4 +1,4 @@
-# panel_mvp.py (sin auth, solo protegido por SSH tunnel)
+﻿# panel_mvp.py (sin auth, solo protegido por SSH tunnel)
 import hashlib
 import logging
 import os
@@ -41,7 +41,7 @@ API_CATALOG_CACHE: dict[str, object] = {"ts": 0, "catalog": [], "source": "none"
 # Auto-recompute campaigns: set HP_CAMPAIGN_AUTO_RECOMPUTE_THRESHOLD > 0 to enable.
 _CAMPAIGN_AUTO_THRESHOLD = int(os.getenv("HP_CAMPAIGN_AUTO_RECOMPUTE_THRESHOLD", "0") or 0)
 _CAMPAIGN_AUTO_INTERVAL = int(os.getenv("HP_CAMPAIGN_AUTO_RECOMPUTE_INTERVAL", "3600") or 3600)
-# Used to identify internal panel→public requests so they are not logged as actors.
+# Used to identify internal panelâ†’public requests so they are not logged as actors.
 _HP_MONITOR_SECRET = os.getenv("HP_MONITOR_SECRET", "").strip()
 
 app = FastAPI(title=APP_NAME)
@@ -89,44 +89,21 @@ def _license_runtime_snapshot() -> dict:
     return pro_license.get_backend_license_snapshot(force_refresh=False)
 
 
-def _campaigns_backend_lease(*, force_refresh: bool = False) -> tuple[Optional[str], Optional[str], dict]:
-    return pro_license.get_backend_lease(force_refresh=force_refresh)
-
-
-def _mask_secret(value: str) -> str:
-    raw = str(value or "").strip()
-    if not raw:
-        return ""
-    if len(raw) <= 8:
-        return "*" * len(raw)
-    return f"{raw[:4]}...{raw[-4:]}"
-
-
 def _license_error_hint(error: Optional[str]) -> str:
     code = str(error or "").strip()
     if not code:
         return ""
-    if "missing_LICENSE_KEY" in code:
-        return "Configura una LICENSE_KEY valida y vuelve a validar."
-    if "missing_app_version" in code:
-        return "Configura HP_APP_VERSION con una version no vacia."
-    if "missing_PRO_BACKEND_URL" in code or "lease_transport_error" in code:
-        return "Verifica PRO_BACKEND_URL y conectividad de red hacia el servidor de licencias."
-    if "runtime_report_failed" in code or "runtime_report_transport_error" in code or "missing_report_backend_url" in code:
-        return "Verifica HP_LICENSE_REPORT_URL (o PRO_BACKEND_URL) para reportar el estado al Licensing App."
-    if "lease_missing_exp" in code:
-        return "El servidor debe incluir exp o expires_at en el lease firmado."
-    if "lease_missing_issued_at" in code:
-        return "El servidor debe incluir issued_at o iat en el lease firmado."
-    if "lease_instance_id_mismatch" in code:
-        return "La licencia no esta emitida para este instance_id. Reemite/bindea usando el ID mostrado."
-    if "lease_fingerprint_mismatch" in code:
-        return "La licencia no coincide con el fingerprint del cliente. Reemite/bindea la licencia."
-    if "lease_signature_invalid" in code:
-        return "La firma no coincide con la clave publica fijada en el cliente."
-    if "lease_expired" in code:
-        return "La licencia esta expirada. Renuevala en el servidor de licencias."
-    return "Revisa la configuracion y vuelve a validar la licencia."
+    if "OFFLINE_LICENSE_MISSING" in code:
+        return "No se encontro license.json. Configura HP_OFFLINE_LICENSE_PATH."
+    if "LICENSE_SIGNATURE_INVALID" in code or "LICENSE_KID_NOT_TRUSTED" in code:
+        return "La firma de license.json no es valida para la clave publica embebida."
+    if "LICENSE_EXPIRED" in code:
+        return "La licencia esta expirada. Renuevala y reemite un nuevo license.json."
+    if "ROLLBACK_DETECTED" in code:
+        return "Se detecto rollback de license_generation. Instala la licencia mas reciente."
+    if "DEPLOYMENT_MISMATCH" in code:
+        return "El deployment_id de la licencia no coincide con esta instancia."
+    return "Licencia offline no valida; el sistema funciona en CORE."
 
 
 def _license_config_snapshot() -> dict:
@@ -141,7 +118,6 @@ def _license_config_snapshot() -> dict:
             return "env"
         return "default"
 
-    backend_url = campaigns_pro.pro_backend_url()
     app_id = (license_runtime.get_effective("HP_APP_ID") or os.getenv("APP_ID") or "noctisapi-pro").strip()
     app_version = (
         license_runtime.get_effective("HP_APP_VERSION")
@@ -149,27 +125,45 @@ def _license_config_snapshot() -> dict:
         or os.getenv("HP_API_VERSION")
         or ""
     ).strip()
-    license_key = license_runtime.get_effective("LICENSE_KEY").strip()
     fp_override = license_runtime.get_effective("INSTANCE_FINGERPRINT_SHA256").strip()
-    report_url = license_runtime.get_effective("HP_LICENSE_REPORT_URL").strip()
+    deployment_id = (license_runtime.get_effective("HP_DEPLOYMENT_ID") or os.getenv("HP_DEPLOYMENT_ID") or "").strip()
+    license_path = (
+        license_runtime.get_effective("HP_OFFLINE_LICENSE_PATH")
+        or os.getenv("LICENSING_OFFLINE_LICENSE_PATH")
+        or "/var/lib/myapp/license.json"
+    ).strip()
+    state_path = (
+        license_runtime.get_effective("HP_OFFLINE_LICENSE_STATE_PATH")
+        or os.getenv("LICENSING_OFFLINE_LICENSE_STATE_PATH")
+        or "/var/lib/myapp/license_state.json"
+    ).strip()
+    keys_path = (
+        license_runtime.get_effective("HP_OFFLINE_PUBLIC_KEYS_PATH")
+        or os.getenv("LICENSING_OFFLINE_PUBLIC_KEYS_PATH")
+        or ""
+    ).strip()
+    keys_json = (license_runtime.get_effective("HP_OFFLINE_PUBLIC_KEYS_JSON") or "").strip()
 
     return {
         "runtime_config_path": license_runtime.config_path(),
         "effective": {
-            "backend_url": backend_url,
             "app_id": app_id,
             "app_version": app_version,
-            "license_key_configured": bool(license_key),
-            "license_key_preview": _mask_secret(license_key),
+            "deployment_id": deployment_id,
+            "offline_license_path": license_path,
+            "offline_license_state_path": state_path,
+            "offline_public_keys_path": keys_path,
+            "offline_public_keys_json_configured": bool(keys_json),
             "instance_fingerprint_sha256_override": fp_override,
-            "report_url": report_url,
         },
         "sources": {
-            "backend_url": _source("PRO_BACKEND_URL"),
-            "report_url": _source("HP_LICENSE_REPORT_URL"),
             "app_id": _source("HP_APP_ID"),
             "app_version": _source("HP_APP_VERSION"),
-            "license_key": _source("LICENSE_KEY"),
+            "deployment_id": _source("HP_DEPLOYMENT_ID"),
+            "offline_license_path": _source("HP_OFFLINE_LICENSE_PATH"),
+            "offline_license_state_path": _source("HP_OFFLINE_LICENSE_STATE_PATH"),
+            "offline_public_keys_path": _source("HP_OFFLINE_PUBLIC_KEYS_PATH"),
+            "offline_public_keys_json": _source("HP_OFFLINE_PUBLIC_KEYS_JSON"),
             "instance_fingerprint_sha256_override": _source("INSTANCE_FINGERPRINT_SHA256"),
         },
         "identity": identity,
@@ -385,8 +379,8 @@ def admin_license_status():
 def dashboard_license_refresh():
     payload = pro_license.get_backend_license_snapshot(force_refresh=True)
     payload["refreshed"] = bool(payload.get("valid"))
-    payload["source"] = "backend"
-    payload["backend_lease_ok"] = bool(payload.get("valid"))
+    payload["source"] = "offline_license"
+    payload["local_license_ok"] = bool(payload.get("valid"))
     if payload.get("last_error"):
         payload["refresh_error"] = payload.get("last_error")
     payload["hint"] = _license_error_hint(payload.get("refresh_error") or payload.get("last_error"))
@@ -409,11 +403,14 @@ def dashboard_license_config_update(payload: dict = Body(default={})):
         raise HTTPException(status_code=400, detail="invalid_payload")
 
     field_map = {
-        "backend_url": "PRO_BACKEND_URL",
-        "report_url": "HP_LICENSE_REPORT_URL",
-        "license_key": "LICENSE_KEY",
         "app_version": "HP_APP_VERSION",
         "app_id": "HP_APP_ID",
+        "deployment_id": "HP_DEPLOYMENT_ID",
+        "offline_license_path": "HP_OFFLINE_LICENSE_PATH",
+        "offline_license_state_path": "HP_OFFLINE_LICENSE_STATE_PATH",
+        "offline_public_keys_path": "HP_OFFLINE_PUBLIC_KEYS_PATH",
+        "offline_public_keys_json": "HP_OFFLINE_PUBLIC_KEYS_JSON",
+        "license_mode": "HP_LICENSE_MODE",
         "instance_fingerprint_sha256": "INSTANCE_FINGERPRINT_SHA256",
     }
     updates: dict[str, str] = {}
@@ -439,7 +436,7 @@ def dashboard_license_config_update(payload: dict = Body(default={})):
 
     licensing_snapshot = pro_license.get_backend_license_snapshot(force_refresh=True)
     licensing_snapshot["refreshed"] = bool(licensing_snapshot.get("valid"))
-    licensing_snapshot["backend_lease_ok"] = bool(licensing_snapshot.get("valid"))
+    licensing_snapshot["local_license_ok"] = bool(licensing_snapshot.get("valid"))
     if licensing_snapshot.get("last_error"):
         licensing_snapshot["refresh_error"] = licensing_snapshot.get("last_error")
     hint = _license_error_hint(licensing_snapshot.get("refresh_error") or licensing_snapshot.get("last_error"))
@@ -569,7 +566,7 @@ def fmt_ts(iso: str) -> str:
 
 
 def _flag_emoji_from_iso2(iso2: str) -> str:
-    """Convierte un código ISO2 de país a emoji bandera"""
+    """Convierte un cÃ³digo ISO2 de paÃ­s a emoji bandera"""
     if not iso2 or len(iso2) != 2:
         return ""
     return "".join(chr(0x1F1E6 + ord(c) - ord("A")) for c in iso2.upper())
@@ -578,7 +575,7 @@ def _flag_emoji_from_iso2(iso2: str) -> str:
 def parse_geo_from_extra(extra_json: str):
     """
     Espera algo como:
-      {"geo":{"country_iso2":"US","country_name":"United States","flag":"🇺🇸"}, ...}
+      {"geo":{"country_iso2":"US","country_name":"United States","flag":"ðŸ‡ºðŸ‡¸"}, ...}
     """
     try:
         obj = json.loads(extra_json or "{}")
@@ -631,7 +628,7 @@ _FEATURE_WEIGHTS: dict[str, float] = {"path": 1.0, "stage": 1.5, "time": 0.8, "e
 
 
 def _weighted_jaccard(fp_a: set, fp_b: set) -> float:
-    """Weighted Jaccard similarity: stage features count 1.5×, time 0.8×, err 1.2×, path 1.0×."""
+    """Weighted Jaccard similarity: stage features count 1.5Ã—, time 0.8Ã—, err 1.2Ã—, path 1.0Ã—."""
     all_features = fp_a | fp_b
     if not all_features:
         return 0.0
@@ -976,7 +973,7 @@ def _compute_campaigns(conn: sqlite3.Connection, config: dict) -> dict:
     features_built = 0
     links_created = 0
     cur = conn.cursor()
-    # NOTE: DELETEs happen at the end (atomic swap) — not here.
+    # NOTE: DELETEs happen at the end (atomic swap) â€” not here.
 
     cache_enabled = True
     # actor_fingerprints may not exist on older DBs
@@ -1407,7 +1404,7 @@ def dashboard_root():
 def dashboard_overview(request: Request):
     conn = db()
     try:
-        campaigns_backend_enabled = bool(campaigns_pro.pro_backend_url())
+        campaigns_backend_enabled = False
         campaigns_visible = campaigns_pro.can_render_verified_campaigns(
             conn, backend_enabled=campaigns_backend_enabled
         )
@@ -1935,7 +1932,7 @@ def dashboard(request: Request):
                 geo = parse_geo_from_extra(a.get("last_geo_extra_json") or "")
             a.update(geo)
 
-            # Si no hay flag pero tenemos IP, intentar resolver la geolocalización
+            # Si no hay flag pero tenemos IP, intentar resolver la geolocalizaciÃ³n
             if not a.get("geo_iso2") and a.get("last_ip"):
                 try:
                     import geoip2.database
@@ -1979,7 +1976,7 @@ def dashboard(request: Request):
             err_consec = int(a.get("err_consecutive") or 0)
             a["err_total"] = err_total
             a["err_consecutive"] = err_consec
-            a["err_badge"] = f"err×{err_total}" if err_total > 0 else ""
+            a["err_badge"] = f"errÃ—{err_total}" if err_total > 0 else ""
 
         return templates.TemplateResponse(
             "dashboard.html",
@@ -2067,14 +2064,14 @@ def dashboard_case_detail(case_id: int, request: Request):
         cur.execute("SELECT id, ref_type, ref_id, note, added_at FROM case_evidence WHERE case_id=? ORDER BY added_at DESC", (case_id,))
         evidence_rows = [dict(r) for r in cur.fetchall()]
 
-        # Campaigns list for linking — only when the feature is licensed AND results are verified.
+        # Campaigns list for linking â€” only when the feature is licensed AND results are verified.
         campaigns: list[dict] = []
         campaigns_verified = False
         if _has_feature(licensing.Feature.CAMPAIGNS, action="case_detail_campaign_list"):
             try:
                 campaigns_pro.ensure_campaign_pro_state_table(conn)
                 campaigns_verified = campaigns_pro.can_render_verified_campaigns(
-                    conn, backend_enabled=bool(campaigns_pro.pro_backend_url())
+                    conn, backend_enabled=False
                 )
                 if campaigns_verified:
                     cur.execute(
@@ -2520,7 +2517,7 @@ def _case_export_markdown(payload: dict) -> str:
     case = payload.get("case") or {}
     stage_info = payload.get("stage_progression") or {}
     lines = [
-        f"# Case #{case.get('id')} — {case.get('title')}",
+        f"# Case #{case.get('id')} â€” {case.get('title')}",
         "",
         f"**Status:** {case.get('status')}  ",
         f"**Severity:** {case.get('severity') or 'n/a'}  ",
@@ -2581,12 +2578,12 @@ def _case_export_markdown(payload: dict) -> str:
             if item.get("type") == "step":
                 lines.append(
                     f"- `{ts}` {item.get('method') or ''} `{item.get('path') or ''}` "
-                    f"→ {item.get('status') or '-'} (stage {item.get('stage') or '-'})"
+                    f"â†’ {item.get('status') or '-'} (stage {item.get('stage') or '-'})"
                 )
             else:
                 lines.append(
                     f"- `{ts}` **{item.get('kind') or 'event'}** `{item.get('path') or ''}` "
-                    f"→ {item.get('status') or '-'}"
+                    f"â†’ {item.get('status') or '-'}"
                 )
 
     # Evidence breakdown grouped by actor
@@ -2600,7 +2597,7 @@ def _case_export_markdown(payload: dict) -> str:
         for aid, evs in by_actor.items():
             lines.append(f"**Actor `{aid}`**")
             for ev in evs:
-                note = f" — {ev.get('note')}" if ev.get("note") else ""
+                note = f" â€” {ev.get('note')}" if ev.get("note") else ""
                 lines.append(
                     f"- [{ev.get('ref_type')}] `{ev.get('ref_id')}`"
                     f" {ev.get('source_method') or ''} `{ev.get('source_path') or ''}`"
@@ -2988,7 +2985,7 @@ def _campaigns_verification_summary(conn: sqlite3.Connection, backend_enabled: b
 
 @app.get("/dashboard/campaigns/recompute/status")
 def recompute_campaigns_status():
-    backend_enabled = bool(campaigns_pro.pro_backend_url())
+    backend_enabled = False
     conn = db()
     try:
         campaigns_pro.ensure_campaign_pro_state_table(conn)
@@ -3019,7 +3016,7 @@ def recompute_campaigns_status():
 @app.get("/dashboard/campaigns", response_class=HTMLResponse)
 def list_campaigns(request: Request):
     _require_feature(licensing.Feature.CAMPAIGNS)
-    backend_enabled = bool(campaigns_pro.pro_backend_url())
+    backend_enabled = False
     conn = db()
     try:
         campaigns_pro.ensure_campaign_pro_state_table(conn)
@@ -3114,7 +3111,7 @@ def campaign_detail(campaign_id: str, request: Request):
     _require_feature(licensing.Feature.CAMPAIGNS)
     conn = db()
     try:
-        if not campaigns_pro.can_render_verified_campaigns(conn, backend_enabled=bool(campaigns_pro.pro_backend_url())):
+        if not campaigns_pro.can_render_verified_campaigns(conn, backend_enabled=False):
             raise HTTPException(status_code=404, detail="campaign_result_not_verified")
         cur = conn.cursor()
         cur.execute("SELECT * FROM campaigns WHERE campaign_id=?", (campaign_id,))
@@ -3250,7 +3247,7 @@ def _campaign_export_markdown(payload: dict) -> str:
     camp = payload.get("campaign") or {}
     summary = camp.get("summary") or {}
     lines = [
-        f"# Campaign `{camp.get('campaign_id')}` — {camp.get('label') or 'Unnamed'}",
+        f"# Campaign `{camp.get('campaign_id')}` â€” {camp.get('label') or 'Unnamed'}",
         "",
         f"**Score:** {camp.get('score_det') or 0}  ",
         f"**First seen:** {camp.get('first_seen_at') or '-'}  ",
@@ -3358,7 +3355,7 @@ def actor_campaign(actor_id: str):
         return {"campaign": None}
     conn = db()
     try:
-        if not campaigns_pro.can_render_verified_campaigns(conn, backend_enabled=bool(campaigns_pro.pro_backend_url())):
+        if not campaigns_pro.can_render_verified_campaigns(conn, backend_enabled=False):
             return {"campaign": None}
         cur = conn.cursor()
         cur.execute("SELECT campaign_id, confidence, reasons_json FROM campaign_actor_links WHERE actor_id=? ORDER BY confidence DESC LIMIT 1", (actor_id,))
@@ -3480,7 +3477,7 @@ def actor(actor_id: str, request: Request):
 
         actor_campaign = None
         if _has_feature(licensing.Feature.CAMPAIGNS, action="actor_detail_campaign") and campaigns_pro.can_render_verified_campaigns(
-            conn, backend_enabled=bool(campaigns_pro.pro_backend_url())
+            conn, backend_enabled=False
         ):
             cur.execute(
                 """
@@ -3525,7 +3522,7 @@ def actor(actor_id: str, request: Request):
 def _mask_proxy_password(value: str) -> str:
     """Hide password in proxy URLs like http://user:pass@host:port."""
     import re
-    return re.sub(r"(https?://[^:@/]+:)[^@/]+(@)", r"\1•••\2", value)
+    return re.sub(r"(https?://[^:@/]+:)[^@/]+(@)", r"\1â€¢â€¢â€¢\2", value)
 
 
 def _get_env_config(db_overrides: dict[str, str]) -> list[dict]:
@@ -3609,3 +3606,4 @@ async def environment_run_diagnostics():
         ],
         "egress": egress_results,
     })
+
