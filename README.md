@@ -75,49 +75,39 @@ Hardening:
 ## Quick Start (Dev)
 
 ```bash
-
-cp .env.dev .env.dev
-
 docker compose -f compose/docker-compose.dev.yml up --build
-
 ```
 
-
-
-Open (default dev ports):
+Open:
 - Public API: `http://127.0.0.1:8000/docs`
 - Admin panel: `http://127.0.0.1:9001`
-If you override ports in Compose, use your configured values.
 
-
-Notes:
-
-- The dev stack runs a one-shot migrator before starting services.
-
-- SQLite is stored in the `hp_dev_data` volume.
-
-
+The dev stack runs a one-shot migrator before starting services. SQLite is stored in the `hp_dev_data` volume.
 
 ## Production
 
-A sample environment file is provided at `.env.prod.example` (not gitignored) – copy it to `.env.prod` and fill in real values before deploying. The example includes all required settings and the campaign auto‑recompute variables (`HP_CAMPAIGN_AUTO_RECOMPUTE_THRESHOLD`/`_INTERVAL`).
+```bash
+cp .env.prod.example .env.prod
+# Edit .env.prod — change HP_PUBLIC_HOST, HP_PUBLIC_BASE_URL, ACME_EMAIL, HP_SEED
+# DO NOT change variables marked ✔ FIXED (HONEYPOT_MONITOR_BASE_URL, DB paths, license paths, etc.)
 
-See `documentation/ops/vps/RUNBOOK.md` for a step‑by‑step VPS deployment with Traefik + ACME and GHCR.
+docker build -t ghcr.io/0x-unkwn0wn/noctisapi-pro:latest .
+docker compose --env-file .env.prod -f compose/docker-compose.prod.yml up -d
+```
 
+Admin panel via SSH tunnel only:
 
+```bash
+ssh -L 9001:127.0.0.1:9001 user@your-server-ip
+# Then open http://localhost:9001
+```
+
+See [`documentation/ops/vps/DEPLOY.md`](documentation/ops/vps/DEPLOY.md) for the full step-by-step guide.
 
 ## Notes
 
-- Do not commit real secrets or GeoLite2 database files.
-
-- Use `.env.prod` on the server and keep it out of Git.
-
-- For admin views, set `HONEYPOT_PUBLIC_BASE_URL=https://<public-domain>` and `HONEYPOT_MONITOR_BASE_URL=http://traefik:8081`.
-
-- Other common settings you'll find in `.env.prod.example`:
-  - `HP_IMAGE` to override the image registry/name
-  - `HP_PUBLIC_HOST` / `HP_PUBLIC_BASE_URL` for API routing
-  - `HP_ACTOR_UA_MODE` for actor identity logic (ip|family|full)
-  - `HONEYPOT_MONITOR_UA` to whitelist healthcheck user‑agents
-  - `HP_GEOIP_DB`, `HP_SEED`, retention/backup/auto‑recompute tuning
+- Do not commit `.env.prod` or `GeoLite2-Country.mmdb` to git.
+- `HP_SEED` must be a long stable random secret — changing it breaks existing actor IDs.
+- `HONEYPOT_MONITOR_BASE_URL=http://app:8000` is already hardcoded in `compose/docker-compose.prod.yml` — do not change it in `.env.prod`.
+- See `.env.prod.example` for the full annotated variable reference.
 

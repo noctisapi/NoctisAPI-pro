@@ -1,6 +1,6 @@
 services:
   migrate:
-    image: ${HP_IMAGE:-ghcr.io/<ORG>/noctisapi-pro}:${APP_VERSION}
+    image: ${HP_IMAGE:-ghcr.io/0x-unkwn0wn/noctisapi-pro}:${APP_VERSION}
     user: "0:0"
     command: ["sh", "-c", "chown -R 10001:0 /data /var/lib/myapp && alembic upgrade head"]
     env_file:
@@ -11,7 +11,7 @@ services:
     restart: "no"
 
   app:
-    image: ${HP_IMAGE:-ghcr.io/<ORG>/noctisapi-pro}:${APP_VERSION}
+    image: ${HP_IMAGE:-ghcr.io/0x-unkwn0wn/noctisapi-pro}:${APP_VERSION}
     user: "10001:0"
     env_file:
       - ../.env.prod
@@ -61,12 +61,13 @@ services:
       - "traefik.http.routers.hp-internal.middlewares=hp-monitor-headers,hp-monitor-ratelimit"
 
   admin:
-    image: ${HP_IMAGE:-ghcr.io/<ORG>/noctisapi-pro}:${APP_VERSION}
+    image: ${HP_IMAGE:-ghcr.io/0x-unkwn0wn/noctisapi-pro}:${APP_VERSION}
     user: "10001:0"
     env_file:
       - ../.env.prod
     environment:
       - PYTHONPATH=/app
+      - HONEYPOT_MONITOR_BASE_URL=http://app:8000
     command: ["python", "main_panel.py"]
     volumes:
       - hp_prod_data:/data
