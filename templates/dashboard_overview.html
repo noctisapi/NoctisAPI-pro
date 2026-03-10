@@ -157,6 +157,10 @@
   const licenseRuntime = {{ (license_runtime|default({}))|tojson }};
   let licenseConfigLoaded = false;
 
+  function escHtml(s){
+    return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  }
+
   const byDay = (rows) => {
     const map = {};
     rows.forEach(r => { map[r.day] = (map[r.day] || 0) + r.cnt; });
@@ -167,32 +171,83 @@
     const el = document.getElementById('licenseStatusLine');
     if(!el) return;
     if(!state || typeof state !== 'object'){
-      el.textContent = 'License: unknown';
+      el.innerHTML = '<span style="font-size:0.75rem;color:var(--muted)">License: unknown</span>';
       return;
     }
-    const chunks = [];
-    const status = state.valid ? 'valid' : 'invalid';
-    chunks.push(`License: ${status}`);
-    if(state.decision){ chunks.push(`decision ${state.decision}`); }
-    if(state.expires_in_seconds !== undefined && state.expires_in_seconds !== null){
-      const remain = Number(state.expires_in_seconds);
-      if(Number.isFinite(remain)){
-        if(remain >= 0){
-          chunks.push(`expires in ${Math.round(remain/60)}m`);
-        }else{
-          chunks.push('expired');
+
+    /* ── Tier badge ── */
+    const tier = (state.tier || 'core').toUpperCase();
+    const [tierColor, tierBg, tierBorder] = tier === 'PRO'
+      ? ['#a78bfa', 'rgba(167,139,250,.15)', 'rgba(167,139,250,.4)']
+      : ['var(--muted)', 'rgba(255,255,255,.06)', 'rgba(255,255,255,.15)'];
+    const tierHtml = `<span style="display:inline-block;padding:1px 8px;border-radius:999px;font-size:0.68rem;font-weight:700;letter-spacing:.05em;background:${tierBg};color:${tierColor};border:1px solid ${tierBorder}">${tier}</span>`;
+
+    /* ── Status badge ── */
+    const valid = !!state.valid;
+    const decision = (state.decision || '').toUpperCase();
+    const reasonCode = (state.reason_code || state.last_error || '').toUpperCase();
+    let statusLabel, statusColor, statusBg, statusBorder;
+    if(valid && decision === 'ALLOW'){
+      statusLabel = 'VALID';
+      statusColor = '#7ee2b8';
+      statusBg = 'rgba(26,191,107,.15)';
+      statusBorder = 'rgba(26,191,107,.35)';
+    } else if(reasonCode.includes('GRACE')){
+      statusLabel = 'GRACE';
+      statusColor = '#ffc940';
+      statusBg = 'rgba(255,179,0,.15)';
+      statusBorder = 'rgba(255,179,0,.35)';
+    } else if(reasonCode.includes('MISSING') || !reasonCode){
+      statusLabel = 'INACTIVE';
+      statusColor = 'var(--muted)';
+      statusBg = 'rgba(255,255,255,.05)';
+      statusBorder = 'rgba(255,255,255,.12)';
+    } else {
+      statusLabel = 'INVALID';
+      statusColor = '#f2a6a6';
+      statusBg = 'rgba(231,76,60,.12)';
+      statusBorder = 'rgba(231,76,60,.35)';
+    }
+    const statusHtml = `<span style="display:inline-block;padding:1px 8px;border-radius:999px;font-size:0.68rem;font-weight:700;letter-spacing:.05em;background:${statusBg};color:${statusColor};border:1px solid ${statusBorder}">${statusLabel}</span>`;
+
+    /* ── Expiry info ── */
+    let expiryHtml = '';
+    if(state.expires_at){
+      const expiryDate = new Date(Number(state.expires_at) * 1000);
+      const expiryFmt = expiryDate.toISOString().replace('T',' ').substring(0,16) + ' UTC';
+      const remain = (state.expires_in_seconds !== undefined && state.expires_in_seconds !== null)
+        ? Number(state.expires_in_seconds) : null;
+      let remainStr = '';
+      if(remain !== null && Number.isFinite(remain)){
+        if(remain < 0){
+          remainStr = ' · expired';
+        } else if(remain < 3600){
+          remainStr = ` · ${Math.round(remain/60)}m left`;
+        } else if(remain < 86400){
+          remainStr = ` · ${Math.round(remain/3600)}h left`;
+        } else {
+          remainStr = ` · ${Math.round(remain/86400)}d left`;
         }
       }
+      const expiryColor = (remain !== null && remain < 86400 * 7) ? '#ffc940' : 'var(--muted)';
+      expiryHtml = `<span style="font-size:0.75rem;color:${expiryColor}">Expires ${escHtml(expiryFmt)}${escHtml(remainStr)}</span>`;
     }
-    if(state.last_ok_at){
-      chunks.push(`last ok ${relTime(state.last_ok_at)}`);
+
+    /* ── License ID ── */
+    let idHtml = '';
+    if(state.license_id){
+      idHtml = `<span style="font-size:0.72rem;color:var(--muted);font-family:monospace" title="License ID">${escHtml(String(state.license_id).substring(0,24))}</span>`;
     }
-    if(state.refresh_error){
-      chunks.push(`refresh error ${state.refresh_error}`);
-    }else if(state.last_error){
-      chunks.push(`error ${state.last_error}`);
+
+    /* ── Error note ── */
+    let errorHtml = '';
+    const errCode = state.refresh_error || state.last_error || '';
+    if(errCode && errCode !== 'OK'){
+      errorHtml = `<span style="font-size:0.72rem;color:#f2a6a6">${escHtml(errCode)}</span>`;
     }
-    el.textContent = chunks.join(' - ');
+
+    const parts = [tierHtml, statusHtml, expiryHtml, idHtml, errorHtml].filter(Boolean);
+    el.innerHTML = `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">${parts.join('')}</div>`;
   };
 
   async function refreshLicenseNow(btn){
