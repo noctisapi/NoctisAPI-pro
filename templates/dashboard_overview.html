@@ -176,7 +176,7 @@
     }
 
     /* ── Tier badge ── */
-    const tier = (state.tier || 'core').toUpperCase();
+    const tier = ((state.entitlements && state.entitlements.tier) || state.tier || 'core').toUpperCase();
     const [tierColor, tierBg, tierBorder] = tier === 'PRO'
       ? ['#a78bfa', 'rgba(167,139,250,.15)', 'rgba(167,139,250,.4)']
       : ['var(--muted)', 'rgba(255,255,255,.06)', 'rgba(255,255,255,.15)'];
