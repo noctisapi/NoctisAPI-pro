@@ -22,6 +22,7 @@ from fastapi import FastAPI, Request, HTTPException, Depends, Security
 from fastapi.responses import JSONResponse, PlainTextResponse, HTMLResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from starlette.routing import Match
 
 from app import licensing
 from app import pro_license
@@ -1367,6 +1368,16 @@ def _int_with_default(value: Any, default: int) -> int:
         return int(default)
 
 
+def _route_is_registered(path: str, method: str) -> bool:
+    """Return True only when path+method has a FULL match in the FastAPI route table."""
+    scope = {"type": "http", "method": method.upper(), "path": path}
+    for route in app.routes:
+        match, _ = route.matches(scope)
+        if match == Match.FULL:
+            return True
+    return False
+
+
 def _default_modular_policy(*, source: str = "ok", error: str = "") -> Dict[str, Any]:
     return {
         "endpoint_config": dict(api_modular.DEFAULT_ENDPOINT_CONFIG),
@@ -1573,7 +1584,7 @@ async def log_all_requests(request: Request, call_next):
             )
         else:
             response = await call_next(request)
-            if not skip_policy:
+            if not skip_policy and _route_is_registered(request.url.path, request.method):
                 response = await _apply_modular_response_policy(request, response, modular_policy)
     except Exception as e:
         exc = e

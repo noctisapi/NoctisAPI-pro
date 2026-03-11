@@ -907,17 +907,10 @@ def mutate_json_payload(
         seed = _seed_value(path, method, actor_id, bucket, str(intensity))
         rng = random.Random(seed)
         out = _mutate_payload_recursive(out, rng, intensity)
-        if isinstance(out, dict):
-            out["_variant"] = {
-                "policy": policy,
-                "bucket": bucket,
-                "intensity": intensity,
-                "id": seed % 1000,
-            }
     return out
 
 
-def mutation_headers(
+def mutation_headers(  # noqa: ARG001
     *,
     mutation_policy: str,
     mutation_intensity: int,
@@ -926,21 +919,9 @@ def mutation_headers(
     method: str,
     actor_id: str,
 ) -> Dict[str, str]:
-    policy = _normalize_policy(mutation_policy)
-    intensity = _clamp_int(mutation_intensity, 0, 3, 0)
-    headers: Dict[str, str] = {}
-    if policy == "none" or intensity <= 0:
-        return headers
-    bucket = mutation_bucket(policy)
-    seed = _seed_value(path, method, actor_id, bucket, str(intensity))
-    headers["x-hp-mutation-policy"] = policy
-    headers["x-hp-mutation-bucket"] = bucket
-    headers["x-hp-variant"] = str(seed % 97)
-    if matched_rule_ids:
-        headers["x-hp-rule-hits"] = str(len(matched_rule_ids))
-    if intensity >= 2:
-        headers["x-hp-mutation-profile"] = "aggressive"
-    return headers
+    # Never expose mutation metadata in public response headers.
+    _ = (mutation_policy, mutation_intensity, matched_rule_ids, path, method, actor_id)
+    return {}
 
 
 def _safe_json_loads(raw: str) -> Dict[str, Any]:
