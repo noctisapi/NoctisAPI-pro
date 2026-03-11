@@ -649,15 +649,16 @@
       malware_upload:       { tactic:'Execution',            tid:'T1190', label:'Exploit Public-Facing Application' },
       token_probe:          { tactic:'Credential Access',    tid:'T1528', label:'Steal Application Access Token (probe)' },
     };
+    // rgba colors: [fg, bg, border-bottom]
     const COLORS = {
-      'Discovery':           '#7ab8f5',
-      'Credential Access':   '#f2a6a6',
-      'Privilege Escalation':'#ffc940',
-      'Exfiltration':        '#f0b06a',
-      'Execution':           '#b8a9ff',
-      'Unknown':             '#888',
+      'Discovery':            ['rgba(122,184,245,1)',  'rgba(122,184,245,.07)', 'rgba(122,184,245,.3)'],
+      'Credential Access':    ['rgba(242,166,166,1)',  'rgba(242,166,166,.07)', 'rgba(242,166,166,.3)'],
+      'Privilege Escalation': ['rgba(255,201,64,1)',   'rgba(255,201,64,.07)',  'rgba(255,201,64,.3)' ],
+      'Exfiltration':         ['rgba(240,176,106,1)',  'rgba(240,176,106,.07)', 'rgba(240,176,106,.3)'],
+      'Execution':            ['rgba(184,169,255,1)',  'rgba(184,169,255,.07)', 'rgba(184,169,255,.3)'],
+      'Unknown':              ['rgba(136,136,136,1)',  'rgba(136,136,136,.07)', 'rgba(136,136,136,.3)'],
     };
-    // Mirror Python _case_techniques() path matchers
+    // Mirror Python _case_techniques() detection logic
     const MATCHERS = {
       enumeration:          r => ['/docs','/openapi.json','/swagger','/redoc','/.env','/config.json','/.well-known/security.txt'].includes(r.path),
       brute_force:          r => (r.path.includes('auth/login') || r.path.endsWith('/v1/auth/token')) && parseInt(r.status||0) >= 401,
@@ -668,14 +669,25 @@
       malware_upload:       r => r.path.startsWith('/files') || ['/import','/plugins/install','/themes/upload'].includes(r.path),
       token_probe:          r => r.kind.includes('token_used') || r.kind.includes('unknown_token'),
     };
+    // Human-readable detection basis (shown when no timeline matches found)
+    const HINTS = {
+      enumeration:          'Recon paths accessed: /docs, /.env, /openapi.json, /swagger, /redoc, /config.json, /.well-known/security.txt',
+      brute_force:          '≥3 requests to /auth/login or /v1/auth/token with HTTP 401 responses — credential stuffing or password spray',
+      token_abuse:          'Paths targeted: /apikeys/*, /v1/keys/*, /internal/config/* — API key enumeration or theft attempt',
+      privilege_escalation: 'Admin/internal paths accessed: /admin/*, /internal/* — lateral movement or privilege abuse',
+      privileged_access:    'Root/exec paths accessed: /root/*, /console/exec — direct shell or root access attempt',
+      data_exfiltration:    'Bulk export paths accessed: /backup/*, /api/v1/reports/*, /api/v1/transactions/* — data staging or theft',
+      malware_upload:       'Upload/install paths accessed: /files/*, /import, /plugins/install, /themes/upload — remote code or backdoor upload',
+      token_probe:          'Events with kind=token_used or kind=unknown_token detected — token replay or probe with invalid credentials',
+    };
 
     const techniques = {{ case_techniques | tojson }};
     const chartEl = document.getElementById('mitreChart');
     const listEl  = document.getElementById('mitreTechList');
     if (!chartEl || !techniques.length) return;
 
-    // Collect related timeline rows per technique
-    const related = {}; // tech → [{method, path, ip, ts, status, actor}]
+    // ── Collect matching timeline rows per technique (max 6 each) ──
+    const related = {};
     document.querySelectorAll('#timelineTable tbody tr').forEach(tr => {
       const r = {
         path:   tr.dataset.path   || '',
@@ -684,7 +696,6 @@
         ip:     tr.dataset.ip     || '',
         ts:     tr.dataset.ts     || '',
         kind:   tr.dataset.kind   || '',
-        actor:  (tr.dataset.actor || '').slice(0, 8),
       };
       techniques.forEach(t => {
         const fn = MATCHERS[t];
@@ -695,7 +706,7 @@
       });
     });
 
-    // Group by tactic
+    // ── Group techniques by tactic ──
     const byTactic = new Map();
     techniques.forEach(t => {
       const tactic = MITRE[t]?.tactic || 'Unknown';
@@ -703,65 +714,100 @@
       byTactic.get(tactic).push(t);
     });
 
-    // ── Bar chart: each tactic = one column (count + bar + label stacked) ──
-    const BAR_H = 72; // px max bar height
+    // ── Bar chart ──
+    // Each tactic = one self-contained column: [count] [bar grows from bottom] [label]
+    const BAR_MAX = 68;
     const maxCount = Math.max(...Array.from(byTactic.values()).map(v => v.length), 1);
-    let chartHtml = `<div style="display:flex;gap:12px;align-items:flex-end;padding:0 4px;">`;
+    let chartHtml = `<div style="display:flex;gap:16px;padding:4px 4px 0;">`;
     byTactic.forEach((techs, tactic) => {
-      const color  = COLORS[tactic] || COLORS.Unknown;
+      const [fg,,] = COLORS[tactic] || COLORS.Unknown;
       const count  = techs.length;
-      const barH   = Math.max(6, Math.round((count / maxCount) * BAR_H));
+      const barH   = Math.max(5, Math.round((count / maxCount) * BAR_MAX));
       chartHtml += `
-        <div style="flex:1;min-width:70px;display:flex;flex-direction:column;align-items:center;gap:5px;">
-          <span style="font-size:0.72rem;font-weight:700;color:${color};">${count}</span>
-          <div style="height:${BAR_H}px;width:100%;display:flex;align-items:flex-end;">
-            <div style="width:100%;height:${barH}px;background:${color}22;border:1px solid ${color}55;border-bottom:2px solid ${color};border-radius:3px 3px 0 0;"></div>
+        <div style="flex:1;min-width:80px;display:flex;flex-direction:column;align-items:center;gap:4px;">
+          <span style="font-size:0.75rem;font-weight:700;color:${fg};">${count}</span>
+          <div style="width:100%;height:${BAR_MAX}px;display:flex;align-items:flex-end;">
+            <div style="width:100%;height:${barH}px;
+                        background:linear-gradient(to top,${fg.replace('1)','0.25)')},${fg.replace('1)','0.06)')});
+                        border:1px solid ${fg.replace('1)','0.45)')};
+                        border-bottom:2px solid ${fg};
+                        border-radius:3px 3px 0 0;"></div>
           </div>
-          <span style="font-size:0.6rem;color:${color};font-weight:600;text-transform:uppercase;letter-spacing:0.04em;text-align:center;line-height:1.3;">${tactic}</span>
+          <span style="font-size:0.6rem;font-weight:700;color:${fg};text-transform:uppercase;
+                       letter-spacing:0.05em;text-align:center;line-height:1.3;">${tactic}</span>
         </div>`;
     });
     chartHtml += `</div>`;
     chartEl.innerHTML = chartHtml;
 
-    // ── Technique cards with related requests ──
-    let listHtml = `<div style="display:flex;flex-wrap:wrap;gap:10px;padding:0 20px 18px;">`;
-    techniques.forEach(t => {
-      const m      = MITRE[t];
-      const tactic = m?.tactic || 'Unknown';
-      const color  = COLORS[tactic] || COLORS.Unknown;
-      const tid    = m?.tid || '—';
-      const lbl    = m?.label || t;
-      const evts   = related[t] || [];
-      const statusColor = s => parseInt(s) >= 500 ? '#f2a6a6' : parseInt(s) >= 400 ? '#ffc940' : parseInt(s) >= 200 ? '#7ee2b8' : 'var(--muted)';
+    // ── Technique cards ──
+    const stColor = s => { const n=parseInt(s||0); return n>=500?'#f2a6a6':n>=400?'#ffc940':n>=200?'#7ee2b8':'var(--muted)'; };
 
-      let evHtml = '';
+    let listHtml = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:12px;padding:14px 20px 20px;">`;
+    techniques.forEach(t => {
+      const info   = MITRE[t];
+      const tactic = info?.tactic || 'Unknown';
+      const [fg, bg, bdr] = COLORS[tactic] || COLORS.Unknown;
+      const tid    = info?.tid || '—';
+      const lbl    = info?.label || t;
+      const evts   = related[t] || [];
+
+      // ── Header ──
+      let cardHtml = `
+        <div style="border:1px solid ${bdr};border-radius:10px;background:${bg};overflow:hidden;">
+          <div style="padding:11px 14px 9px;border-bottom:1px solid ${bdr};">
+            <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;">
+              <div>
+                <div style="font-size:0.6rem;font-weight:700;color:${fg};text-transform:uppercase;letter-spacing:0.07em;margin-bottom:3px;">${tactic}</div>
+                <div style="font-size:0.87rem;font-weight:600;color:var(--text);line-height:1.3;">${lbl}</div>
+              </div>
+              <span style="font-size:0.68rem;font-family:monospace;font-weight:700;color:${fg};
+                           background:${fg.replace('1)','0.1)')};border:1px solid ${bdr};
+                           border-radius:5px;padding:2px 7px;white-space:nowrap;flex-shrink:0;">${tid}</span>
+            </div>
+            <div style="font-size:0.65rem;color:var(--muted);font-family:monospace;margin-top:4px;text-transform:uppercase;letter-spacing:0.03em;">${t.replace(/_/g,' ')}</div>
+          </div>`;
+
+      // ── Evidence section ──
       if (evts.length) {
-        evHtml += `<div style="margin-top:9px;padding-top:8px;border-top:1px solid ${color}25;">
-          <div style="font-size:0.6rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);margin-bottom:5px;">Related requests (${evts.length})</div>
-          <table style="width:100%;border-collapse:collapse;font-size:0.68rem;font-family:monospace;">`;
+        cardHtml += `
+          <div style="padding:9px 14px 11px;">
+            <div style="font-size:0.6rem;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted);margin-bottom:7px;">
+              Evidence — ${evts.length} matching request${evts.length>1?'s':''}
+            </div>`;
         evts.forEach(ev => {
-          const m  = (ev.method || '—').toUpperCase();
-          const p  = ev.path.length > 32 ? ev.path.slice(0,32)+'…' : (ev.path || '—');
-          const st = ev.status || '—';
-          evHtml += `<tr>
-            <td style="padding:1px 6px 1px 0;color:${color};white-space:nowrap;">${m}</td>
-            <td style="padding:1px 6px 1px 0;color:var(--text);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${ev.path}">${p}</td>
-            <td style="padding:1px 6px 1px 0;color:${statusColor(st)};white-space:nowrap;">${st}</td>
-            <td style="padding:1px 0;color:var(--muted);white-space:nowrap;">${ev.ip || ''}</td>
-          </tr>`;
+          const meth = (ev.method||'—').toUpperCase();
+          const path = ev.path || '—';
+          const disp = path.length > 36 ? path.slice(0,36)+'…' : path;
+          const st   = ev.status || '—';
+          cardHtml += `
+            <div style="display:flex;align-items:center;gap:0;padding:3px 0;
+                        border-bottom:1px solid rgba(255,255,255,.04);font-family:monospace;font-size:0.7rem;">
+              <span style="width:46px;flex-shrink:0;font-weight:700;color:${fg};">${meth}</span>
+              <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+                           color:var(--text);" title="${path}">${disp}</span>
+              <span style="width:36px;flex-shrink:0;text-align:right;font-weight:600;color:${stColor(st)};padding-left:4px;">${st}</span>
+              <span style="width:100px;flex-shrink:0;text-align:right;color:var(--muted);
+                           font-size:0.64rem;padding-left:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${ev.ip||''}</span>
+            </div>`;
         });
-        evHtml += `</table></div>`;
+        cardHtml += `</div>`;
       } else {
-        evHtml += `<div style="margin-top:7px;font-size:0.68rem;color:var(--muted);font-style:italic;">No matching requests in timeline window</div>`;
+        // No timeline matches — show detection basis
+        cardHtml += `
+          <div style="padding:9px 14px 11px;">
+            <div style="font-size:0.6rem;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;
+                        color:var(--muted);margin-bottom:5px;">Detection basis</div>
+            <div style="font-size:0.72rem;color:var(--muted);line-height:1.5;font-style:italic;">${HINTS[t] || 'Detected by backend heuristics.'}</div>
+            <div style="margin-top:6px;font-size:0.66rem;color:${fg.replace('1)','0.6)')};display:flex;align-items:center;gap:4px;">
+              <span style="font-size:0.7rem;">&#9432;</span>
+              Qualifying events may be outside the displayed timeline window (latest 200 entries).
+            </div>
+          </div>`;
       }
 
-      listHtml += `
-        <div style="border:1px solid ${color}35;border-radius:10px;padding:11px 14px;background:${color}06;flex:1;min-width:220px;max-width:340px;">
-          <div style="font-size:0.62rem;color:${color};font-weight:700;text-transform:uppercase;letter-spacing:0.06em;">${tactic}</div>
-          <div style="font-size:0.86rem;font-weight:600;margin:3px 0 1px;color:var(--text);">${lbl}</div>
-          <div style="font-size:0.68rem;color:var(--muted);font-family:monospace;">${tid} &middot; <span style="text-transform:uppercase;">${t.replace(/_/g,' ')}</span></div>
-          ${evHtml}
-        </div>`;
+      cardHtml += `</div>`;
+      listHtml += cardHtml;
     });
     listHtml += `</div>`;
     listEl.innerHTML = listHtml;
