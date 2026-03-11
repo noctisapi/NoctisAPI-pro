@@ -831,6 +831,7 @@ def _case_timeline(steps: list[dict], events: list[dict], limit: int = 200) -> l
                 "path": row.get("path"),
                 "status": row.get("status"),
                 "kind": row.get("kind"),
+                "ua": row.get("ua"),
             }
         )
     items = [i for i in items if i.get("ts")]
@@ -3219,6 +3220,7 @@ def campaign_detail(campaign_id: str, request: Request):
                 link["reasons"] = {}
             meta = actor_meta.get(link["actor_id"], {})
             link["last_ip"] = meta.get("last_ip")
+            link["last_ua"] = meta.get("last_ua")
             geo = parse_geo_from_extra(meta.get("last_extra_json") or "")
             if not geo.get("geo_iso2"):
                 geo = parse_geo_from_extra(meta.get("last_geo_extra_json") or "")

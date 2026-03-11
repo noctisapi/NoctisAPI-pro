@@ -143,7 +143,7 @@
           <tr>
             <th data-type="text">Token</th>
             <th data-type="number">Stage</th>
-            <th data-type="text">Type</th>
+            <th data-type="select" data-options='["standard","login","mfa"]'>Type</th>
             <th data-type="date">Created</th>
             <th data-type="number">Used</th>
             <th data-type="date">Last Used</th>
@@ -180,17 +180,18 @@
         <thead>
           <tr class="header">
             <th data-type="date">Timestamp</th>
-            <th data-type="text">Icon</th>
+            <th data-type="none">Icon</th>
             <th data-type="text">Kind</th>
             <th data-type="text">Method</th>
             <th data-type="text">Path</th>
             <th data-type="text">IP</th>
+            <th data-type="text">UA</th>
             <th data-type="text">Token</th>
             <th data-type="text">Body</th>
           </tr>
           <tr class="table-filters">
-            <th><input class="table-filter" data-col="0" placeholder="Filter timestamp" aria-label="Filter timestamp"></th>
-            <th><input class="table-filter" data-col="1" placeholder="Filter icon" aria-label="Filter icon"></th>
+            <th><span class="date-range-filter"><input type="date" class="table-filter table-filter-date" data-col="0" data-role="from" aria-label="Timestamp from"><input type="date" class="table-filter table-filter-date" data-col="0" data-role="to" aria-label="Timestamp to"></span></th>
+            <th></th>
             <th><input class="table-filter" data-col="2" placeholder="Filter kind" aria-label="Filter kind"></th>
             <th>
               <select class="table-filter" data-col="3" aria-label="Filter method">
@@ -208,8 +209,9 @@
             </th>
             <th><input class="table-filter" data-col="4" placeholder="Filter path" aria-label="Filter path"></th>
             <th><input class="table-filter" data-col="5" placeholder="Filter IP" aria-label="Filter IP"></th>
-            <th><input class="table-filter" data-col="6" placeholder="Filter token" aria-label="Filter token"></th>
-            <th><input class="table-filter" data-col="7" placeholder="Filter body" aria-label="Filter body"></th>
+            <th><input class="table-filter" data-col="6" placeholder="Filter UA" aria-label="Filter UA"></th>
+            <th><input class="table-filter" data-col="7" placeholder="Filter token" aria-label="Filter token"></th>
+            <th><input class="table-filter" data-col="8" placeholder="Filter body" aria-label="Filter body"></th>
           </tr>
         </thead>
         <tbody>
@@ -224,6 +226,7 @@
               {% if e.geo_flag %}{{ e.geo_flag }} {% endif %}
               {{ e.ip or '-' }}
             </td>
+            <td class="mono clip" title="{{ e.ua or '' }}">{{ e.ua or '-' }}</td>
             <td class="mono" title="{{ e.token }}">{{ e.token if e.token else '-' }}</td>
             <td class="mono" title="{{ e.body_sample }}">{{ e.body_sample if e.body_sample else '-' }}</td>
           </tr>

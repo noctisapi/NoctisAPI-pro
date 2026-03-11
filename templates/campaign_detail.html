@@ -340,10 +340,10 @@
     <table class="table table-sortable">
       <thead>
         <tr>
-          <th data-type="num" style="width:70px;">#</th>
+          <th data-type="number" style="width:70px;">#</th>
           <th data-type="text">Title</th>
-          <th data-type="text" style="width:130px;">Status</th>
-          <th data-type="text" style="width:110px;">Severity</th>
+          <th data-type="select" data-options='["open","monitoring","closed","false positive"]' style="width:130px;">Status</th>
+          <th data-type="select" data-options='["critical","high","medium","low"]' style="width:110px;">Severity</th>
           <th data-type="date" style="width:175px;">Updated</th>
         </tr>
       </thead>
@@ -377,9 +377,10 @@
         <tr>
           <th data-type="text">Actor</th>
           <th data-type="text" style="width:140px;">IP</th>
+          <th data-type="text">UA</th>
           <th data-type="number" style="width:130px;">Confidence</th>
           <th data-type="date" style="width:80px;">Linked</th>
-          <th>Overlap</th>
+          <th data-type="none">Overlap</th>
         </tr>
       </thead>
       <tbody>
@@ -393,6 +394,7 @@
             {% if l.geo_flag %}<span style="margin-right:4px;">{{ l.geo_flag }}</span>{% endif %}
             {{ l.last_ip or '—' }}
           </td>
+          <td class="mono clip" style="font-size:0.75rem;max-width:180px;" title="{{ l.last_ua or '' }}">{{ l.last_ua or '—' }}</td>
           <td>
             {% set conf = ((reason.jaccard_vs_seed or l.confidence or 0) * 100) | round(1) %}
             <div class="conf-bar-wrap">

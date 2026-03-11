@@ -34,12 +34,35 @@
       const cell = document.createElement('th');
       const type = (th.dataset && th.dataset.type) ? th.dataset.type : 'text';
       const label = (th.textContent || '').trim();
-      if(type === 'date'){
+      if(type === 'none'){
+        // action / checkbox columns — no filter control
+      } else if(type === 'date'){
         const wrapper = document.createElement('span');
         wrapper.className = 'date-range-filter';
         wrapper.appendChild(makeDateInput(idx, 'from', `${label} from`));
         wrapper.appendChild(makeDateInput(idx, 'to',   `${label} to`));
         cell.appendChild(wrapper);
+      } else if(type === 'select'){
+        const sel = document.createElement('select');
+        sel.className = 'table-filter';
+        sel.dataset.col = String(idx);
+        sel.setAttribute('aria-label', `Filter ${label}`);
+        const allOpt = document.createElement('option');
+        allOpt.value = '';
+        allOpt.textContent = 'All';
+        sel.appendChild(allOpt);
+        const rawOpts = (th.dataset && th.dataset.options) ? th.dataset.options : '';
+        if(rawOpts){
+          try{
+            JSON.parse(rawOpts).forEach(o => {
+              const opt = document.createElement('option');
+              opt.value = String(o).toLowerCase();
+              opt.textContent = String(o);
+              sel.appendChild(opt);
+            });
+          }catch(e){}
+        }
+        cell.appendChild(sel);
       } else {
         const input = document.createElement('input');
         input.className = 'table-filter';
@@ -211,6 +234,9 @@
         if(filter.from && key < filter.from) return false;
         if(filter.to   && key > filter.to)   return false;
         return true;
+      }
+      if(type === 'select'){
+        return getLower(row, idx) === filter.value;
       }
       return getLower(row, idx).includes(filter.value);
     }

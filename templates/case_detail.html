@@ -252,9 +252,9 @@
       <thead>
         <tr>
           <th data-type="text">Actor</th>
-          <th data-type="text">Role</th>
+          <th data-type="select" data-options='["primary","related"]'>Role</th>
           <th data-type="date">Added</th>
-          <th style="width:160px;"></th>
+          <th data-type="none" style="width:160px;"></th>
         </tr>
       </thead>
       <tbody>
@@ -306,6 +306,9 @@
       <option value="7">S7</option>
       <option value="8">S8</option>
     </select>
+    <input type="date" id="tlDateFrom" class="input" style="padding:5px 8px;font-size:0.82rem;" aria-label="Timeline date from" oninput="applyTimelineFilters()">
+    <input type="date" id="tlDateTo" class="input" style="padding:5px 8px;font-size:0.82rem;" aria-label="Timeline date to" oninput="applyTimelineFilters()">
+    <input type="text" id="tlUaFilter" class="input" placeholder="Filter UA" style="width:160px;padding:5px 10px;font-size:0.82rem;" aria-label="Filter UA" oninput="applyTimelineFilters()">
     <div id="tlActorChip" style="display:none;align-items:center;gap:6px;background:rgba(255,179,0,.1);border:1px solid rgba(255,179,0,.3);border-radius:999px;padding:3px 10px;font-size:0.8rem;color:#ffc940;">
       <span>Actor: <strong id="timelineFilterLabel" class="mono"></strong></span>
       <button type="button" style="background:none;border:none;color:#ffc940;cursor:pointer;padding:0;line-height:1;font-size:1rem;" onclick="clearActorFilter()">&#10005;</button>
@@ -321,13 +324,14 @@
           <th style="width:70px;">Type</th>
           <th style="width:80px;">Actor</th>
           <th>Request</th>
+          <th>UA</th>
           <th style="width:60px;">Stage</th>
           <th style="width:60px;">Status</th>
         </tr>
       </thead>
       <tbody>
         {% for ev in case_timeline %}
-        <tr data-actor="{{ ev.actor_id }}" data-type="{{ ev.type }}" data-stage="{{ ev.stage if ev.stage is not none else '' }}">
+        <tr data-actor="{{ ev.actor_id }}" data-type="{{ ev.type }}" data-stage="{{ ev.stage if ev.stage is not none else '' }}" data-ts="{{ (ev.ts or '')[:10] }}" data-ua="{{ (ev.ua or '')|lower }}">
           <td class="mono muted" style="font-size:0.8rem;">{{ ev.ts }}</td>
           <td>
             <span class="ev-type ev-type-{{ ev.type }}">{{ ev.type }}</span>
@@ -338,6 +342,7 @@
           <td class="mono" style="font-size:0.8rem;">
             {% if ev.method %}<span class="muted">{{ ev.method }}</span> {% endif %}{{ ev.path }}
           </td>
+          <td class="mono clip" style="font-size:0.75rem;max-width:200px;" title="{{ ev.ua or '' }}">{{ ev.ua or '—' }}</td>
           <td class="ev-stage">{{ ev.stage if ev.stage is not none else '—' }}</td>
           <td>
             {% if ev.status is not none %}
@@ -364,9 +369,9 @@
     <table class="table table-sortable">
       <thead>
         <tr>
-          <th data-type="num" style="width:70px;">Case</th>
-          <th data-type="num" style="width:70px;">Score</th>
-          <th data-type="num" style="width:110px;">Shared Actors</th>
+          <th data-type="number" style="width:70px;">Case</th>
+          <th data-type="number" style="width:70px;">Score</th>
+          <th data-type="number" style="width:110px;">Shared Actors</th>
           <th data-type="text">Shared Paths</th>
         </tr>
       </thead>
@@ -503,8 +508,11 @@
   let activeActorFilter = null;
 
   function applyTimelineFilters() {
-    const typeF = (document.getElementById('tlTypeFilter')?.value || '').toLowerCase();
+    const typeF  = (document.getElementById('tlTypeFilter')?.value || '').toLowerCase();
     const stageF = document.getElementById('tlStageFilter')?.value ?? '';
+    const dateFrom = document.getElementById('tlDateFrom')?.value || '';
+    const dateTo   = document.getElementById('tlDateTo')?.value   || '';
+    const uaF    = (document.getElementById('tlUaFilter')?.value || '').toLowerCase().trim();
     const actorF = activeActorFilter;
     let visible = 0;
     document.querySelectorAll('#timelineTable tbody tr').forEach(tr => {
@@ -512,7 +520,10 @@
       const matchActor = !actorF || tr.dataset.actor === actorF;
       const trStage    = tr.dataset.stage !== '' ? parseInt(tr.dataset.stage) : null;
       const matchStage = stageF === '' || (trStage !== null && trStage === parseInt(stageF));
-      const show = matchType && matchActor && matchStage;
+      const trDate     = tr.dataset.ts || '';
+      const matchDate  = (!dateFrom || trDate >= dateFrom) && (!dateTo || trDate <= dateTo);
+      const matchUa    = !uaF || (tr.dataset.ua || '').includes(uaF);
+      const show = matchType && matchActor && matchStage && matchDate && matchUa;
       tr.style.display = show ? '' : 'none';
       if (show) visible++;
     });
@@ -541,10 +552,16 @@
     activeActorFilter = null;
     const chip = document.getElementById('tlActorChip');
     if (chip) chip.style.display = 'none';
-    const typeEl  = document.getElementById('tlTypeFilter');
-    const stageEl = document.getElementById('tlStageFilter');
-    if (typeEl)  typeEl.value = '';
-    if (stageEl) stageEl.value = '';
+    const typeEl   = document.getElementById('tlTypeFilter');
+    const stageEl  = document.getElementById('tlStageFilter');
+    const dateFrom = document.getElementById('tlDateFrom');
+    const dateTo   = document.getElementById('tlDateTo');
+    const uaEl     = document.getElementById('tlUaFilter');
+    if (typeEl)   typeEl.value  = '';
+    if (stageEl)  stageEl.value = '';
+    if (dateFrom) dateFrom.value = '';
+    if (dateTo)   dateTo.value   = '';
+    if (uaEl)     uaEl.value     = '';
     applyTimelineFilters();
   }
 
