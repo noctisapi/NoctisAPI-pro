@@ -9,24 +9,6 @@
     return Number.isNaN(num) ? null : num;
   }
 
-  /**
-   * Parse a date filter string into {from, to} ISO date keys.
-   * Supported syntax:
-   *   "YYYY-MM-DD"             → exact date (from === to)
-   *   "YYYY-MM-DD..YYYY-MM-DD" → inclusive range
-   *   "YYYY-MM-DD.."           → from date, no upper bound
-   *   "..YYYY-MM-DD"           → no lower bound, to date
-   */
-  function parseDateFilter(val){
-    val = (val || '').trim();
-    if(!val) return null;
-    if(val.includes('..')){
-      const parts = val.split('..');
-      return { from: (parts[0] || '').trim(), to: (parts[1] || '').trim() };
-    }
-    return { from: val, to: val };
-  }
-
   function getHeaderRow(thead){
     if(!thead) return null;
     return thead.querySelector('tr.header') || thead.querySelector('tr');
@@ -49,9 +31,9 @@
         input.type = 'text';
         input.className = 'table-filter table-filter-date';
         input.dataset.col = String(idx);
-        const ph = label ? `${label}: YYYY-MM-DD` : 'YYYY-MM-DD';
-        input.placeholder = ph;
-        input.setAttribute('aria-label', ph);
+        input.placeholder = label || 'Date';
+        input.setAttribute('aria-label', label ? `${label} date range` : 'Date range');
+        input.readOnly = true;
         cell.appendChild(input);
       } else if(type === 'select'){
         const sel = document.createElement('select');
@@ -86,6 +68,11 @@
       filterRow.appendChild(cell);
     });
     thead.appendChild(filterRow);
+    if(typeof flatpickr !== 'undefined'){
+      filterRow.querySelectorAll('.table-filter-date').forEach(inp => {
+        flatpickr(inp, { mode: 'range', dateFormat: 'Y-m-d', disableMobile: true });
+      });
+    }
     return filterRow;
   }
 
@@ -207,13 +194,18 @@
       filterInputs.forEach(input => {
         const idx = parseInt(input.dataset.col, 10);
         const type = headerCells[idx]?.dataset?.type || 'text';
-        const val = input.value.trim();
+        const val = (input.value || '').trim();
         if(!val) return;
         if(type === 'date'){
-          const parsed = parseDateFilter(val);
-          if(parsed && (parsed.from || parsed.to)){
-            activeFilters.push({ idx, type: 'date', from: parsed.from, to: parsed.to });
+          let from = '', to = '';
+          if(val.includes(' to ')){
+            const parts = val.split(' to ');
+            from = parts[0].trim();
+            to   = parts[1].trim();
+          } else {
+            from = to = val;
           }
+          activeFilters.push({ idx, type: 'date', from, to });
           return;
         }
         activeFilters.push({ idx, type, value: val.toLowerCase() });

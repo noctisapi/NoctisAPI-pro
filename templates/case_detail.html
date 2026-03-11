@@ -310,7 +310,7 @@
       <option value="4xx">4xx Client err</option>
       <option value="5xx">5xx Server err</option>
     </select>
-    <input type="text" id="tlDateFilter" class="input" placeholder="Date: YYYY-MM-DD or range" style="width:190px;padding:5px 10px;font-size:0.82rem;" aria-label="Timeline date filter" oninput="applyTimelineFilters()">
+    <input type="text" id="tlDateRange" class="input" placeholder="Date range" style="width:200px;padding:5px 10px;font-size:0.82rem;" aria-label="Timeline date range" readonly>
   </div>
   <!-- Filter bar row 2 -->
   <div style="padding:4px 14px 8px;border-bottom:1px solid var(--stroke);display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
@@ -341,6 +341,7 @@
         {% for ev in case_timeline %}
         <tr data-actor="{{ ev.actor_id }}"
             data-type="{{ ev.type }}"
+            data-kind="{{ ev.kind or '' }}"
             data-stage="{{ ev.stage if ev.stage is not none else '' }}"
             data-ts="{{ (ev.ts or '')[:10] }}"
             data-ua="{{ (ev.ua or '')|lower }}"
@@ -380,8 +381,8 @@
     <div class="card-title">MITRE ATT&amp;CK — TTP Map</div>
     <div class="card-sub">{{ case_techniques|length }} technique{{ 's' if case_techniques|length != 1 else '' }}</div>
   </div>
-  <div id="mitreChart" style="padding:16px 20px;"></div>
-  <div id="mitreTechList" style="padding:0 20px 16px;display:flex;flex-wrap:wrap;gap:8px;"></div>
+  <div id="mitreChart" style="padding:16px 20px 8px;"></div>
+  <div id="mitreTechList"></div>
 </div>
 {% endif %}
 
@@ -555,28 +556,22 @@
     applyTimelineFilters();
   }
 
-  function parseDateFilter(val) {
-    val = (val || '').trim();
-    if (!val) return null;
-    if (val.includes('..')) {
-      const parts = val.split('..');
-      return { from: (parts[0] || '').trim(), to: (parts[1] || '').trim() };
-    }
-    return { from: val, to: val };
-  }
-
   function applyTimelineFilters() {
     const typeF   = (document.getElementById('tlTypeFilter')?.value   || '').toLowerCase();
     const stageF  =  document.getElementById('tlStageFilter')?.value  ?? '';
     const methodF = (document.getElementById('tlMethodFilter')?.value || '').toLowerCase();
     const statusF = (document.getElementById('tlStatusFilter')?.value || '').toLowerCase();
-    const dateRaw =  document.getElementById('tlDateFilter')?.value   || '';
+    const dateRaw  = (document.getElementById('tlDateRange')?.value || '').trim();
+    let dateFrom = '', dateTo = '';
+    if (dateRaw) {
+      if (dateRaw.includes(' to ')) { const p = dateRaw.split(' to '); dateFrom = p[0].trim(); dateTo = p[1].trim(); }
+      else { dateFrom = dateTo = dateRaw; }
+    }
     const pathF   = (document.getElementById('tlPathFilter')?.value   || '').toLowerCase().trim();
     const ipF     = (document.getElementById('tlIpFilter')?.value     || '').toLowerCase().trim();
     const uaRaw   = (document.getElementById('tlUaFilter')?.value     || '').trim();
     const uaF     = uaRaw.toLowerCase();
     const uaEmpty = uaRaw === '-'; // explicit filter for rows with no UA
-    const dateRange = parseDateFilter(dateRaw);
 
     let visible = 0;
     document.querySelectorAll('#timelineTable tbody tr').forEach(tr => {
@@ -592,10 +587,8 @@
       else if (statusF === '5xx') matchStatus = trStatus >= 500;
       const trDate      = tr.dataset.ts || '';
       let matchDate     = true;
-      if (dateRange) {
-        if (dateRange.from && trDate < dateRange.from) matchDate = false;
-        if (dateRange.to   && trDate > dateRange.to)   matchDate = false;
-      }
+      if (dateFrom && trDate < dateFrom) matchDate = false;
+      if (dateTo   && trDate > dateTo)   matchDate = false;
       const matchPath   = !pathF || (tr.dataset.path || '').includes(pathF);
       const matchIp     = !ipF   || (tr.dataset.ip   || '').toLowerCase().includes(ipF);
       let matchUa       = true;
@@ -622,79 +615,155 @@
     activeActorFilters.clear();
     renderActorChips();
     ['tlTypeFilter','tlStageFilter','tlMethodFilter','tlStatusFilter',
-     'tlDateFilter','tlPathFilter','tlIpFilter','tlUaFilter'].forEach(id => {
+     'tlPathFilter','tlIpFilter','tlUaFilter'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.value = '';
     });
+    const dateEl = document.getElementById('tlDateRange');
+    if (dateEl) { dateEl._flatpickr ? dateEl._flatpickr.clear() : (dateEl.value = ''); }
     applyTimelineFilters();
   }
+
+  /* ── Timeline date range picker ── */
+  (function(){
+    const el = document.getElementById('tlDateRange');
+    if(!el || typeof flatpickr === 'undefined') return;
+    flatpickr(el, {
+      mode: 'range',
+      dateFormat: 'Y-m-d',
+      disableMobile: true,
+      onChange: () => applyTimelineFilters(),
+      onClose: () => applyTimelineFilters(),
+    });
+  })();
 
   /* ── MITRE ATT&CK TTP rendering ── */
   (function(){
     const MITRE = {
-      enumeration:          { tactic:'Discovery',            tid:'T1046',  tactic_id:'TA0007', label:'Network Service Discovery' },
-      brute_force:          { tactic:'Credential Access',    tid:'T1110',  tactic_id:'TA0006', label:'Brute Force' },
-      token_abuse:          { tactic:'Credential Access',    tid:'T1528',  tactic_id:'TA0006', label:'Steal Application Access Token' },
-      privilege_escalation: { tactic:'Privilege Escalation', tid:'T1078',  tactic_id:'TA0004', label:'Valid Accounts' },
-      privileged_access:    { tactic:'Privilege Escalation', tid:'T1078',  tactic_id:'TA0004', label:'Valid Accounts (privileged)' },
-      data_exfiltration:    { tactic:'Exfiltration',         tid:'T1041',  tactic_id:'TA0010', label:'Exfiltration Over C2 Channel' },
-      malware_upload:       { tactic:'Execution',            tid:'T1190',  tactic_id:'TA0002', label:'Exploit Public-Facing Application' },
-      token_probe:          { tactic:'Credential Access',    tid:'T1528',  tactic_id:'TA0006', label:'Steal Application Access Token (probe)' },
+      enumeration:          { tactic:'Discovery',            tid:'T1046', label:'Network Service Discovery' },
+      brute_force:          { tactic:'Credential Access',    tid:'T1110', label:'Brute Force' },
+      token_abuse:          { tactic:'Credential Access',    tid:'T1528', label:'Steal Application Access Token' },
+      privilege_escalation: { tactic:'Privilege Escalation', tid:'T1078', label:'Valid Accounts' },
+      privileged_access:    { tactic:'Privilege Escalation', tid:'T1078', label:'Valid Accounts (privileged)' },
+      data_exfiltration:    { tactic:'Exfiltration',         tid:'T1041', label:'Exfiltration Over C2 Channel' },
+      malware_upload:       { tactic:'Execution',            tid:'T1190', label:'Exploit Public-Facing Application' },
+      token_probe:          { tactic:'Credential Access',    tid:'T1528', label:'Steal Application Access Token (probe)' },
     };
-    const TACTIC_COLORS = {
+    const COLORS = {
       'Discovery':           '#7ab8f5',
       'Credential Access':   '#f2a6a6',
       'Privilege Escalation':'#ffc940',
       'Exfiltration':        '#f0b06a',
       'Execution':           '#b8a9ff',
+      'Unknown':             '#888',
     };
+    // Mirror Python _case_techniques() path matchers
+    const MATCHERS = {
+      enumeration:          r => ['/docs','/openapi.json','/swagger','/redoc','/.env','/config.json','/.well-known/security.txt'].includes(r.path),
+      brute_force:          r => (r.path.includes('auth/login') || r.path.endsWith('/v1/auth/token')) && parseInt(r.status||0) >= 401,
+      token_abuse:          r => r.path.startsWith('/apikeys') || r.path.startsWith('/v1/keys') || r.path.startsWith('/internal/config'),
+      privilege_escalation: r => r.path.startsWith('/admin') || r.path.startsWith('/internal'),
+      privileged_access:    r => r.path.startsWith('/root') || r.path.startsWith('/console/exec'),
+      data_exfiltration:    r => r.path.startsWith('/backup') || r.path.startsWith('/api/v1/reports') || r.path.startsWith('/api/v1/transactions'),
+      malware_upload:       r => r.path.startsWith('/files') || ['/import','/plugins/install','/themes/upload'].includes(r.path),
+      token_probe:          r => r.kind.includes('token_used') || r.kind.includes('unknown_token'),
+    };
+
     const techniques = {{ case_techniques | tojson }};
     const chartEl = document.getElementById('mitreChart');
     const listEl  = document.getElementById('mitreTechList');
     if (!chartEl || !techniques.length) return;
 
+    // Collect related timeline rows per technique
+    const related = {}; // tech → [{method, path, ip, ts, status, actor}]
+    document.querySelectorAll('#timelineTable tbody tr').forEach(tr => {
+      const r = {
+        path:   tr.dataset.path   || '',
+        method: tr.dataset.method || '',
+        status: tr.dataset.status || '',
+        ip:     tr.dataset.ip     || '',
+        ts:     tr.dataset.ts     || '',
+        kind:   tr.dataset.kind   || '',
+        actor:  (tr.dataset.actor || '').slice(0, 8),
+      };
+      techniques.forEach(t => {
+        const fn = MATCHERS[t];
+        if (!fn) return;
+        try { if (!fn(r)) return; } catch(_){ return; }
+        if (!related[t]) related[t] = [];
+        if (related[t].length < 6) related[t].push(r);
+      });
+    });
+
     // Group by tactic
     const byTactic = new Map();
     techniques.forEach(t => {
-      const m = MITRE[t];
-      const tactic = m ? m.tactic : 'Unknown';
+      const tactic = MITRE[t]?.tactic || 'Unknown';
       if (!byTactic.has(tactic)) byTactic.set(tactic, []);
-      byTactic.get(tactic).push({ tech: t, m });
+      byTactic.get(tactic).push(t);
     });
 
-    // Bar chart: one bar per tactic
-    const maxCount = Math.max(...Array.from(byTactic.values()).map(v => v.length));
-    let chartHtml = '<div style="display:flex;align-items:flex-end;gap:10px;height:80px;margin-bottom:8px;">';
-    byTactic.forEach((items, tactic) => {
-      const color = TACTIC_COLORS[tactic] || '#7ab8f5';
-      const pct   = Math.max(12, (items.length / maxCount) * 100);
-      chartHtml += `<div style="display:flex;flex-direction:column;align-items:center;gap:4px;flex:1;min-width:60px;">
-        <span style="font-size:0.68rem;font-weight:700;color:${color};">${items.length}</span>
-        <div style="width:100%;height:${pct}%;background:${color}25;border:1px solid ${color}60;border-radius:4px 4px 0 0;"></div>
-      </div>`;
+    // ── Bar chart: each tactic = one column (count + bar + label stacked) ──
+    const BAR_H = 72; // px max bar height
+    const maxCount = Math.max(...Array.from(byTactic.values()).map(v => v.length), 1);
+    let chartHtml = `<div style="display:flex;gap:12px;align-items:flex-end;padding:0 4px;">`;
+    byTactic.forEach((techs, tactic) => {
+      const color  = COLORS[tactic] || COLORS.Unknown;
+      const count  = techs.length;
+      const barH   = Math.max(6, Math.round((count / maxCount) * BAR_H));
+      chartHtml += `
+        <div style="flex:1;min-width:70px;display:flex;flex-direction:column;align-items:center;gap:5px;">
+          <span style="font-size:0.72rem;font-weight:700;color:${color};">${count}</span>
+          <div style="height:${BAR_H}px;width:100%;display:flex;align-items:flex-end;">
+            <div style="width:100%;height:${barH}px;background:${color}22;border:1px solid ${color}55;border-bottom:2px solid ${color};border-radius:3px 3px 0 0;"></div>
+          </div>
+          <span style="font-size:0.6rem;color:${color};font-weight:600;text-transform:uppercase;letter-spacing:0.04em;text-align:center;line-height:1.3;">${tactic}</span>
+        </div>`;
     });
-    chartHtml += '</div><div style="display:flex;gap:10px;">';
-    byTactic.forEach((_, tactic) => {
-      const color = TACTIC_COLORS[tactic] || '#7ab8f5';
-      chartHtml += `<div style="flex:1;min-width:60px;text-align:center;font-size:0.64rem;color:${color};font-weight:600;text-transform:uppercase;letter-spacing:0.04em;">${tactic}</div>`;
-    });
-    chartHtml += '</div>';
+    chartHtml += `</div>`;
     chartEl.innerHTML = chartHtml;
 
-    // Technique cards
-    let listHtml = '';
+    // ── Technique cards with related requests ──
+    let listHtml = `<div style="display:flex;flex-wrap:wrap;gap:10px;padding:0 20px 18px;">`;
     techniques.forEach(t => {
-      const m = MITRE[t];
-      const tactic = m ? m.tactic : 'Unknown';
-      const color  = TACTIC_COLORS[tactic] || '#7ab8f5';
-      const tid    = m ? m.tid : '—';
-      const tlabel = m ? m.label : t;
-      listHtml += `<div style="border:1px solid ${color}40;border-radius:8px;padding:8px 12px;background:${color}08;min-width:180px;">
-        <div style="font-size:0.68rem;color:${color};font-weight:700;text-transform:uppercase;letter-spacing:0.05em;">${tactic}</div>
-        <div style="font-size:0.82rem;font-weight:600;margin:2px 0;">${tlabel}</div>
-        <div style="font-size:0.72rem;color:var(--muted);font-family:monospace;">${tid} &middot; <span style="text-transform:uppercase;">${t.replace(/_/g,' ')}</span></div>
-      </div>`;
+      const m      = MITRE[t];
+      const tactic = m?.tactic || 'Unknown';
+      const color  = COLORS[tactic] || COLORS.Unknown;
+      const tid    = m?.tid || '—';
+      const lbl    = m?.label || t;
+      const evts   = related[t] || [];
+      const statusColor = s => parseInt(s) >= 500 ? '#f2a6a6' : parseInt(s) >= 400 ? '#ffc940' : parseInt(s) >= 200 ? '#7ee2b8' : 'var(--muted)';
+
+      let evHtml = '';
+      if (evts.length) {
+        evHtml += `<div style="margin-top:9px;padding-top:8px;border-top:1px solid ${color}25;">
+          <div style="font-size:0.6rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);margin-bottom:5px;">Related requests (${evts.length})</div>
+          <table style="width:100%;border-collapse:collapse;font-size:0.68rem;font-family:monospace;">`;
+        evts.forEach(ev => {
+          const m  = (ev.method || '—').toUpperCase();
+          const p  = ev.path.length > 32 ? ev.path.slice(0,32)+'…' : (ev.path || '—');
+          const st = ev.status || '—';
+          evHtml += `<tr>
+            <td style="padding:1px 6px 1px 0;color:${color};white-space:nowrap;">${m}</td>
+            <td style="padding:1px 6px 1px 0;color:var(--text);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${ev.path}">${p}</td>
+            <td style="padding:1px 6px 1px 0;color:${statusColor(st)};white-space:nowrap;">${st}</td>
+            <td style="padding:1px 0;color:var(--muted);white-space:nowrap;">${ev.ip || ''}</td>
+          </tr>`;
+        });
+        evHtml += `</table></div>`;
+      } else {
+        evHtml += `<div style="margin-top:7px;font-size:0.68rem;color:var(--muted);font-style:italic;">No matching requests in timeline window</div>`;
+      }
+
+      listHtml += `
+        <div style="border:1px solid ${color}35;border-radius:10px;padding:11px 14px;background:${color}06;flex:1;min-width:220px;max-width:340px;">
+          <div style="font-size:0.62rem;color:${color};font-weight:700;text-transform:uppercase;letter-spacing:0.06em;">${tactic}</div>
+          <div style="font-size:0.86rem;font-weight:600;margin:3px 0 1px;color:var(--text);">${lbl}</div>
+          <div style="font-size:0.68rem;color:var(--muted);font-family:monospace;">${tid} &middot; <span style="text-transform:uppercase;">${t.replace(/_/g,' ')}</span></div>
+          ${evHtml}
+        </div>`;
     });
+    listHtml += `</div>`;
     listEl.innerHTML = listHtml;
   })();
 
