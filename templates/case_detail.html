@@ -288,31 +288,37 @@
     <div class="card-sub">latest {{ case_timeline|length }} events</div>
   </div>
   {% if case_timeline %}
-  <div style="padding:8px 14px;border-bottom:1px solid var(--stroke);display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-    <select id="tlTypeFilter" class="input" style="width:130px;padding:5px 10px;font-size:0.82rem;" onchange="applyTimelineFilters()">
+  <!-- Filter bar row 1 -->
+  <div style="padding:8px 14px 4px;border-bottom:0;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+    <select id="tlTypeFilter" class="input" style="width:120px;padding:5px 10px;font-size:0.82rem;" onchange="applyTimelineFilters()">
       <option value="">All types</option>
-      <option value="step">Steps only</option>
-      <option value="event">Events only</option>
+      <option value="step">Steps</option>
+      <option value="event">Events</option>
     </select>
-    <select id="tlStageFilter" class="input" style="width:120px;padding:5px 10px;font-size:0.82rem;" onchange="applyTimelineFilters()">
+    <select id="tlStageFilter" class="input" style="width:100px;padding:5px 10px;font-size:0.82rem;" onchange="applyTimelineFilters()">
       <option value="">All stages</option>
-      <option value="0">S0</option>
-      <option value="1">S1</option>
-      <option value="2">S2</option>
-      <option value="3">S3</option>
-      <option value="4">S4</option>
-      <option value="5">S5</option>
-      <option value="6">S6</option>
-      <option value="7">S7</option>
-      <option value="8">S8</option>
+      {% for s in range(9) %}<option value="{{ s }}">S{{ s }}</option>{% endfor %}
     </select>
-    <input type="date" id="tlDateFrom" class="input" style="padding:5px 8px;font-size:0.82rem;" aria-label="Timeline date from" oninput="applyTimelineFilters()">
-    <input type="date" id="tlDateTo" class="input" style="padding:5px 8px;font-size:0.82rem;" aria-label="Timeline date to" oninput="applyTimelineFilters()">
-    <input type="text" id="tlUaFilter" class="input" placeholder="Filter UA" style="width:160px;padding:5px 10px;font-size:0.82rem;" aria-label="Filter UA" oninput="applyTimelineFilters()">
-    <div id="tlActorChip" style="display:none;align-items:center;gap:6px;background:rgba(255,179,0,.1);border:1px solid rgba(255,179,0,.3);border-radius:999px;padding:3px 10px;font-size:0.8rem;color:#ffc940;">
-      <span>Actor: <strong id="timelineFilterLabel" class="mono"></strong></span>
-      <button type="button" style="background:none;border:none;color:#ffc940;cursor:pointer;padding:0;line-height:1;font-size:1rem;" onclick="clearActorFilter()">&#10005;</button>
-    </div>
+    <select id="tlMethodFilter" class="input" style="width:100px;padding:5px 10px;font-size:0.82rem;" onchange="applyTimelineFilters()">
+      <option value="">All methods</option>
+      {% for m in ['GET','POST','PUT','DELETE','PATCH','HEAD','OPTIONS'] %}<option value="{{ m|lower }}">{{ m }}</option>{% endfor %}
+    </select>
+    <select id="tlStatusFilter" class="input" style="width:120px;padding:5px 10px;font-size:0.82rem;" onchange="applyTimelineFilters()">
+      <option value="">All statuses</option>
+      <option value="2xx">2xx OK</option>
+      <option value="3xx">3xx Redirect</option>
+      <option value="4xx">4xx Client err</option>
+      <option value="5xx">5xx Server err</option>
+    </select>
+    <input type="text" id="tlDateFilter" class="input" placeholder="Date: YYYY-MM-DD or range" style="width:190px;padding:5px 10px;font-size:0.82rem;" aria-label="Timeline date filter" oninput="applyTimelineFilters()">
+  </div>
+  <!-- Filter bar row 2 -->
+  <div style="padding:4px 14px 8px;border-bottom:1px solid var(--stroke);display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+    <input type="text" id="tlPathFilter" class="input" placeholder="Filter path" style="width:160px;padding:5px 10px;font-size:0.82rem;" aria-label="Filter path" oninput="applyTimelineFilters()">
+    <input type="text" id="tlIpFilter" class="input" placeholder="Filter IP" style="width:130px;padding:5px 10px;font-size:0.82rem;" aria-label="Filter IP" oninput="applyTimelineFilters()">
+    <input type="text" id="tlUaFilter" class="input" placeholder="Filter UA (- for empty)" style="width:180px;padding:5px 10px;font-size:0.82rem;" aria-label="Filter UA" oninput="applyTimelineFilters()">
+    <!-- Multi-actor chips -->
+    <div id="tlActorChips" style="display:flex;flex-wrap:wrap;gap:4px;align-items:center;"></div>
     <button class="btn btn-ghost btn-small" type="button" onclick="clearAllTimelineFilters()" style="margin-left:auto;">Clear all</button>
     <span id="tlCount" class="muted" style="font-size:0.78rem;"></span>
   </div>
@@ -320,35 +326,41 @@
     <table class="table" id="timelineTable">
       <thead>
         <tr>
-          <th data-type="date" style="width:170px;">Timestamp</th>
-          <th style="width:70px;">Type</th>
-          <th style="width:80px;">Actor</th>
-          <th>Request</th>
+          <th style="width:150px;">Timestamp</th>
+          <th style="width:60px;">Type</th>
+          <th style="width:75px;">Actor</th>
+          <th style="width:65px;">Method</th>
+          <th>Path</th>
+          <th style="width:120px;">IP</th>
           <th>UA</th>
-          <th style="width:60px;">Stage</th>
-          <th style="width:60px;">Status</th>
+          <th style="width:55px;">Stage</th>
+          <th style="width:55px;">Status</th>
         </tr>
       </thead>
       <tbody>
         {% for ev in case_timeline %}
-        <tr data-actor="{{ ev.actor_id }}" data-type="{{ ev.type }}" data-stage="{{ ev.stage if ev.stage is not none else '' }}" data-ts="{{ (ev.ts or '')[:10] }}" data-ua="{{ (ev.ua or '')|lower }}">
-          <td class="mono muted" style="font-size:0.8rem;">{{ ev.ts }}</td>
-          <td>
-            <span class="ev-type ev-type-{{ ev.type }}">{{ ev.type }}</span>
+        <tr data-actor="{{ ev.actor_id }}"
+            data-type="{{ ev.type }}"
+            data-stage="{{ ev.stage if ev.stage is not none else '' }}"
+            data-ts="{{ (ev.ts or '')[:10] }}"
+            data-ua="{{ (ev.ua or '')|lower }}"
+            data-method="{{ (ev.method or '')|lower }}"
+            data-path="{{ (ev.path or '')|lower }}"
+            data-ip="{{ ev.ip or '' }}"
+            data-status="{{ ev.status or '' }}">
+          <td class="mono muted" style="font-size:0.78rem;">{{ ev.ts }}</td>
+          <td><span class="ev-type ev-type-{{ ev.type }}">{{ ev.type }}</span></td>
+          <td class="mono" style="font-size:0.78rem;">
+            <a class="link" href="#" onclick="toggleActorFilter('{{ ev.actor_id }}', '{{ ev.actor_id[:8] }}'); return false;">{{ ev.actor_id[:8] }}</a>
           </td>
-          <td class="mono" style="font-size:0.8rem;">
-            <a class="link" href="#" onclick="filterTimelineByActor('{{ ev.actor_id }}', '{{ ev.actor_id[:8] }}'); return false;">{{ ev.actor_id[:8] }}</a>
-          </td>
-          <td class="mono" style="font-size:0.8rem;">
-            {% if ev.method %}<span class="muted">{{ ev.method }}</span> {% endif %}{{ ev.path }}
-          </td>
-          <td class="mono clip" style="font-size:0.75rem;max-width:200px;" title="{{ ev.ua or '' }}">{{ ev.ua or '—' }}</td>
+          <td class="mono muted" style="font-size:0.78rem;">{{ ev.method or '—' }}</td>
+          <td class="mono" style="font-size:0.78rem;">{{ ev.path or '—' }}</td>
+          <td class="mono" style="font-size:0.78rem;">{{ ev.ip or '—' }}</td>
+          <td class="mono clip" style="font-size:0.72rem;max-width:160px;" title="{{ ev.ua or '' }}">{{ ev.ua or '—' }}</td>
           <td class="ev-stage">{{ ev.stage if ev.stage is not none else '—' }}</td>
           <td>
             {% if ev.status is not none %}
-            <span class="mono" style="font-size:0.8rem;{% if ev.status < 400 %}color:#7ee2b8{% elif ev.status < 500 %}color:#ffc940{% else %}color:#f2a6a6{% endif %}">
-              {{ ev.status }}
-            </span>
+            <span class="mono" style="font-size:0.78rem;{% if ev.status < 400 %}color:#7ee2b8{% elif ev.status < 500 %}color:#ffc940{% else %}color:#f2a6a6{% endif %}">{{ ev.status }}</span>
             {% else %}—{% endif %}
           </td>
         </tr>
@@ -360,6 +372,18 @@
   <div class="case-empty" style="padding:24px;">No timeline events.</div>
   {% endif %}
 </div>
+
+<!-- MITRE ATT&CK TTP Map -->
+{% if case_techniques %}
+<div class="card" id="mitreCard">
+  <div class="card-head">
+    <div class="card-title">MITRE ATT&amp;CK — TTP Map</div>
+    <div class="card-sub">{{ case_techniques|length }} technique{{ 's' if case_techniques|length != 1 else '' }}</div>
+  </div>
+  <div id="mitreChart" style="padding:16px 20px;"></div>
+  <div id="mitreTechList" style="padding:0 20px 16px;display:flex;flex-wrap:wrap;gap:8px;"></div>
+</div>
+{% endif %}
 
 <!-- Similar Cases -->
 <div class="card">
@@ -505,25 +529,83 @@
     } else { alert('Error: ' + await res.text()); }
   }
 
-  let activeActorFilter = null;
+  /* ── Timeline filters ── */
+  const activeActorFilters = new Map(); // actorId → short label
+
+  function renderActorChips() {
+    const host = document.getElementById('tlActorChips');
+    if (!host) return;
+    host.innerHTML = '';
+    activeActorFilters.forEach((short, id) => {
+      const chip = document.createElement('span');
+      chip.style.cssText = 'display:inline-flex;align-items:center;gap:5px;background:rgba(255,179,0,.1);border:1px solid rgba(255,179,0,.3);border-radius:999px;padding:2px 8px;font-size:0.78rem;color:#ffc940;';
+      chip.innerHTML = `<span class="mono">${short}</span><button type="button" style="background:none;border:none;color:#ffc940;cursor:pointer;padding:0;line-height:1;font-size:0.9rem;" aria-label="Remove actor filter">&#10005;</button>`;
+      chip.querySelector('button').onclick = () => { activeActorFilters.delete(id); renderActorChips(); applyTimelineFilters(); };
+      host.appendChild(chip);
+    });
+  }
+
+  function toggleActorFilter(actorId, short) {
+    if (activeActorFilters.has(actorId)) {
+      activeActorFilters.delete(actorId);
+    } else {
+      activeActorFilters.set(actorId, short || actorId.slice(0, 8));
+    }
+    renderActorChips();
+    applyTimelineFilters();
+  }
+
+  function parseDateFilter(val) {
+    val = (val || '').trim();
+    if (!val) return null;
+    if (val.includes('..')) {
+      const parts = val.split('..');
+      return { from: (parts[0] || '').trim(), to: (parts[1] || '').trim() };
+    }
+    return { from: val, to: val };
+  }
 
   function applyTimelineFilters() {
-    const typeF  = (document.getElementById('tlTypeFilter')?.value || '').toLowerCase();
-    const stageF = document.getElementById('tlStageFilter')?.value ?? '';
-    const dateFrom = document.getElementById('tlDateFrom')?.value || '';
-    const dateTo   = document.getElementById('tlDateTo')?.value   || '';
-    const uaF    = (document.getElementById('tlUaFilter')?.value || '').toLowerCase().trim();
-    const actorF = activeActorFilter;
+    const typeF   = (document.getElementById('tlTypeFilter')?.value   || '').toLowerCase();
+    const stageF  =  document.getElementById('tlStageFilter')?.value  ?? '';
+    const methodF = (document.getElementById('tlMethodFilter')?.value || '').toLowerCase();
+    const statusF = (document.getElementById('tlStatusFilter')?.value || '').toLowerCase();
+    const dateRaw =  document.getElementById('tlDateFilter')?.value   || '';
+    const pathF   = (document.getElementById('tlPathFilter')?.value   || '').toLowerCase().trim();
+    const ipF     = (document.getElementById('tlIpFilter')?.value     || '').toLowerCase().trim();
+    const uaRaw   = (document.getElementById('tlUaFilter')?.value     || '').trim();
+    const uaF     = uaRaw.toLowerCase();
+    const uaEmpty = uaRaw === '-'; // explicit filter for rows with no UA
+    const dateRange = parseDateFilter(dateRaw);
+
     let visible = 0;
     document.querySelectorAll('#timelineTable tbody tr').forEach(tr => {
-      const matchType  = !typeF  || tr.dataset.type === typeF;
-      const matchActor = !actorF || tr.dataset.actor === actorF;
-      const trStage    = tr.dataset.stage !== '' ? parseInt(tr.dataset.stage) : null;
-      const matchStage = stageF === '' || (trStage !== null && trStage === parseInt(stageF));
-      const trDate     = tr.dataset.ts || '';
-      const matchDate  = (!dateFrom || trDate >= dateFrom) && (!dateTo || trDate <= dateTo);
-      const matchUa    = !uaF || (tr.dataset.ua || '').includes(uaF);
-      const show = matchType && matchActor && matchStage && matchDate && matchUa;
+      const matchType   = !typeF   || tr.dataset.type === typeF;
+      const matchMethod = !methodF || (tr.dataset.method || '') === methodF;
+      const trStage     = tr.dataset.stage !== '' ? parseInt(tr.dataset.stage) : null;
+      const matchStage  = stageF === '' || (trStage !== null && trStage === parseInt(stageF));
+      const trStatus    = parseInt(tr.dataset.status || '0', 10);
+      let matchStatus   = true;
+      if (statusF === '2xx') matchStatus = trStatus >= 200 && trStatus < 300;
+      else if (statusF === '3xx') matchStatus = trStatus >= 300 && trStatus < 400;
+      else if (statusF === '4xx') matchStatus = trStatus >= 400 && trStatus < 500;
+      else if (statusF === '5xx') matchStatus = trStatus >= 500;
+      const trDate      = tr.dataset.ts || '';
+      let matchDate     = true;
+      if (dateRange) {
+        if (dateRange.from && trDate < dateRange.from) matchDate = false;
+        if (dateRange.to   && trDate > dateRange.to)   matchDate = false;
+      }
+      const matchPath   = !pathF || (tr.dataset.path || '').includes(pathF);
+      const matchIp     = !ipF   || (tr.dataset.ip   || '').toLowerCase().includes(ipF);
+      let matchUa       = true;
+      if (uaEmpty) {
+        matchUa = (tr.dataset.ua || '') === '' || tr.dataset.ua === '—' || tr.dataset.ua === '-';
+      } else if (uaF) {
+        matchUa = (tr.dataset.ua || '').includes(uaF);
+      }
+      const matchActor  = activeActorFilters.size === 0 || activeActorFilters.has(tr.dataset.actor);
+      const show = matchType && matchMethod && matchStage && matchStatus && matchDate && matchPath && matchIp && matchUa && matchActor;
       tr.style.display = show ? '' : 'none';
       if (show) visible++;
     });
@@ -533,37 +615,88 @@
   }
 
   function filterTimelineByActor(actorId, short) {
-    activeActorFilter = actorId;
-    const chip = document.getElementById('tlActorChip');
-    const lbl  = document.getElementById('timelineFilterLabel');
-    if (chip) chip.style.display = 'flex';
-    if (lbl)  lbl.textContent = short || actorId.slice(0, 8);
-    applyTimelineFilters();
-  }
-
-  function clearActorFilter() {
-    activeActorFilter = null;
-    const chip = document.getElementById('tlActorChip');
-    if (chip) chip.style.display = 'none';
-    applyTimelineFilters();
+    toggleActorFilter(actorId, short);
   }
 
   function clearAllTimelineFilters() {
-    activeActorFilter = null;
-    const chip = document.getElementById('tlActorChip');
-    if (chip) chip.style.display = 'none';
-    const typeEl   = document.getElementById('tlTypeFilter');
-    const stageEl  = document.getElementById('tlStageFilter');
-    const dateFrom = document.getElementById('tlDateFrom');
-    const dateTo   = document.getElementById('tlDateTo');
-    const uaEl     = document.getElementById('tlUaFilter');
-    if (typeEl)   typeEl.value  = '';
-    if (stageEl)  stageEl.value = '';
-    if (dateFrom) dateFrom.value = '';
-    if (dateTo)   dateTo.value   = '';
-    if (uaEl)     uaEl.value     = '';
+    activeActorFilters.clear();
+    renderActorChips();
+    ['tlTypeFilter','tlStageFilter','tlMethodFilter','tlStatusFilter',
+     'tlDateFilter','tlPathFilter','tlIpFilter','tlUaFilter'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.value = '';
+    });
     applyTimelineFilters();
   }
+
+  /* ── MITRE ATT&CK TTP rendering ── */
+  (function(){
+    const MITRE = {
+      enumeration:          { tactic:'Discovery',            tid:'T1046',  tactic_id:'TA0007', label:'Network Service Discovery' },
+      brute_force:          { tactic:'Credential Access',    tid:'T1110',  tactic_id:'TA0006', label:'Brute Force' },
+      token_abuse:          { tactic:'Credential Access',    tid:'T1528',  tactic_id:'TA0006', label:'Steal Application Access Token' },
+      privilege_escalation: { tactic:'Privilege Escalation', tid:'T1078',  tactic_id:'TA0004', label:'Valid Accounts' },
+      privileged_access:    { tactic:'Privilege Escalation', tid:'T1078',  tactic_id:'TA0004', label:'Valid Accounts (privileged)' },
+      data_exfiltration:    { tactic:'Exfiltration',         tid:'T1041',  tactic_id:'TA0010', label:'Exfiltration Over C2 Channel' },
+      malware_upload:       { tactic:'Execution',            tid:'T1190',  tactic_id:'TA0002', label:'Exploit Public-Facing Application' },
+      token_probe:          { tactic:'Credential Access',    tid:'T1528',  tactic_id:'TA0006', label:'Steal Application Access Token (probe)' },
+    };
+    const TACTIC_COLORS = {
+      'Discovery':           '#7ab8f5',
+      'Credential Access':   '#f2a6a6',
+      'Privilege Escalation':'#ffc940',
+      'Exfiltration':        '#f0b06a',
+      'Execution':           '#b8a9ff',
+    };
+    const techniques = {{ case_techniques | tojson }};
+    const chartEl = document.getElementById('mitreChart');
+    const listEl  = document.getElementById('mitreTechList');
+    if (!chartEl || !techniques.length) return;
+
+    // Group by tactic
+    const byTactic = new Map();
+    techniques.forEach(t => {
+      const m = MITRE[t];
+      const tactic = m ? m.tactic : 'Unknown';
+      if (!byTactic.has(tactic)) byTactic.set(tactic, []);
+      byTactic.get(tactic).push({ tech: t, m });
+    });
+
+    // Bar chart: one bar per tactic
+    const maxCount = Math.max(...Array.from(byTactic.values()).map(v => v.length));
+    let chartHtml = '<div style="display:flex;align-items:flex-end;gap:10px;height:80px;margin-bottom:8px;">';
+    byTactic.forEach((items, tactic) => {
+      const color = TACTIC_COLORS[tactic] || '#7ab8f5';
+      const pct   = Math.max(12, (items.length / maxCount) * 100);
+      chartHtml += `<div style="display:flex;flex-direction:column;align-items:center;gap:4px;flex:1;min-width:60px;">
+        <span style="font-size:0.68rem;font-weight:700;color:${color};">${items.length}</span>
+        <div style="width:100%;height:${pct}%;background:${color}25;border:1px solid ${color}60;border-radius:4px 4px 0 0;"></div>
+      </div>`;
+    });
+    chartHtml += '</div><div style="display:flex;gap:10px;">';
+    byTactic.forEach((_, tactic) => {
+      const color = TACTIC_COLORS[tactic] || '#7ab8f5';
+      chartHtml += `<div style="flex:1;min-width:60px;text-align:center;font-size:0.64rem;color:${color};font-weight:600;text-transform:uppercase;letter-spacing:0.04em;">${tactic}</div>`;
+    });
+    chartHtml += '</div>';
+    chartEl.innerHTML = chartHtml;
+
+    // Technique cards
+    let listHtml = '';
+    techniques.forEach(t => {
+      const m = MITRE[t];
+      const tactic = m ? m.tactic : 'Unknown';
+      const color  = TACTIC_COLORS[tactic] || '#7ab8f5';
+      const tid    = m ? m.tid : '—';
+      const tlabel = m ? m.label : t;
+      listHtml += `<div style="border:1px solid ${color}40;border-radius:8px;padding:8px 12px;background:${color}08;min-width:180px;">
+        <div style="font-size:0.68rem;color:${color};font-weight:700;text-transform:uppercase;letter-spacing:0.05em;">${tactic}</div>
+        <div style="font-size:0.82rem;font-weight:600;margin:2px 0;">${tlabel}</div>
+        <div style="font-size:0.72rem;color:var(--muted);font-family:monospace;">${tid} &middot; <span style="text-transform:uppercase;">${t.replace(/_/g,' ')}</span></div>
+      </div>`;
+    });
+    listEl.innerHTML = listHtml;
+  })();
 
   async function updateCaseCampaign() {
     const sel = document.getElementById('caseCampaignSelect');

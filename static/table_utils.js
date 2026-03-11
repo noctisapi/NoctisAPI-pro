@@ -9,19 +9,27 @@
     return Number.isNaN(num) ? null : num;
   }
 
+  /**
+   * Parse a date filter string into {from, to} ISO date keys.
+   * Supported syntax:
+   *   "YYYY-MM-DD"             → exact date (from === to)
+   *   "YYYY-MM-DD..YYYY-MM-DD" → inclusive range
+   *   "YYYY-MM-DD.."           → from date, no upper bound
+   *   "..YYYY-MM-DD"           → no lower bound, to date
+   */
+  function parseDateFilter(val){
+    val = (val || '').trim();
+    if(!val) return null;
+    if(val.includes('..')){
+      const parts = val.split('..');
+      return { from: (parts[0] || '').trim(), to: (parts[1] || '').trim() };
+    }
+    return { from: val, to: val };
+  }
+
   function getHeaderRow(thead){
     if(!thead) return null;
     return thead.querySelector('tr.header') || thead.querySelector('tr');
-  }
-
-  function makeDateInput(idx, role, ariaLabel){
-    const input = document.createElement('input');
-    input.type = 'date';
-    input.className = 'table-filter table-filter-date';
-    input.dataset.col = String(idx);
-    input.dataset.role = role;
-    input.setAttribute('aria-label', ariaLabel);
-    return input;
   }
 
   function ensureFilterRow(thead, headerCells, noFilters){
@@ -37,11 +45,14 @@
       if(type === 'none'){
         // action / checkbox columns — no filter control
       } else if(type === 'date'){
-        const wrapper = document.createElement('span');
-        wrapper.className = 'date-range-filter';
-        wrapper.appendChild(makeDateInput(idx, 'from', `${label} from`));
-        wrapper.appendChild(makeDateInput(idx, 'to',   `${label} to`));
-        cell.appendChild(wrapper);
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'table-filter table-filter-date';
+        input.dataset.col = String(idx);
+        const ph = label ? `${label}: YYYY-MM-DD` : 'YYYY-MM-DD';
+        input.placeholder = ph;
+        input.setAttribute('aria-label', ph);
+        cell.appendChild(input);
       } else if(type === 'select'){
         const sel = document.createElement('select');
         sel.className = 'table-filter';
@@ -193,23 +204,19 @@
 
     function collectFilters(){
       activeFilters = [];
-      const dateRanges = new Map(); // col idx -> {from, to}
       filterInputs.forEach(input => {
         const idx = parseInt(input.dataset.col, 10);
         const type = headerCells[idx]?.dataset?.type || 'text';
+        const val = input.value.trim();
+        if(!val) return;
         if(type === 'date'){
-          if(!dateRanges.has(idx)) dateRanges.set(idx, {from:'', to:''});
-          const val = input.value.trim();
-          if(input.dataset.role === 'from') dateRanges.get(idx).from = val;
-          else if(input.dataset.role === 'to') dateRanges.get(idx).to = val;
+          const parsed = parseDateFilter(val);
+          if(parsed && (parsed.from || parsed.to)){
+            activeFilters.push({ idx, type: 'date', from: parsed.from, to: parsed.to });
+          }
           return;
         }
-        const filter = input.value.trim();
-        if(!filter) return;
-        activeFilters.push({ idx, type, value: filter.toLowerCase() });
-      });
-      dateRanges.forEach(({from, to}, idx) => {
-        if(from || to) activeFilters.push({ idx, type: 'date', from, to });
+        activeFilters.push({ idx, type, value: val.toLowerCase() });
       });
     }
 

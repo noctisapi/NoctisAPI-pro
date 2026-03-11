@@ -832,6 +832,7 @@ def _case_timeline(steps: list[dict], events: list[dict], limit: int = 200) -> l
                 "status": row.get("status"),
                 "kind": row.get("kind"),
                 "ua": row.get("ua"),
+                "ip": row.get("ip"),
             }
         )
     items = [i for i in items if i.get("ts")]
@@ -2037,6 +2038,9 @@ def dashboard_cases(request: Request):
     q = (request.query_params.get("q") or "").strip()
     status_filter = (request.query_params.get("status") or "").strip()
     severity_filter = (request.query_params.get("severity") or "").strip()
+    date_from = (request.query_params.get("date_from") or "").strip()
+    date_to = (request.query_params.get("date_to") or "").strip()
+    techniques_filter = (request.query_params.get("techniques") or "").strip()
     try:
         page = max(1, int(request.query_params.get("page") or 1))
     except (ValueError, TypeError):
@@ -2057,6 +2061,15 @@ def dashboard_cases(request: Request):
     if severity_filter:
         conditions.append("severity = ?")
         params.append(severity_filter)
+    if date_from:
+        conditions.append("updated_at >= ?")
+        params.append(date_from)
+    if date_to:
+        conditions.append("updated_at <= ?")
+        params.append(date_to + "T23:59:59")
+    if techniques_filter:
+        conditions.append("techniques_json LIKE ?")
+        params.append(f'%"{techniques_filter}"%')
 
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
     offset = (page - 1) * per_page
@@ -2067,10 +2080,18 @@ def dashboard_cases(request: Request):
         cur = conn.cursor()
         total = cur.execute(f"SELECT COUNT(*) FROM cases {where}", params).fetchone()[0]
         cur.execute(
-            f"SELECT id, title, severity, status, created_at, updated_at FROM cases {where} ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+            f"SELECT id, title, severity, status, created_at, updated_at, techniques_json FROM cases {where} ORDER BY updated_at DESC LIMIT ? OFFSET ?",
             params + [per_page, offset],
         )
-        cases = [dict(r) for r in cur.fetchall()]
+        cases_raw = cur.fetchall()
+        cases = []
+        for r in cases_raw:
+            c = dict(r)
+            try:
+                c["techniques"] = json.loads(c.get("techniques_json") or "[]")
+            except Exception:
+                c["techniques"] = []
+            cases.append(c)
         total_pages = max(1, (total + per_page - 1) // per_page)
         return templates.TemplateResponse(
             "cases.html",
@@ -2084,6 +2105,9 @@ def dashboard_cases(request: Request):
                 "q": q,
                 "status_filter": status_filter,
                 "severity_filter": severity_filter,
+                "date_from": date_from,
+                "date_to": date_to,
+                "techniques_filter": techniques_filter,
                 **_license_context(),
             },
         )
@@ -3445,7 +3469,7 @@ def actor(actor_id: str, request: Request):
 
         cur.execute(
             """
-            SELECT id, ts, kind, path, method, ip, ua, body_sample, token, extra_json
+            SELECT id, ts, kind, path, method, ip, ua, status, body_sample, token, extra_json
             FROM events
             WHERE actor_id=?
             ORDER BY id DESC

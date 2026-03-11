@@ -70,6 +70,23 @@
     </select>
   </div>
   <div class="filter-field">
+    <label>Updated from</label>
+    <input class="input" type="date" name="date_from" value="{{ date_from or '' }}">
+  </div>
+  <div class="filter-field">
+    <label>Updated to</label>
+    <input class="input" type="date" name="date_to" value="{{ date_to or '' }}">
+  </div>
+  <div class="filter-field">
+    <label>Technique</label>
+    <select class="input" name="techniques">
+      <option value="">All</option>
+      {% for t in ['enumeration','brute_force','token_abuse','privilege_escalation','privileged_access','data_exfiltration','malware_upload','token_probe'] %}
+      <option value="{{ t }}" {% if techniques_filter == t %}selected{% endif %}>{{ t | replace('_',' ') }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="filter-field">
     <label>Per page</label>
     <select class="input" name="per_page">
       {% for n in [25, 50, 100, 200] %}
@@ -80,7 +97,7 @@
   <input type="hidden" name="page" value="1">
   <div style="display:flex;gap:6px;align-items:flex-end;">
     <button class="btn btn-primary" type="submit">Apply</button>
-    {% if q or status_filter or severity_filter %}
+    {% if q or status_filter or severity_filter or date_from or date_to or techniques_filter %}
     <a class="btn" href="/dashboard/cases">Clear</a>
     {% endif %}
   </div>
@@ -98,10 +115,11 @@
         <tr>
           <th data-type="number" style="width:60px;">#</th>
           <th data-type="text">Title</th>
-          <th data-type="text" style="width:110px;">Severity</th>
-          <th data-type="text" style="width:150px;">Status</th>
+          <th data-type="select" data-options='["critical","high","medium","low"]' style="width:110px;">Severity</th>
+          <th data-type="select" data-options='["open","monitoring","closed","false positive"]' style="width:150px;">Status</th>
+          <th data-type="text">Techniques</th>
           <th data-type="date" style="width:175px;">Updated</th>
-          <th style="width:90px;"></th>
+          <th data-type="none" style="width:90px;"></th>
         </tr>
       </thead>
       <tbody>
@@ -123,6 +141,11 @@
           <td>
             <span class="badge status-{{ c.status }}">{{ c.status | replace('_', ' ') }}</span>
           </td>
+          <td style="font-size:0.78rem;">
+            {% for t in (c.techniques or []) %}
+            <span class="badge" style="font-size:0.68rem;margin:1px;">{{ t | replace('_',' ') }}</span>
+            {% endfor %}
+          </td>
           <td class="mono muted" style="font-size:0.82rem;">{{ c.updated_at }}</td>
           <td class="table-actions">
             <button class="btn btn-danger btn-small" type="button" onclick="deleteCase({{ c.id }}, this)">Delete</button>
@@ -142,7 +165,7 @@
 
   {% if total_pages > 1 %}
   <div style="display:flex;gap:8px;align-items:center;padding:12px 20px;border-top:1px solid var(--stroke);">
-    {% set base_qs = '?q=' ~ (q or '') ~ '&status=' ~ (status_filter or '') ~ '&severity=' ~ (severity_filter or '') ~ '&per_page=' ~ per_page %}
+    {% set base_qs = '?q=' ~ (q or '') ~ '&status=' ~ (status_filter or '') ~ '&severity=' ~ (severity_filter or '') ~ '&date_from=' ~ (date_from or '') ~ '&date_to=' ~ (date_to or '') ~ '&techniques=' ~ (techniques_filter or '') ~ '&per_page=' ~ per_page %}
     {% if page > 1 %}
     <a class="btn btn-small" href="{{ base_qs }}&page={{ page - 1 }}">&larr; Prev</a>
     {% else %}
