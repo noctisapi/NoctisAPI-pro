@@ -7,8 +7,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     # Set HP_ENFORCE_LICENSE=1 to fail startup on invalid/DENY (hard enforcement).
     HP_ENFORCE_LICENSE=0 \
     HP_APP_ID=noctisapi-pro \
-    INSTANCE_ID_PATH=/var/lib/myapp/instance_id \
-    HP_OFFLINE_PUBLIC_KEYS_BUNDLE_PATH=/app/app/offline_public_keys.json
+    INSTANCE_ID_PATH=/var/lib/myapp/instance_id
+# License public key is loaded from the fixed path /app/app/licensing_server_public_key.pem
+# which is covered by: COPY . /app  (app/licensing_server_public_key.pem → /app/app/licensing_server_public_key.pem)
 
 WORKDIR /app
 

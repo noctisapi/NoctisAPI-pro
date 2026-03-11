@@ -1,15 +1,43 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives.serialization import load_pem_public_key
 
+# Fixed path where the RSA public key is embedded in the Docker image.
+# Matches: COPY . /app  →  app/licensing_server_public_key.pem  →  /app/app/licensing_server_public_key.pem
+PUBLIC_KEY_PATH = "/app/app/licensing_server_public_key.pem"
+
+
+def load_public_key_pem() -> bytes:
+    """Load the RSA public key PEM from the fixed image path.
+
+    Raises RuntimeError if the file is missing, unreadable, or empty.
+    Callers should catch this and degrade to CORE.
+    """
+    try:
+        with open(PUBLIC_KEY_PATH, "rb") as f:
+            data = f.read()
+        if not data:
+            raise ValueError("PEM file is empty")
+        return data
+    except Exception as exc:
+        raise RuntimeError(
+            f"License public key unavailable at {PUBLIC_KEY_PATH}: {exc}"
+        ) from exc
+
+logger = logging.getLogger(__name__)
+
+# ── helpers ──────────────────────────────────────────────────────────────────
 
 def _canonical_json_bytes(obj: Any) -> bytes:
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
@@ -71,6 +99,8 @@ def _safe_write_json(path: str, payload: dict[str, Any]) -> None:
         raise
 
 
+# ── domain types ─────────────────────────────────────────────────────────────
+
 @dataclass(frozen=True)
 class LocalLicenseDecision:
     valid: bool
@@ -82,9 +112,11 @@ class LocalLicenseDecision:
     expires_at: Optional[int]
     source: str
     license_id: Optional[str]
-    license_generation: int
-    deployment_id: Optional[str]
+    license_generation: int   # maps from payload.license_version
+    deployment_id: Optional[str]  # maps from payload.machine_fingerprint
 
+
+# ── verification pipeline ─────────────────────────────────────────────────────
 
 class LicenseLoader:
     def __init__(self, *, license_path: str) -> None:
@@ -98,55 +130,106 @@ class LicenseLoader:
 
 
 class LicenseVerifier:
-    def __init__(self, *, trusted_keys: Dict[str, str]) -> None:
-        self._trusted_keys = {str(k): str(v) for k, v in (trusted_keys or {}).items() if str(k).strip() and str(v).strip()}
+    """Verify a schema_version=1 license document.
+
+    The document must have:
+      { "schema_version": 1, "payload": {...}, "signature": "<base64url>" }
+
+    The signature is RSA PKCS1v15+SHA256 over canonical_json_bytes(payload).
+    """
+
+    def __init__(self, *, public_key_pem: bytes) -> None:
+        if not public_key_pem:
+            raise ValueError("public_key_pem must not be empty")
+        self._public_key = load_pem_public_key(public_key_pem)
 
     def verify(self, document: dict[str, Any]) -> tuple[bool, Optional[dict[str, Any]], str]:
         if not isinstance(document, dict):
             return False, None, "license_json_invalid"
+
+        schema_version = document.get("schema_version")
+        if schema_version != 1:
+            return False, None, "license_schema_version_unsupported"
+
         payload = document.get("payload")
-        signature = document.get("signature")
-        if not isinstance(payload, dict) or not isinstance(signature, dict):
+        if not isinstance(payload, dict):
             return False, None, "license_json_invalid"
-        if str(signature.get("alg") or "").strip() != "Ed25519":
-            return False, None, "license_signature_alg_invalid"
-        kid = str(signature.get("kid") or "").strip()
-        sig_b64 = str(signature.get("value") or "").strip()
-        pub_b64 = self._trusted_keys.get(kid)
-        if not pub_b64:
-            return False, None, "license_kid_not_trusted"
+
+        signature = document.get("signature")
+        if not isinstance(signature, str) or not signature.strip():
+            return False, None, "license_signature_missing"
+
         try:
-            pub = Ed25519PublicKey.from_public_bytes(_b64url_decode(pub_b64))
-            pub.verify(_b64url_decode(sig_b64), _canonical_json_bytes(payload))
-        except Exception:
+            sig_bytes = _b64url_decode(signature.strip())
+            canonical = _canonical_json_bytes(payload)
+            self._public_key.verify(sig_bytes, canonical, padding.PKCS1v15(), hashes.SHA256())
+        except Exception as exc:
+            logger.debug("license signature invalid: %s", exc)
             return False, None, "license_signature_invalid"
+
         return True, payload, "ok"
 
 
 class LicenseValidator:
-    def validate(self, payload: dict[str, Any], *, now_epoch: Optional[int] = None) -> tuple[bool, str, dict[str, Any]]:
+    """Validate the semantic claims of a verified payload.
+
+    Checks (in order):
+      1. product matches expected_product (case-insensitive)
+      2. tier is a known value
+      3. not expired (ISO datetime in expires_at)
+      4. machine_fingerprint matches instance_fingerprint when non-null
+    """
+
+    def __init__(
+        self,
+        *,
+        expected_product: str = "noctisapi",
+        instance_fingerprint: Optional[str] = None,
+    ) -> None:
+        self.expected_product = str(expected_product or "").strip().lower()
+        self.instance_fingerprint = (str(instance_fingerprint or "").strip() or None)
+
+    def validate(
+        self, payload: dict[str, Any], *, now_epoch: Optional[int] = None
+    ) -> tuple[bool, str, dict[str, Any]]:
         now = int(now_epoch if now_epoch is not None else datetime.now(timezone.utc).timestamp())
-        status = str(payload.get("status") or "active").strip().lower()
-        if status != "active":
-            return False, f"license_{status}", {}
 
+        # 1 — product
+        product = str(payload.get("product") or "").strip().lower()
+        if self.expected_product and product != self.expected_product:
+            logger.info("license product mismatch: got %r expected %r", product, self.expected_product)
+            return False, "license_product_mismatch", {}
+
+        # 2 — tier
+        tier = str(payload.get("tier") or "").strip().lower()
+        if tier not in ("pro", "core"):
+            return False, "license_tier_invalid", {}
+
+        # 3 — expiry
         expires_at = _parse_iso_epoch(payload.get("expires_at"))
-        policy = payload.get("offline_policy") if isinstance(payload.get("offline_policy"), dict) else {}
-        grace_raw = policy.get("offline_grace_seconds") if isinstance(policy, dict) else None
-        try:
-            grace = max(0, int(grace_raw)) if grace_raw is not None else 0
-        except Exception:
-            return False, "license_grace_invalid", {}
-
         if expires_at is not None and now > expires_at:
-            if now <= (expires_at + grace):
-                return True, "pro_grace", {"expires_at": int(expires_at), "in_grace": True}
+            logger.info("license expired at epoch %d (now %d)", expires_at, now)
             return False, "license_expired", {"expires_at": int(expires_at)}
 
-        return True, "pro_active", {"expires_at": expires_at, "in_grace": False}
+        # 4 — machine fingerprint
+        machine_fp = payload.get("machine_fingerprint")
+        if machine_fp is not None:
+            fp_str = str(machine_fp).strip()
+            if not fp_str:
+                pass  # treat empty string fingerprint as unbound
+            elif not self.instance_fingerprint:
+                logger.warning("license requires machine_fingerprint but none configured")
+                return False, "license_fingerprint_required", {}
+            elif fp_str != self.instance_fingerprint:
+                logger.warning("license machine_fingerprint mismatch")
+                return False, "license_fingerprint_mismatch", {}
+
+        return True, "ok", {"expires_at": expires_at}
 
 
 class LicenseStateResolver:
+    """Track license_version to detect rollback attacks, persist deployment binding."""
+
     def __init__(self, *, state_path: str, runtime_deployment_id: Optional[str]) -> None:
         self.state_path = str(state_path or "").strip()
         self.runtime_deployment_id = (str(runtime_deployment_id or "").strip() or None)
@@ -166,17 +249,28 @@ class LicenseStateResolver:
             return
         _safe_write_json(self.state_path, state)
 
-    def resolve(self, *, payload: dict[str, Any], validation_ok: bool, validation_reason: str, details: dict[str, Any]) -> LocalLicenseDecision:
+    def resolve(
+        self,
+        *,
+        payload: dict[str, Any],
+        validation_ok: bool,
+        validation_reason: str,
+        details: dict[str, Any],
+    ) -> LocalLicenseDecision:
         tier = str(payload.get("tier") or "core").strip().lower() or "core"
         if tier not in ("core", "pro"):
             tier = "core"
-        features = tuple(str(x or "").strip().lower() for x in (payload.get("features") or []) if str(x or "").strip())
+        features = tuple(
+            str(x or "").strip().lower()
+            for x in (payload.get("features") or [])
+            if str(x or "").strip()
+        )
         entitlements = {"tier": tier, "features": list(features)}
         license_id = (str(payload.get("license_id") or "").strip() or None)
-        generation = int(payload.get("license_generation") or 0)
-        deployment_binding = payload.get("deployment_binding") if isinstance(payload.get("deployment_binding"), dict) else {}
-        binding_mode = str((deployment_binding or {}).get("mode") or "soft").strip().lower() or "soft"
-        bound_deployment = (str((deployment_binding or {}).get("deployment_id") or "").strip() or None)
+        # license_version replaces old license_generation
+        generation = int(payload.get("license_version") or 0)
+        machine_fp = payload.get("machine_fingerprint")
+        bound_deployment = (str(machine_fp).strip() if machine_fp else None) or None
 
         state = self._load_state()
         licenses = state.setdefault("licenses", {})
@@ -185,6 +279,9 @@ class LicenseStateResolver:
         if validation_ok and license_id:
             max_generation = int(row.get("max_generation") or 0)
             if generation < max_generation:
+                logger.warning(
+                    "license rollback detected: version %d < max seen %d", generation, max_generation
+                )
                 return LocalLicenseDecision(
                     valid=False,
                     decision="LIMITED",
@@ -200,40 +297,6 @@ class LicenseStateResolver:
                 )
             if generation > max_generation:
                 row["max_generation"] = generation
-
-            persisted_dep = (str(row.get("deployment_id") or "").strip() or None)
-            if self.runtime_deployment_id and not persisted_dep:
-                row["deployment_id"] = self.runtime_deployment_id
-                persisted_dep = self.runtime_deployment_id
-            if binding_mode == "soft":
-                if bound_deployment and self.runtime_deployment_id and bound_deployment != self.runtime_deployment_id:
-                    return LocalLicenseDecision(
-                        valid=False,
-                        decision="LIMITED",
-                        reason_code="DEPLOYMENT_MISMATCH",
-                        tier="core",
-                        features=tuple(),
-                        entitlements={"tier": "core", "features": []},
-                        expires_at=details.get("expires_at"),
-                        source="offline_license",
-                        license_id=license_id,
-                        license_generation=generation,
-                        deployment_id=bound_deployment,
-                    )
-                if bound_deployment and persisted_dep and bound_deployment != persisted_dep:
-                    return LocalLicenseDecision(
-                        valid=False,
-                        decision="LIMITED",
-                        reason_code="DEPLOYMENT_MISMATCH",
-                        tier="core",
-                        features=tuple(),
-                        entitlements={"tier": "core", "features": []},
-                        expires_at=details.get("expires_at"),
-                        source="offline_license",
-                        license_id=license_id,
-                        license_generation=generation,
-                        deployment_id=bound_deployment,
-                    )
             self._save_state(state)
 
         if not validation_ok:
@@ -251,11 +314,10 @@ class LicenseStateResolver:
                 deployment_id=bound_deployment,
             )
 
-        reason_code = "PRO_GRACE" if validation_reason == "pro_grace" else "OK"
         return LocalLicenseDecision(
             valid=(tier == "pro"),
             decision="ALLOW" if tier == "pro" else "LIMITED",
-            reason_code=reason_code,
+            reason_code="OK",
             tier=tier,
             features=features if tier == "pro" else tuple(),
             entitlements=entitlements,
@@ -267,52 +329,30 @@ class LicenseStateResolver:
         )
 
 
-def load_trusted_public_keys_from_env() -> Dict[str, str]:
-    keys: Dict[str, str] = {}
-    raw_json = (os.getenv("HP_OFFLINE_PUBLIC_KEYS_JSON") or os.getenv("LICENSING_OFFLINE_PUBLIC_KEYS_JSON") or "").strip()
-    if raw_json:
-        try:
-            obj = json.loads(raw_json)
-            if isinstance(obj, dict):
-                for k, v in obj.items():
-                    kk = str(k or "").strip()
-                    vv = str(v or "").strip()
-                    if kk and vv:
-                        keys[kk] = vv
-        except Exception:
-            pass
-
-    keys_path = (os.getenv("HP_OFFLINE_PUBLIC_KEYS_PATH") or os.getenv("LICENSING_OFFLINE_PUBLIC_KEYS_PATH") or "").strip()
-    if keys_path:
-        obj = _safe_load_json(keys_path)
-        if isinstance(obj, dict):
-            for k, v in obj.items():
-                kk = str(k or "").strip()
-                vv = str(v or "").strip()
-                if kk and vv:
-                    keys[kk] = vv
-
-    single_kid = (os.getenv("HP_OFFLINE_PUBLIC_KEY_KID") or "").strip()
-    single_raw = (os.getenv("HP_OFFLINE_PUBLIC_KEY_RAW_B64") or "").strip()
-    if single_kid and single_raw:
-        keys[single_kid] = single_raw
-    return keys
-
+# ── main entry point ──────────────────────────────────────────────────────────
 
 def resolve_local_license_state(
     *,
     license_path: str,
     state_path: str,
     runtime_deployment_id: Optional[str],
-    trusted_public_keys: Dict[str, str],
+    public_key_pem: bytes,
+    expected_product: str = "noctisapi",
+    instance_fingerprint: Optional[str] = None,
 ) -> LocalLicenseDecision:
-    loader = LicenseLoader(license_path=license_path)
-    document = loader.load()
-    if not document:
+    """Full offline license validation pipeline.
+
+    Steps:
+      1. Load license.json from disk
+      2. Verify RSA signature (schema_version=1)
+      3. Validate claims (product, tier, expiry, fingerprint)
+      4. Resolve state (rollback detection, deployment binding)
+    """
+    def _limited(reason_code: str) -> LocalLicenseDecision:
         return LocalLicenseDecision(
             valid=False,
             decision="LIMITED",
-            reason_code="OFFLINE_LICENSE_MISSING",
+            reason_code=reason_code,
             tier="core",
             features=tuple(),
             entitlements={"tier": "core", "features": []},
@@ -323,9 +363,21 @@ def resolve_local_license_state(
             deployment_id=None,
         )
 
-    verifier = LicenseVerifier(trusted_keys=trusted_public_keys)
+    loader = LicenseLoader(license_path=license_path)
+    document = loader.load()
+    if not document:
+        logger.info("offline license file not found or empty: %s", license_path)
+        return _limited("OFFLINE_LICENSE_MISSING")
+
+    try:
+        verifier = LicenseVerifier(public_key_pem=public_key_pem)
+    except Exception as exc:
+        logger.error("failed to load RSA public key: %s", exc)
+        return _limited("LICENSE_PUBLIC_KEY_INVALID")
+
     ok_sig, payload, sig_reason = verifier.verify(document)
     if not ok_sig or payload is None:
+        logger.info("license verification failed: %s", sig_reason)
         return LocalLicenseDecision(
             valid=False,
             decision="LIMITED",
@@ -340,8 +392,18 @@ def resolve_local_license_state(
             deployment_id=None,
         )
 
-    validator = LicenseValidator()
+    validator = LicenseValidator(
+        expected_product=expected_product,
+        instance_fingerprint=instance_fingerprint,
+    )
     ok_claims, reason, details = validator.validate(payload)
-    resolver = LicenseStateResolver(state_path=state_path, runtime_deployment_id=runtime_deployment_id)
-    return resolver.resolve(payload=payload, validation_ok=ok_claims, validation_reason=reason, details=details)
-
+    resolver = LicenseStateResolver(
+        state_path=state_path,
+        runtime_deployment_id=runtime_deployment_id,
+    )
+    return resolver.resolve(
+        payload=payload,
+        validation_ok=ok_claims,
+        validation_reason=reason,
+        details=details,
+    )

@@ -1,6 +1,6 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
-import json
+import logging
 import os
 import threading
 import time
@@ -8,8 +8,9 @@ from typing import Any, Optional
 
 from app import license_runtime
 from honey_licensing.client import compute_client_identity
-from honey_licensing.offline_license import load_trusted_public_keys_from_env, resolve_local_license_state
+from honey_licensing.offline_license import load_public_key_pem, resolve_local_license_state
 
+logger = logging.getLogger(__name__)
 
 _STATUS_LOCK = threading.Lock()
 _STATUS_CACHE: dict[str, Any] = {
@@ -30,6 +31,9 @@ _STATUS_CACHE: dict[str, Any] = {
         "deployment_id": None,
     },
 }
+
+# Product name expected in license payload. Hardcoded — change at build time if needed.
+_PRODUCT = "noctisapi"
 
 
 def _env_int(name: str, default: int, min_value: int, max_value: int) -> int:
@@ -74,74 +78,42 @@ def _runtime_deployment_id() -> Optional[str]:
         return None
 
 
-def _merge_keys_from_json_text(keys: dict[str, str], raw_json: str) -> None:
-    raw = str(raw_json or "").strip()
-    if not raw:
-        return
+def _instance_fingerprint() -> Optional[str]:
+    fp = (os.getenv("INSTANCE_FINGERPRINT_SHA256") or "").strip()
+    if fp:
+        return fp
     try:
-        obj = json.loads(raw)
+        identity = compute_client_identity()
+        return str(identity.get("instance_fingerprint_sha256") or "").strip() or None
     except Exception:
-        return
-    if not isinstance(obj, dict):
-        return
-    for k, v in obj.items():
-        kid = str(k or "").strip()
-        raw_key = str(v or "").strip()
-        if kid and raw_key:
-            keys[kid] = raw_key
-
-
-def _merge_keys_from_path(keys: dict[str, str], path: str) -> None:
-    key_path = str(path or "").strip()
-    if not key_path:
-        return
-    try:
-        with open(key_path, "r", encoding="utf-8") as f:
-            obj = json.load(f)
-    except Exception:
-        return
-    if not isinstance(obj, dict):
-        return
-    for k, v in obj.items():
-        kid = str(k or "").strip()
-        raw_key = str(v or "").strip()
-        if kid and raw_key:
-            keys[kid] = raw_key
-
-
-def _bundled_keys_path() -> str:
-    return (os.getenv("HP_OFFLINE_PUBLIC_KEYS_BUNDLE_PATH") or "/app/app/offline_public_keys.json").strip()
-
-
-def load_effective_trusted_public_keys() -> dict[str, str]:
-    """
-    Build trusted key map using bundled image keys + env + runtime overrides.
-    Runtime overrides win over plain env values, and env wins over bundled defaults.
-    """
-    keys: dict[str, str] = {}
-    _merge_keys_from_path(keys, _bundled_keys_path())
-    env_keys = load_trusted_public_keys_from_env()
-    for kid, raw_key in env_keys.items():
-        keys[str(kid)] = str(raw_key)
-    _merge_keys_from_json_text(keys, license_runtime.get_effective("HP_OFFLINE_PUBLIC_KEYS_JSON"))
-    _merge_keys_from_json_text(keys, os.getenv("LICENSING_OFFLINE_PUBLIC_KEYS_JSON") or "")
-    _merge_keys_from_path(
-        keys,
-        license_runtime.get_effective("HP_OFFLINE_PUBLIC_KEYS_PATH")
-        or os.getenv("LICENSING_OFFLINE_PUBLIC_KEYS_PATH")
-        or "",
-    )
-    return keys
+        return None
 
 
 def _fetch_local_license() -> tuple[bool, Optional[int], Optional[str], dict[str, Any]]:
     license_path, state_path = _license_paths()
-    trusted_keys = load_effective_trusted_public_keys()
+
+    try:
+        pub_pem = load_public_key_pem()
+    except RuntimeError as exc:
+        logger.error("license public key unavailable: %s", exc)
+        meta: dict[str, Any] = {
+            "tier": "core",
+            "features": [],
+            "source": "offline_license",
+            "license_id": None,
+            "license_generation": 0,
+            "deployment_id": None,
+            "reason_code": "LICENSE_PUBLIC_KEY_MISSING",
+        }
+        return False, None, "LICENSE_PUBLIC_KEY_MISSING", meta
+
     decision = resolve_local_license_state(
         license_path=license_path,
         state_path=state_path,
         runtime_deployment_id=_runtime_deployment_id(),
-        trusted_public_keys=trusted_keys,
+        public_key_pem=pub_pem,
+        expected_product=_PRODUCT,
+        instance_fingerprint=_instance_fingerprint(),
     )
     meta = {
         "tier": decision.tier,

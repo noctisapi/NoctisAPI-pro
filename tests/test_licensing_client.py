@@ -1,13 +1,14 @@
-﻿import base64
 import json
 import os
 import tempfile
-import time
 import unittest
+from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 from uuid import UUID
 
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
+import base64
 
 from honey_licensing.client import (
     LicensingManager,
@@ -26,17 +27,22 @@ def _canonical_json_bytes(obj: dict) -> bytes:
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
-def _make_signed_license_document(*, private_key: Ed25519PrivateKey, kid: str, payload: dict) -> dict:
-    sig = private_key.sign(_canonical_json_bytes(payload))
-    return {
-        "schema": "license.json/v2",
-        "payload": payload,
-        "signature": {
-            "alg": "Ed25519",
-            "kid": kid,
-            "value": _b64url(sig),
-        },
-    }
+def _gen_rsa_keypair():
+    priv = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    pub_pem = priv.public_key().public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    return priv, pub_pem
+
+
+def _sign_rsa(private_key, payload: dict) -> str:
+    sig = private_key.sign(_canonical_json_bytes(payload), padding.PKCS1v15(), hashes.SHA256())
+    return _b64url(sig)
+
+
+def _make_doc(private_key, payload: dict) -> dict:
+    return {"schema_version": 1, "payload": payload, "signature": _sign_rsa(private_key, payload)}
 
 
 class TestUUIDFile(unittest.TestCase):
@@ -82,7 +88,6 @@ class TestLicensingManagerOffline(unittest.TestCase):
         self._old_env = {k: os.environ.get(k) for k in (
             "HP_OFFLINE_LICENSE_PATH",
             "HP_OFFLINE_LICENSE_STATE_PATH",
-            "HP_OFFLINE_PUBLIC_KEYS_JSON",
             "HP_DEPLOYMENT_ID",
             "INSTANCE_ID_PATH",
             "HP_ENFORCE_LICENSE",
@@ -99,15 +104,16 @@ class TestLicensingManagerOffline(unittest.TestCase):
         os.environ["HP_DEPLOYMENT_ID"] = self.deployment_id
         os.environ["HP_ENFORCE_LICENSE"] = "0"
 
-        self.private_key = Ed25519PrivateKey.generate()
-        self.kid = "test-ed25519-1"
-        pub_raw = self.private_key.public_key().public_bytes(
-            encoding=serialization.Encoding.Raw,
-            format=serialization.PublicFormat.Raw,
+        self.private_key, self.pub_pem = _gen_rsa_keypair()
+        # Patch load_public_key_pem() in client's namespace (imported name).
+        self._patcher = patch(
+            "honey_licensing.client.load_public_key_pem",
+            return_value=self.pub_pem,
         )
-        os.environ["HP_OFFLINE_PUBLIC_KEYS_JSON"] = json.dumps({self.kid: _b64url(pub_raw)})
+        self._patcher.start()
 
     def tearDown(self):
+        self._patcher.stop()
         self._tmp.cleanup()
         for k, v in self._old_env.items():
             if v is None:
@@ -115,29 +121,24 @@ class TestLicensingManagerOffline(unittest.TestCase):
             else:
                 os.environ[k] = v
 
-    def _write_license(self, *, expires_at: int) -> None:
+    def _future_iso(self, seconds: int = 3600) -> str:
+        dt = datetime.now(timezone.utc) + timedelta(seconds=seconds)
+        return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def _write_license(self, *, expires_at: str) -> None:
         payload = {
-            "schema_version": 2,
             "license_id": "lic-test-1",
-            "account_id": "acct-1",
-            "plan": "pro",
+            "customer_email": "test@example.com",
+            "product": "noctisapi",
             "tier": "pro",
-            "status": "active",
-            "issued_at": int(time.time()),
-            "expires_at": int(expires_at),
             "features": ["campaigns", "cases"],
-            "entitlements": ["pro", "campaigns", "cases"],
-            "license_generation": 1,
-            "deployment_binding": {
-                "mode": "soft",
-                "deployment_id": self.deployment_id,
-            },
-            "offline_policy": {
-                "offline_grace_seconds": 60,
-                "fallback_tier": "core",
-            },
+            "license_version": 1,
+            "issued_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "expires_at": expires_at,
+            "machine_fingerprint": None,
+            "limits": {"max_sensors": 5, "max_users": 1},
         }
-        doc = _make_signed_license_document(private_key=self.private_key, kid=self.kid, payload=payload)
+        doc = _make_doc(self.private_key, payload)
         with open(self.license_path, "w", encoding="utf-8") as f:
             json.dump(doc, f, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
@@ -148,7 +149,7 @@ class TestLicensingManagerOffline(unittest.TestCase):
             mgr.start()
 
     def test_startup_allow_with_valid_signed_license(self):
-        self._write_license(expires_at=int(time.time()) + 3600)
+        self._write_license(expires_at=self._future_iso(3600))
         mgr = LicensingManager.from_env()
         mgr.start()
         try:
@@ -161,7 +162,7 @@ class TestLicensingManagerOffline(unittest.TestCase):
             mgr.stop()
 
     def test_expired_license_falls_back_to_core(self):
-        self._write_license(expires_at=int(time.time()) - 3600)
+        self._write_license(expires_at=self._future_iso(-3600))
         mgr = LicensingManager.from_env()
         st = mgr.refresh_now()
         self.assertFalse(st.valid)

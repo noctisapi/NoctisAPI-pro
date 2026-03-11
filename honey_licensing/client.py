@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import hashlib
 import os
@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, Optional
 
-from honey_licensing.offline_license import load_trusted_public_keys_from_env, resolve_local_license_state
+from honey_licensing.offline_license import load_public_key_pem, resolve_local_license_state
 
 
 _HEX64_RE = re.compile(r"^[0-9a-fA-F]{64}$")
@@ -139,7 +139,7 @@ class LicensingManager:
     Offline-only licensing manager.
 
     Single flow:
-      license.json -> signature verify -> claims validate -> resolve PRO/CORE
+      license.json -> RSA signature verify -> claims validate -> resolve PRO/CORE
     """
 
     def __init__(
@@ -216,13 +216,39 @@ class LicensingManager:
         except Exception:
             return None
 
+    def _instance_fingerprint(self) -> Optional[str]:
+        fp = (os.getenv("INSTANCE_FINGERPRINT_SHA256") or "").strip()
+        if fp:
+            return fp
+        try:
+            return compute_instance_fingerprint_sha256_hex()
+        except Exception:
+            return None
+
     def _validate_once(self) -> LicensingState:
         license_path, state_path = self._offline_paths()
+
+        try:
+            public_key_pem = load_public_key_pem()
+        except RuntimeError as exc:
+            return LicensingState(
+                decision=LicenseDecision.LIMITED.value,
+                valid=False,
+                last_ok_at=self.get_state().last_ok_at,
+                last_error="LICENSE_PUBLIC_KEY_MISSING",
+                reason_code="LICENSE_PUBLIC_KEY_MISSING",
+                expires_at=None,
+                entitlements={},
+                recheck_after_seconds=self._min_recheck_seconds,
+            )
+
         decision = resolve_local_license_state(
             license_path=license_path,
             state_path=state_path,
             runtime_deployment_id=self._runtime_deployment_id(),
-            trusted_public_keys=load_trusted_public_keys_from_env(),
+            public_key_pem=public_key_pem,
+            expected_product="noctisapi",
+            instance_fingerprint=self._instance_fingerprint(),
         )
 
         now = datetime.now(timezone.utc)
