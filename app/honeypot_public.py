@@ -38,6 +38,7 @@ from app import health as _health
 from app.server_config import RequestTimeoutMiddleware, get_request_timeout
 from app.structured_logging import get_request_id, set_request_id
 from app import siem_logger
+from app.no_cache import NoCacheMiddleware
 
 APP_TITLE = os.getenv("HP_API_TITLE", "Account Service API")
 APP_VERSION = os.getenv("HP_API_VERSION", "1.0.0")
@@ -138,6 +139,13 @@ app.add_middleware(
 # public URL automatically.  Must be added after CORSMiddleware so it
 # executes first (Starlette wraps in LIFO order).
 app.add_middleware(ReverseProxyMiddleware)
+# Anti-cache — strips ETag/Last-Modified and injects no-cache headers so that
+# every request reaches the honeypot application and is recorded.  Must run
+# after ReverseProxyMiddleware (executes before it, LIFO order) so that the
+# no-cache headers are injected on the outbound path after all route logic has
+# run.  Added before RequestTimeoutMiddleware so the clock includes the header
+# injection time (negligible).
+app.add_middleware(NoCacheMiddleware)
 # Request timeout — cancels requests that exceed REQUEST_TIMEOUT seconds.
 # Added last (executes first of all) so the clock starts before any other
 # middleware runs.
