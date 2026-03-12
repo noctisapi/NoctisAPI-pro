@@ -204,13 +204,13 @@
     <div class="card-subtitle">Check which config would be applied to a given request.</div>
   </div>
   <div class="card-body">
-    <div style="display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap;">
+    <div style="display:flex; gap:12px; align-items:flex-end; flex-wrap:wrap;">
       <div style="flex:1; min-width:200px;">
-        <label for="resolvePath" style="font-size:0.82rem;">Path</label>
+        <label for="resolvePath" style="font-size:0.82rem; display:block; margin-bottom:5px;">Path</label>
         <input id="resolvePath" class="input mono" type="text" placeholder="/api/v1/users" />
       </div>
-      <div style="width:120px;">
-        <label for="resolveMethod" style="font-size:0.82rem;">Method</label>
+      <div style="width:130px;">
+        <label for="resolveMethod" style="font-size:0.82rem; display:block; margin-bottom:5px;">Method</label>
         <select id="resolveMethod" class="input">
           <option value="GET">GET</option>
           <option value="POST">POST</option>
@@ -219,7 +219,10 @@
           <option value="PATCH">PATCH</option>
         </select>
       </div>
-      <button class="btn btn-outline" type="button" onclick="resolveConfig()" style="height:38px;">Resolve</button>
+      <div style="display:flex; flex-direction:column; justify-content:flex-end;">
+        <label style="font-size:0.82rem; display:block; margin-bottom:5px; visibility:hidden;">Go</label>
+        <button class="btn btn-primary" type="button" onclick="resolveConfig()">Resolve</button>
+      </div>
     </div>
     <div id="resolveStatus" class="modal-hint" style="margin-top:8px;"></div>
     <div id="resolveOutput" style="margin-top:8px;"></div>
@@ -513,19 +516,21 @@
         {key: "avg_latency_ms",label: "Avg Latency", format: ms},
       ]) +
       makeTable("Interest Scoring — suspicious endpoints", data.interest || [], [
-        {key: "path",       label: "Path", mono: true},
-        {key: "score",      label: "Score", format: f2},
-        {key: "hits",       label: "Hits"},
-        {key: "actor_count",label: "Actors"},
-        {key: "error_rate", label: "Error %", format: pct},
-        {key: "is_sensitive",label: "Sensitive", format: v => v ? "yes" : "no"},
+        {key: "path",          label: "Path", mono: true},
+        {key: "interest_score",label: "Score", format: f2},
+        {key: "hits",          label: "Hits"},
+        {key: "unique_actors", label: "Actors"},
+        {key: "errors",        label: "Errors"},
+        {key: "error_rate",    label: "Error %", format: pct},
       ]) +
-      makeTable("Actor Fingerprinting", data.fingerprinting || [], [
-        {key: "actor_id",   label: "Actor ID", mono: true},
-        {key: "score",      label: "Score", format: f2},
-        {key: "paths_count",label: "Paths"},
-        {key: "ua_count",   label: "UAs"},
-        {key: "error_rate", label: "Error %", format: pct},
+      makeTable("Actor Fingerprinting — by IP", data.fingerprinting || [], [
+        {key: "ip",                  label: "IP", mono: true},
+        {key: "fingerprint_score",   label: "Score", format: f2},
+        {key: "hits",                label: "Hits"},
+        {key: "unique_paths",        label: "Paths"},
+        {key: "unique_user_agents",  label: "UAs"},
+        {key: "unique_actors",       label: "Actors"},
+        {key: "error_rate",          label: "Error %", format: pct},
       ]);
   }
 
