@@ -20,23 +20,56 @@ Events are emitted as newline-delimited JSON (NDJSON). The dispatcher runs in a 
 
 ---
 
-## Environment Variables
+## Log Separation Architecture
 
+NoctisAPI produces two distinct log streams:
+
+### Operational Logs (stdout)
+Application-level messages: startup, errors, warnings, access logs.
+Written via Python's standard logging to **stdout only**.
+Fields: `timestamp`, `level`, `logger`, `message`, `request_id`.
+
+### Security Events (SIEM pipeline)
+Structured security events for SIEM ingestion.
+Written via a dedicated background queue to **file and/or syslog**.
+Never mixed with operational logs by default.
+Fields: `timestamp`, `event_type`, `source_ip`, `method`, `endpoint`,
+`status_code`, `user_agent`, `attack_type`, `ttp`, `interaction_id`,
+`actor_id`, `session_id`.
+
+Default routing:
+- Operational logs → stdout
+- SIEM events → `/var/log/noctisapi/events.json` (+ optional syslog)
+- SIEM events → stdout only if `SECURITY_EVENT_STDOUT=true`
+
+---
+
+## Configuration Reference
+
+### Operational Application Logs
 | Variable | Default | Description |
 |---|---|---|
-| `LOG_OUTPUT` | `stdout` | Comma-separated list of outputs: `stdout`, `file`, `syslog` |
-| `LOG_FILE_PATH` | `/var/log/noctisapi/events.json` | Absolute path for the file output. Parent directory is created automatically. |
-| `SYSLOG_ENABLED` | `false` | Set to `1`, `true`, or `yes` to enable syslog forwarding. |
-| `SYSLOG_HOST` | _(empty)_ | Hostname or IP of the syslog receiver. Required when `SYSLOG_ENABLED=true`. |
-| `SYSLOG_PORT` | `514` | UDP or TCP port of the syslog receiver. |
-| `SYSLOG_PROTOCOL` | `udp` | Transport: `udp` or `tcp`. |
-| `SYSLOG_FACILITY` | `local0` | RFC5424 facility name. Valid values: `kern user mail daemon auth syslog lpr news uucp cron local0`–`local7`. |
+| `APP_LOG_LEVEL` | `INFO` | Log level: `debug`, `info`, `warning`, `error` |
+| `LOG_FORMAT` | auto | `json` or `text` (auto-detects TTY) |
+| `LOG_LEVEL` | `info` | Alias for `APP_LOG_LEVEL` |
+
+### Security Event (SIEM) Pipeline
+| Variable | Default | Description |
+|---|---|---|
+| `SECURITY_EVENT_STDOUT` | `false` | Write SIEM events to stdout (disabled by default to avoid mixing) |
+| `SECURITY_EVENT_FILE_ENABLED` | `true` | Write SIEM events to dedicated file |
+| `SECURITY_EVENT_FILE_PATH` | `/var/log/noctisapi/events.json` | Path for SIEM event file |
+| `SYSLOG_ENABLED` | `false` | Forward SIEM events to syslog server |
+| `SYSLOG_HOST` | _(empty)_ | Syslog server hostname or IP |
+| `SYSLOG_PORT` | `514` | Syslog server port |
+| `SYSLOG_PROTOCOL` | `udp` | `udp` or `tcp` |
+| `SYSLOG_FACILITY` | `local0` | RFC5424 facility name |
 
 ### Example .env.prod snippet
 
 ```env
-LOG_OUTPUT=stdout,file
-LOG_FILE_PATH=/var/log/noctisapi/events.json
+SECURITY_EVENT_FILE_ENABLED=true
+SECURITY_EVENT_FILE_PATH=/var/log/noctisapi/events.json
 SYSLOG_ENABLED=true
 SYSLOG_HOST=siem.internal.example.com
 SYSLOG_PORT=5140
@@ -130,7 +163,8 @@ services:
         max-size: "50m"
         max-file: "5"
     environment:
-      LOG_OUTPUT: stdout
+      SECURITY_EVENT_STDOUT: "false"
+      SECURITY_EVENT_FILE_ENABLED: "true"
 ```
 
 **filebeat.yml** (Filebeat 8.x):

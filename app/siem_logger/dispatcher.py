@@ -15,25 +15,27 @@ _q: queue.Queue[str] = queue.Queue(maxsize=_QUEUE_MAX)
 _worker_thread: Optional[threading.Thread] = None
 _started = False
 _start_lock = threading.Lock()
+_stdout_enabled = False
 _file_enabled = False
 _syslog_enabled = False
 
 
 def configure() -> None:
     """Read environment variables and start the background dispatch thread."""
-    global _file_enabled, _syslog_enabled
+    global _stdout_enabled, _file_enabled, _syslog_enabled
 
-    log_output = os.getenv("LOG_OUTPUT", "stdout").lower()
-    outputs = {o.strip() for o in log_output.split(",")}
+    _truthy = ("1", "true", "yes")
 
-    _file_enabled = "file" in outputs
+    _stdout_enabled = os.getenv("SECURITY_EVENT_STDOUT", "false").strip().lower() in _truthy
+
+    _file_enabled = os.getenv("SECURITY_EVENT_FILE_ENABLED", "true").strip().lower() in _truthy
     if _file_enabled:
         file_handler.configure(
-            os.getenv("LOG_FILE_PATH", "/var/log/noctisapi/events.json")
+            os.getenv("SECURITY_EVENT_FILE_PATH", "/var/log/noctisapi/events.json")
         )
 
     syslog_raw = os.getenv("SYSLOG_ENABLED", "false").strip().lower()
-    _syslog_enabled = syslog_raw in ("1", "true", "yes")
+    _syslog_enabled = syslog_raw in _truthy
     syslog_handler.configure(
         enabled=_syslog_enabled,
         host=os.getenv("SYSLOG_HOST", ""),
@@ -76,8 +78,8 @@ def _drain() -> None:
 
 
 def _dispatch(line: str) -> None:
-    # stdout is mandatory and always emitted
-    stdout_handler.emit(line)
+    if _stdout_enabled:
+        stdout_handler.emit(line)
     if _file_enabled:
         file_handler.emit(line)
     if _syslog_enabled:
