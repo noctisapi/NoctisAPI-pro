@@ -85,7 +85,29 @@ nano .env.prod
 
 ---
 
-## 4. GeoIP database (for country flags)
+## 4. Prepare data directories
+
+```bash
+# Database and app state (created by Docker volumes — just ensure parent exists)
+mkdir -p /opt/hp-app/data
+
+# SIEM events — bind-mounted from container, must be owned by container user (uid 10001)
+mkdir -p /opt/hp-app/data/siem
+chown -R 10001:0 /opt/hp-app/data/siem
+chmod 775 /opt/hp-app/data/siem
+```
+
+After deploy, SIEM security events are written to:
+
+```bash
+tail -f /opt/hp-app/data/siem/events.json
+```
+
+See [`docs/siem_integration.md`](../../../docs/siem_integration.md) for Filebeat/Fluentbit integration.
+
+---
+
+## 5. GeoIP database (for country flags)
 
 MaxMind GeoLite2 is not included. Download it free from [maxmind.com](https://www.maxmind.com/en/geolite2/signup):
 
@@ -104,7 +126,7 @@ bash ops/geoip/update_geoip.sh
 
 ---
 
-## 5. Build the Docker image
+## 6. Build the Docker image
 
 ```bash
 cd /opt/hp-app
@@ -119,7 +141,7 @@ docker compose --env-file .env.prod -f compose/docker-compose.prod.yml pull
 
 ---
 
-## 6. First deploy
+## 7. First deploy
 
 ```bash
 cd /opt/hp-app
@@ -134,7 +156,7 @@ curl -sS https://<your-api-host>/health
 
 ---
 
-## 7. Access the admin panel
+## 8. Access the admin panel
 
 The admin panel runs on port 9001 **bound to localhost only** (`127.0.0.1:9001`).
 Access it via SSH tunnel from your local machine:
@@ -147,13 +169,13 @@ ssh -L 9001:127.0.0.1:9001 user@your-server-ip
 
 ---
 
-## 8. Upload PRO license
+## 9. Upload PRO license
 
 After logging into the admin panel, go to **Environment → License** and upload your `license.json` file.
 
 ---
 
-## 9. Update
+## 10. Update
 
 ```bash
 cd /opt/hp-app
@@ -164,7 +186,7 @@ docker compose --env-file .env.prod -f compose/docker-compose.prod.yml up -d --f
 
 ---
 
-## 10. Data retention (optional)
+## 11. Data retention (optional)
 
 ```bash
 sudo cp ops/cron/noctisapi-core-retention /etc/cron.d/hp-app-retention
@@ -172,7 +194,7 @@ sudo cp ops/cron/noctisapi-core-retention /etc/cron.d/hp-app-retention
 
 ---
 
-## 11. systemd auto-start (optional)
+## 12. systemd auto-start (optional)
 
 ```bash
 sudo cp ops/vps/hp-app.service /etc/systemd/system/
@@ -181,8 +203,6 @@ sudo systemctl enable --now hp-app.service
 ```
 
 ---
-
-## Troubleshooting
 
 **Migration fails:**
 

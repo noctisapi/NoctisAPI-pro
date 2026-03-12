@@ -11,8 +11,11 @@ NoctisAPI honeypot_public.py
   └─ log_all_requests middleware
        └─ siem_logger.emit_event()
             └─ dispatcher (background thread, queue-based)
-                 ├─ stdout  (always on)  ──► Docker log driver ──► Filebeat / Fluentbit
-                 ├─ file    (optional)   ──► /var/log/noctisapi/events.json
+                 ├─ stdout  (opt-in, SECURITY_EVENT_STDOUT=true)
+                 ├─ file    (default ON)  ──► /var/log/noctisapi/events.json
+                 │                                 │ (Docker bind mount)
+                 │                                 └──► /opt/hp-app/data/siem/events.json (host)
+                 │                                           └──► Filebeat / Fluentbit ──► SIEM
                  └─ syslog  (optional)   ──► UDP/TCP ──► Graylog / Splunk HEC / rsyslog
 ```
 
@@ -147,9 +150,29 @@ Every security event is a JSON object with the following fields.
 
 ## Docker Logging Pipeline
 
-### stdout → Filebeat → Elasticsearch / Splunk
+### Bind mount setup (recommended)
 
-The recommended production pipeline uses Docker's default JSON-file log driver combined with Filebeat running as a sidecar or on the host.
+The `app` service mounts the SIEM log directory to the host so that events are accessible without entering the container:
+
+```yaml
+# compose/docker-compose.prod.yml — app service volumes:
+volumes:
+  - ../data/siem:/var/log/noctisapi   # SIEM events visible on host at /opt/hp-app/data/siem/
+```
+
+**Before first deploy**, create the directory with the correct owner (container runs as uid `10001`):
+
+```bash
+mkdir -p /opt/hp-app/data/siem
+chown -R 10001:0 /opt/hp-app/data/siem
+chmod 775 /opt/hp-app/data/siem
+```
+
+Then read events directly from the host:
+
+```bash
+tail -f /opt/hp-app/data/siem/events.json
+```
 
 **docker-compose.prod.yml** (relevant excerpt):
 
@@ -157,34 +180,32 @@ The recommended production pipeline uses Docker's default JSON-file log driver c
 services:
   app:
     image: ${HP_IMAGE}:${APP_VERSION}
-    logging:
-      driver: json-file
-      options:
-        max-size: "50m"
-        max-file: "5"
+    volumes:
+      - ../data/siem:/var/log/noctisapi
     environment:
       SECURITY_EVENT_STDOUT: "false"
       SECURITY_EVENT_FILE_ENABLED: "true"
+      SECURITY_EVENT_FILE_PATH: "/var/log/noctisapi/events.json"
 ```
+
+### File → Filebeat → Elasticsearch / Splunk
+
+Reads events directly from the bind-mounted file. SIEM events are fully separated from operational Docker logs.
 
 **filebeat.yml** (Filebeat 8.x):
 
 ```yaml
 filebeat.inputs:
-  - type: container
+  - type: log
+    enabled: true
     paths:
-      - /var/lib/docker/containers/*/*.log
-    processors:
-      - decode_json_fields:
-          fields: ["message"]
-          target: "siem"
-          overwrite_keys: true
-      - drop_fields:
-          fields: ["log", "stream"]
+      - /opt/hp-app/data/siem/events.json
+    json.keys_under_root: true
+    json.add_error_key: true
+    tags: ["noctisapi", "siem"]
 
 processors:
   - add_host_metadata: ~
-  - add_docker_metadata: ~
 
 output.elasticsearch:
   hosts: ["https://elastic.internal.example.com:9200"]
@@ -207,18 +228,12 @@ setup.template.pattern: "noctisapi-siem-*"
     Log_Level    info
 
 [INPUT]
-    Name         tail
-    Path         /var/lib/docker/containers/*/*.log
-    Parser       docker
-    Tag          noctisapi.siem
+    Name             tail
+    Path             /opt/hp-app/data/siem/events.json
+    Parser           json
+    Tag              noctisapi.siem
     Refresh_Interval 5
-
-[FILTER]
-    Name         parser
-    Match        noctisapi.siem
-    Key_Name     log
-    Parser       json
-    Reserve_Data On
+    DB               /var/lib/fluent-bit/noctisapi.db
 
 [OUTPUT]
     Name         es
@@ -351,6 +366,30 @@ ttp:T1595 AND NOT event_type:api_interaction
 
 - **Queue depth**: The dispatcher uses a bounded in-memory queue (10 000 events). Under extreme load events are dropped rather than blocking the API. Monitor queue saturation by counting drops in your SIEM if needed.
 - **Syslog timeout**: Each syslog send is subject to a 1-second socket timeout. Network failures are silently swallowed.
-- **File rotation**: The file handler appends to the configured path. Use logrotate or an external log shipper (Filebeat, Fluentbit) for rotation.
+- **File rotation**: The file handler appends to the configured path. Use `logrotate` or an external log shipper (Filebeat, Fluentbit) for rotation. Without rotation `events.json` grows indefinitely.
 - **Startup**: `siem_logger.configure()` must be called once at process startup (already done in `main.py` and `main_panel.py`). It starts the background dispatcher thread and reads env vars.
 - **Graceful shutdown**: Call `siem_logger.shutdown()` to drain the queue before process exit (e.g. in a signal handler).
+- **Directory permissions**: The bind-mounted directory (`/opt/hp-app/data/siem`) must be owned by uid `10001` (the container user). If the container cannot write to it, events are silently dropped. See [Docker Logging Pipeline](#docker-logging-pipeline) above.
+
+---
+
+## Disk Space Management
+
+The VPS root filesystem can fill up quickly due to a combination of SIEM events, system logs, and Docker layer cache. Monitor regularly:
+
+```bash
+df -h
+du -sh /var/log/* 2>/dev/null | sort -rh | head -10
+du -sh /var/lib/docker/
+```
+
+**Common culprits and fixes:**
+
+| Source | Fix |
+|---|---|
+| `/var/log/journal` (journald) | `journalctl --vacuum-size=100M` |
+| `/var/log/btmp` (failed SSH logins) | `truncate -s 0 /var/log/btmp && truncate -s 0 /var/log/btmp.1` |
+| Docker image cache | `docker system prune -a` (re-pull required after) |
+| `/opt/hp-app/data/siem/events.json` | Rotate or ship with Filebeat/Fluentbit |
+
+> A full disk (`100% /`) causes `sqlite3.OperationalError: disk I/O error` at startup. Free space before restarting the stack.
