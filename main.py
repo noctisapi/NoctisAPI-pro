@@ -46,6 +46,8 @@ if __name__ == "__main__":
     # messages and all subsequent log records use the chosen format.
     # log_config=None prevents uvicorn from resetting the configuration.
     configure_logging()
+    from app import siem_logger as _siem_logger
+    _siem_logger.configure()
 
     _truthy = ("1", "true", "yes")
 

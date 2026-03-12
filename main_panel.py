@@ -43,6 +43,8 @@ from app.structured_logging import configure_logging
 
 if __name__ == "__main__":
     configure_logging()
+    from app import siem_logger as _siem_logger
+    _siem_logger.configure()
 
     _truthy = ("1", "true", "yes")
 

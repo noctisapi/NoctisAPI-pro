@@ -37,6 +37,7 @@ from app.reverse_proxy import (
 from app import health as _health
 from app.server_config import RequestTimeoutMiddleware, get_request_timeout
 from app.structured_logging import get_request_id, set_request_id
+from app import siem_logger
 
 APP_TITLE = os.getenv("HP_API_TITLE", "Account Service API")
 APP_VERSION = os.getenv("HP_API_VERSION", "1.0.0")
@@ -1762,6 +1763,22 @@ async def log_all_requests(request: Request, call_next):
                         )
 
                 conn.commit()
+
+                # SIEM security event emission
+                _siem_interaction_id = (
+                    f"{inserted_event_id:x}"[:8] if isinstance(inserted_event_id, int) and inserted_event_id else
+                    (_request_id or "")[:8]
+                )
+                siem_logger.emit_event(
+                    kind=kind,
+                    source_ip=_client_ip(request),
+                    method=request.method,
+                    endpoint=request.url.path,
+                    status_code=status_code,
+                    user_agent=_user_agent(request),
+                    interaction_id=_siem_interaction_id,
+                    actor_id=actor_id,
+                )
             finally:
                 conn.close()
 
