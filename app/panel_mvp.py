@@ -1,4 +1,4 @@
-﻿# panel_mvp.py (sin auth, solo protegido por SSH tunnel)
+# panel_mvp.py (sin auth, solo protegido por SSH tunnel)
 import hashlib
 import logging
 import os
@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 _logger = logging.getLogger(__name__)
 
 from fastapi import FastAPI, Request, HTTPException, Body, UploadFile, File
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from typing import Optional, List
@@ -667,19 +667,50 @@ def _timing_bucket(deltas):
     return "very_slow"
 
 
-_FEATURE_WEIGHTS: dict[str, float] = {"path": 1.0, "stage": 1.5, "time": 0.8, "err": 1.2}
+# Default feature weights — overridden per-run by config signal weight params.
+_FEATURE_WEIGHTS: dict[str, float] = {
+    "path":   1.0,
+    "stage":  1.5,
+    "time":   0.8,
+    "err":    1.2,
+    "ua":     2.0,
+    "geo":    0.7,
+    "tok":    3.0,
+    "hdr":    1.3,
+    "subnet": 0.9,
+}
 
 
-def _weighted_jaccard(fp_a: set, fp_b: set) -> float:
-    """Weighted Jaccard similarity: stage features count 1.5Ã—, time 0.8Ã—, err 1.2Ã—, path 1.0Ã—."""
+def _build_signal_weights(config: dict) -> dict[str, float]:
+    """Merge defaults with per-run overrides sourced from campaign config."""
+    return {
+        "path":   config.get("w_path",   _FEATURE_WEIGHTS["path"]),
+        "stage":  config.get("w_stage",  _FEATURE_WEIGHTS["stage"]),
+        "time":   config.get("w_time",   _FEATURE_WEIGHTS["time"]),
+        "err":    config.get("w_err",    _FEATURE_WEIGHTS["err"]),
+        "ua":     config.get("w_ua",     _FEATURE_WEIGHTS["ua"]),
+        "geo":    config.get("w_geo",    _FEATURE_WEIGHTS["geo"]),
+        "tok":    config.get("w_tok",    _FEATURE_WEIGHTS["tok"]),
+        "hdr":    config.get("w_hdr",    _FEATURE_WEIGHTS["hdr"]),
+        "subnet": config.get("w_subnet", _FEATURE_WEIGHTS["subnet"]),
+    }
+
+
+def _weighted_jaccard(fp_a: set, fp_b: set, weights: dict[str, float] | None = None) -> float:
+    """Weighted Jaccard similarity across multiple signal types.
+
+    Each feature's contribution is multiplied by the weight of its prefix.
+    Falls back to module-level _FEATURE_WEIGHTS when *weights* is not given.
+    """
     all_features = fp_a | fp_b
     if not all_features:
         return 0.0
+    w_map = weights if weights is not None else _FEATURE_WEIGHTS
     inter_sum = 0.0
     union_sum = 0.0
     for f in all_features:
         prefix = f.split("::", 1)[0]
-        w = _FEATURE_WEIGHTS.get(prefix, 1.0)
+        w = w_map.get(prefix, 1.0)
         union_sum += w
         if f in fp_a and f in fp_b:
             inter_sum += w
@@ -1018,10 +1049,11 @@ def _compute_campaigns(conn: sqlite3.Connection, config: dict) -> dict:
     features_built = 0
     links_created = 0
     cur = conn.cursor()
-    # NOTE: DELETEs happen at the end (atomic swap) â€” not here.
+
+    signal_weights = _build_signal_weights(config)
+    cache_config_key = campaigns_pro.campaign_cache_config_key(config)
 
     cache_enabled = True
-    # actor_fingerprints may not exist on older DBs
     try:
         cur.execute("SELECT 1 FROM actor_fingerprints LIMIT 1")
     except sqlite3.Error:
@@ -1034,8 +1066,8 @@ def _compute_campaigns(conn: sqlite3.Connection, config: dict) -> dict:
     actor_rows = [dict(r) for r in cur.fetchall()]
     actors = [r["actor_id"] for r in actor_rows]
 
-    actor_features = {}
-    actor_meta = {}
+    actor_features: dict[str, set] = {}
+    actor_meta: dict[str, dict] = {}
 
     for row in actor_rows:
         actor = row["actor_id"]
@@ -1049,8 +1081,8 @@ def _compute_campaigns(conn: sqlite3.Connection, config: dict) -> dict:
             if cache_row and cache_row["fp_json"]:
                 try:
                     cache_obj = json.loads(cache_row["fp_json"] or "{}")
-                    cache_cfg = cache_obj.get("config") or {}
-                    if cache_cfg == config and _is_cache_fresh(cache_row["updated_at"], last_seen):
+                    stored_cfg = cache_obj.get("cache_config_key") or cache_obj.get("config") or {}
+                    if stored_cfg == cache_config_key and _is_cache_fresh(cache_row["updated_at"], last_seen):
                         features = set(cache_obj.get("features") or [])
                         meta = cache_obj.get("meta") or {}
                         actor_features[actor] = features
@@ -1061,6 +1093,10 @@ def _compute_campaigns(conn: sqlite3.Connection, config: dict) -> dict:
                             "timing": meta.get("timing") or "unknown",
                             "errors": meta.get("errors") or [],
                             "ua": meta.get("ua") or "",
+                            "ua_fp": meta.get("ua_fp") or "",
+                            "geo_iso2": meta.get("geo_iso2") or "",
+                            "token_prefixes": meta.get("token_prefixes") or [],
+                            "top_subnets": meta.get("top_subnets") or [],
                             "representative_session_id": meta.get("representative_session_id"),
                         }
                         features_cached += 1
@@ -1069,14 +1105,19 @@ def _compute_campaigns(conn: sqlite3.Connection, config: dict) -> dict:
                     pass
 
         features_built += 1
-        features = set()
-        path_counter = Counter()
-        path_single_counter = Counter()
-        timing_counter = Counter()
-        error_counter = Counter()
+        features: set[str] = set()
+        path_counter: Counter = Counter()
+        path_single_counter: Counter = Counter()
+        timing_counter: Counter = Counter()
+        error_counter: Counter = Counter()
+        ua_counter: Counter = Counter()
+        geo_counter: Counter = Counter()
+        tok_counter: Counter = Counter()
+        subnet_counter: Counter = Counter()
+        hdr_counter: Counter = Counter()
         rep_session_id = None
-        stage_value_counter = Counter()
-        stage_sequence = []
+        stage_value_counter: Counter = Counter()
+        stage_sequence: list = []
 
         cur.execute(
             "SELECT session_id FROM sessions WHERE actor_id=? ORDER BY started_at DESC LIMIT ?",
@@ -1087,9 +1128,12 @@ def _compute_campaigns(conn: sqlite3.Connection, config: dict) -> dict:
             session_id = sess_row["session_id"]
             if not rep_session_id:
                 rep_session_id = session_id
+
+            # --- path + timing + error features from session_steps ---
             cur.execute(
-                "SELECT seq, ts, path, stage_after, stage_before, response_status FROM session_steps WHERE session_id=? ORDER BY seq ASC",
-                (session_id,),
+                "SELECT seq, ts, path, stage_after, stage_before, response_status, headers_json "
+                "FROM session_steps WHERE session_id=? ORDER BY seq ASC LIMIT ?",
+                (session_id, config["max_steps_per_session"]),
             )
             step_rows = [dict(r) for r in cur.fetchall()]
             if not step_rows:
@@ -1115,7 +1159,7 @@ def _compute_campaigns(conn: sqlite3.Connection, config: dict) -> dict:
                 stages.append(stage_int)
                 stage_value_counter[stage_int] += 1
                 stage_sequence.append(stage_int)
-            stage_flow = _stage_flow(stages)
+            _stage_flow(stages)
 
             ts_values = [_parse_step_ts(step.get("ts")) for step in step_rows]
             deltas = []
@@ -1132,6 +1176,60 @@ def _compute_campaigns(conn: sqlite3.Connection, config: dict) -> dict:
                     code = str(status)
                     features.add(f"err::{code}")
                     error_counter[code] += 1
+
+            # --- header fingerprint from session_steps ---
+            for step in step_rows:
+                hdrs_raw = step.get("headers_json") or ""
+                if hdrs_raw:
+                    try:
+                        hdrs = json.loads(hdrs_raw)
+                        if isinstance(hdrs, dict):
+                            hfp = campaigns_pro.header_fingerprint(hdrs)
+                            if hfp:
+                                features.add(f"hdr::{hfp}")
+                                hdr_counter[hfp] += 1
+                    except Exception:
+                        pass
+
+        # --- geo / UA / token / subnet from events ---
+        cur.execute(
+            "SELECT ip, ua, token, extra_json FROM events "
+            "WHERE actor_id=? AND ts IS NOT NULL ORDER BY id DESC LIMIT ?",
+            (actor, config["max_events_per_actor"]),
+        )
+        event_rows = [dict(r) for r in cur.fetchall()]
+        for ev in event_rows:
+            ua_raw = (ev.get("ua") or "").strip()
+            if ua_raw:
+                ua_counter[ua_raw] += 1
+                ua_fp = campaigns_pro.normalize_ua_fingerprint(ua_raw)
+                if ua_fp:
+                    features.add(f"ua::{ua_fp}")
+
+            tok_raw = (ev.get("token") or "").strip()
+            if tok_raw:
+                tok_pfx = campaigns_pro.extract_token_prefix(tok_raw)
+                if tok_pfx:
+                    features.add(f"tok::{tok_pfx}")
+                    tok_counter[tok_pfx] += 1
+
+            ip_raw = (ev.get("ip") or "").strip()
+            if ip_raw:
+                sn = campaigns_pro.ip_subnet(ip_raw)
+                if sn:
+                    features.add(f"subnet::{sn}")
+                    subnet_counter[sn] += 1
+
+            extra_raw = ev.get("extra_json") or ""
+            if extra_raw:
+                try:
+                    extra = json.loads(extra_raw)
+                    geo = (extra.get("geo") or {}).get("iso_code") or ""
+                    if geo:
+                        features.add(f"geo::{geo}")
+                        geo_counter[geo] += 1
+                except Exception:
+                    pass
 
         stage_flow_overall = _stage_flow(stage_sequence)
         if stage_flow_overall:
@@ -1160,11 +1258,11 @@ def _compute_campaigns(conn: sqlite3.Connection, config: dict) -> dict:
             for path, _ in path_single_counter.most_common(config["path_top_k"]):
                 features.add(f"path::{path}")
 
-        cur.execute("SELECT ua FROM events WHERE actor_id=? AND ua IS NOT NULL AND ua != '' ORDER BY id DESC LIMIT 1", (actor,))
-        ua_row = cur.fetchone()
-        ua_value = ""
-        if ua_row and ua_row[0]:
-            ua_value = ua_row[0].strip()
+        top_ua_raw = ua_counter.most_common(1)[0][0] if ua_counter else ""
+        top_ua_fp = campaigns_pro.normalize_ua_fingerprint(top_ua_raw) if top_ua_raw else ""
+        top_geo = geo_counter.most_common(1)[0][0] if geo_counter else ""
+        top_tokens = [t for t, _ in tok_counter.most_common(5)]
+        top_subnets = [s for s, _ in subnet_counter.most_common(5)]
 
         actor_features[actor] = features
         actor_meta[actor] = {
@@ -1173,14 +1271,18 @@ def _compute_campaigns(conn: sqlite3.Connection, config: dict) -> dict:
             "stage_counts": stage_counts,
             "timing": timing_counter.most_common(1)[0][0] if timing_counter else "unknown",
             "errors": [code for code, _ in error_counter.most_common(3)],
-            "ua": ua_value,
+            "ua": top_ua_raw,
+            "ua_fp": top_ua_fp,
+            "geo_iso2": top_geo,
+            "token_prefixes": top_tokens,
+            "top_subnets": top_subnets,
             "representative_session_id": rep_session_id,
         }
         if cache_enabled:
             cache_payload = {
                 "features": list(features),
                 "meta": actor_meta[actor],
-                "config": config,
+                "cache_config_key": cache_config_key,
             }
             cur.execute(
                 "INSERT OR REPLACE INTO actor_fingerprints(actor_id, fp_json, updated_at) VALUES(?,?,?)",
@@ -1189,7 +1291,7 @@ def _compute_campaigns(conn: sqlite3.Connection, config: dict) -> dict:
 
     # First-pass greedy grouping using weighted Jaccard
     campaign_groups: list[dict] = []
-    processed = set()
+    processed: set[str] = set()
     for actor in actors:
         if actor in processed:
             continue
@@ -1209,7 +1311,7 @@ def _compute_campaigns(conn: sqlite3.Connection, config: dict) -> dict:
             inter_features = fp & other_fp
             if len(inter_features) < config["min_intersection"]:
                 continue
-            score = _weighted_jaccard(fp, other_fp)
+            score = _weighted_jaccard(fp, other_fp, weights=signal_weights)
             if score >= config["min_jaccard"]:
                 group.append(other)
                 link_scores[other] = round(score, 3)
@@ -1240,12 +1342,12 @@ def _compute_campaigns(conn: sqlite3.Connection, config: dict) -> dict:
                 inter = fp_a & fp_b
                 if len(inter) < config["min_intersection"]:
                     continue
-                if _weighted_jaccard(fp_a, fp_b) >= config["min_jaccard"]:
+                if _weighted_jaccard(fp_a, fp_b, weights=signal_weights) >= config["min_jaccard"]:
                     for m in cB["members"]:
                         if m not in cA["members"]:
                             cA["members"].append(m)
                             fp_m = actor_features.get(m, set())
-                            cA["link_scores"][m] = round(_weighted_jaccard(fp_a, fp_m), 3)
+                            cA["link_scores"][m] = round(_weighted_jaccard(fp_a, fp_m, weights=signal_weights), 3)
                             cA["overlap_details"][m] = fp_a & fp_m
                     campaign_groups.pop(j)
                     merges_done += 1
@@ -1258,7 +1360,7 @@ def _compute_campaigns(conn: sqlite3.Connection, config: dict) -> dict:
     try:
         cur.execute("UPDATE cases SET campaign_id=NULL WHERE campaign_id IS NOT NULL")
     except Exception:
-        pass  # cases table may not exist in very old DBs
+        pass
 
     config_key = f"j{config['min_jaccard']:.3f}i{config['min_intersection']}"
     campaigns_created = []
@@ -1267,7 +1369,7 @@ def _compute_campaigns(conn: sqlite3.Connection, config: dict) -> dict:
         group = grp["members"]
         link_scores = grp["link_scores"]
         overlap_details = grp["overlap_details"]
-        # Deterministic campaign ID: stable across recomputes with same members + config
+
         members_key = "|".join(sorted(group))
         cid = hashlib.sha256(f"{members_key}#{config_key}".encode()).hexdigest()[:16]
         now = _utc_now_iso()
@@ -1275,6 +1377,7 @@ def _compute_campaigns(conn: sqlite3.Connection, config: dict) -> dict:
         rep_session_id = seed_meta.get("representative_session_id")
         label_stage = seed_meta.get("stage_flow") or "replay flow"
         label = f"{len(group)} actors - {label_stage}"
+
         summary = {
             "seed_actor": actor,
             "group_size": len(group),
@@ -1286,47 +1389,110 @@ def _compute_campaigns(conn: sqlite3.Connection, config: dict) -> dict:
             "stage_counts": seed_meta.get("stage_counts", []),
             "timing": seed_meta.get("timing"),
             "ua": seed_meta.get("ua"),
+            "ua_fp": seed_meta.get("ua_fp"),
+            "geo_iso2": seed_meta.get("geo_iso2"),
+            "token_prefixes": seed_meta.get("token_prefixes"),
+            "top_subnets": seed_meta.get("top_subnets"),
             "representative_session_id": rep_session_id,
             "params": config,
         }
         metrics = _campaign_metrics(cur, group)
-        summary.update(
-            {
-                "first_seen": metrics.get("first_seen"),
-                "last_seen": metrics.get("last_seen"),
-                "activity": metrics.get("activity"),
-                "timeline": metrics.get("timeline"),
-                "stage": metrics.get("stage"),
-                "techniques": metrics.get("techniques"),
-                "endpoints": metrics.get("endpoints"),
-                "score_det": metrics.get("score_det"),
-            }
+        summary.update({
+            "first_seen": metrics.get("first_seen"),
+            "last_seen": metrics.get("last_seen"),
+            "activity": metrics.get("activity"),
+            "timeline": metrics.get("timeline"),
+            "stage": metrics.get("stage"),
+            "techniques": metrics.get("techniques"),
+            "endpoints": metrics.get("endpoints"),
+            "score_det": metrics.get("score_det"),
+        })
+
+        # Compute extended metadata
+        all_link_scores = [v for v in link_scores.values() if v is not None]
+        confidence_score = round(sum(all_link_scores) / len(all_link_scores), 3) if all_link_scores else 0.0
+
+        all_techniques = metrics.get("techniques") or []
+        all_endpoints = metrics.get("endpoints") or []
+        seed_features = actor_features.get(actor, set())
+        behavior_pattern = campaigns_pro.classify_behavior_pattern(
+            list(all_techniques), list(all_endpoints), seed_features
         )
-        cur.execute(
-            """
-            INSERT OR REPLACE INTO campaigns(
-                campaign_id, label, created_at, last_seen_at, score_avg, features_summary_json,
-                representative_session_id, first_seen_at, score_det, activity_json, timeline_json,
-                stage_flow_json, techniques_json, endpoints_json
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            """,
-            (
-                cid,
-                label,
-                now,
-                metrics.get("last_seen") or now,
-                0.0,
-                json.dumps(summary, ensure_ascii=False),
-                rep_session_id,
-                metrics.get("first_seen"),
-                int(metrics.get("score_det") or 0),
-                json.dumps(metrics.get("activity") or {}, ensure_ascii=False),
-                json.dumps(metrics.get("timeline") or {}, ensure_ascii=False),
-                json.dumps(metrics.get("stage") or {}, ensure_ascii=False),
-                json.dumps(metrics.get("techniques") or [], ensure_ascii=False),
-                json.dumps(metrics.get("endpoints") or [], ensure_ascii=False),
-            ),
-        )
+
+        try:
+            cur.execute(
+                "SELECT COUNT(DISTINCT e.id), COUNT(DISTINCT e.session_id), COUNT(DISTINCT e.ip) "
+                "FROM events e WHERE e.actor_id IN ({}) ".format(",".join("?" * len(group))),
+                group,
+            )
+            cnt_row = cur.fetchone()
+            request_count = int(cnt_row[0] or 0) if cnt_row else 0
+            ip_diversity = int(cnt_row[2] or 0) if cnt_row else 0
+        except Exception:
+            request_count = 0
+            ip_diversity = 0
+        try:
+            cur.execute(
+                "SELECT COUNT(*) FROM sessions WHERE actor_id IN ({})".format(",".join("?" * len(group))),
+                group,
+            )
+            sc_row = cur.fetchone()
+            session_count = int(sc_row[0] or 0) if sc_row else 0
+        except Exception:
+            session_count = 0
+
+        # Try to INSERT with new columns; fall back to old schema if columns don't exist yet
+        try:
+            cur.execute(
+                """
+                INSERT OR REPLACE INTO campaigns(
+                    campaign_id, label, created_at, last_seen_at, score_avg, features_summary_json,
+                    representative_session_id, first_seen_at, score_det, activity_json, timeline_json,
+                    stage_flow_json, techniques_json, endpoints_json,
+                    request_count, session_count, confidence_score, behavior_pattern, ip_diversity
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    cid, label, now,
+                    metrics.get("last_seen") or now,
+                    0.0,
+                    json.dumps(summary, ensure_ascii=False),
+                    rep_session_id,
+                    metrics.get("first_seen"),
+                    int(metrics.get("score_det") or 0),
+                    json.dumps(metrics.get("activity") or {}, ensure_ascii=False),
+                    json.dumps(metrics.get("timeline") or {}, ensure_ascii=False),
+                    json.dumps(metrics.get("stage") or {}, ensure_ascii=False),
+                    json.dumps(metrics.get("techniques") or [], ensure_ascii=False),
+                    json.dumps(metrics.get("endpoints") or [], ensure_ascii=False),
+                    request_count, session_count, confidence_score, behavior_pattern, ip_diversity,
+                ),
+            )
+        except Exception:
+            cur.execute(
+                """
+                INSERT OR REPLACE INTO campaigns(
+                    campaign_id, label, created_at, last_seen_at, score_avg, features_summary_json,
+                    representative_session_id, first_seen_at, score_det, activity_json, timeline_json,
+                    stage_flow_json, techniques_json, endpoints_json
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    cid, label, now,
+                    metrics.get("last_seen") or now,
+                    0.0,
+                    json.dumps(summary, ensure_ascii=False),
+                    rep_session_id,
+                    metrics.get("first_seen"),
+                    int(metrics.get("score_det") or 0),
+                    json.dumps(metrics.get("activity") or {}, ensure_ascii=False),
+                    json.dumps(metrics.get("timeline") or {}, ensure_ascii=False),
+                    json.dumps(metrics.get("stage") or {}, ensure_ascii=False),
+                    json.dumps(metrics.get("techniques") or [], ensure_ascii=False),
+                    json.dumps(metrics.get("endpoints") or [], ensure_ascii=False),
+                ),
+            )
+
         for a in group:
             conf = link_scores.get(a, 0.0)
             overlaps = overlap_details.get(a, set())
@@ -1334,10 +1500,22 @@ def _compute_campaigns(conn: sqlite3.Connection, config: dict) -> dict:
             shared_stage = next((f.split("stage::", 1)[1] for f in overlaps if f.startswith("stage::")), "")
             shared_timing = next((f.split("time::", 1)[1] for f in overlaps if f.startswith("time::")), "")
             shared_errors = [f.split("err::", 1)[1] for f in overlaps if f.startswith("err::")][:5]
+            shared_ua_fps = [f.split("ua::", 1)[1] for f in overlaps if f.startswith("ua::")][:3]
+            shared_toks = [f.split("tok::", 1)[1] for f in overlaps if f.startswith("tok::")][:3]
+            shared_subnets = [f.split("subnet::", 1)[1] for f in overlaps if f.startswith("subnet::")][:3]
+            shared_geos = [f.split("geo::", 1)[1] for f in overlaps if f.startswith("geo::")][:5]
+            shared_hdrs = [f.split("hdr::", 1)[1] for f in overlaps if f.startswith("hdr::")][:3]
             seed_ua = (actor_meta.get(actor, {}) or {}).get("ua") or ""
             member_ua = (actor_meta.get(a, {}) or {}).get("ua") or ""
             shared_ua = member_ua if seed_ua and member_ua and seed_ua == member_ua else ""
             stage_counts = (actor_meta.get(a, {}) or {}).get("stage_counts", [])
+
+            signal_scores = {}
+            for feat in overlaps:
+                prefix = feat.split("::", 1)[0] if "::" in feat else ""
+                w = signal_weights.get(prefix, 1.0)
+                signal_scores[prefix] = round(signal_scores.get(prefix, 0.0) + w, 3)
+
             reasons = {
                 "jaccard_vs_seed": conf,
                 "overlap_count": len(overlaps),
@@ -1346,12 +1524,28 @@ def _compute_campaigns(conn: sqlite3.Connection, config: dict) -> dict:
                 "shared_timing": shared_timing,
                 "shared_errors": shared_errors,
                 "shared_ua": shared_ua,
+                "shared_ua_fps": shared_ua_fps,
+                "shared_tokens": shared_toks,
+                "shared_subnets": shared_subnets,
+                "shared_geos": shared_geos,
+                "shared_hdrs": shared_hdrs,
                 "stage_counts": stage_counts,
             }
-            cur.execute(
-                "INSERT OR REPLACE INTO campaign_actor_links(campaign_id, actor_id, confidence, reasons_json, linked_at) VALUES(?,?,?,?,?)",
-                (cid, a, conf, json.dumps(reasons, ensure_ascii=False), now),
-            )
+            try:
+                cur.execute(
+                    "INSERT OR REPLACE INTO campaign_actor_links"
+                    "(campaign_id, actor_id, confidence, reasons_json, linked_at, signal_scores_json)"
+                    " VALUES(?,?,?,?,?,?)",
+                    (cid, a, conf, json.dumps(reasons, ensure_ascii=False), now,
+                     json.dumps(signal_scores, ensure_ascii=False)),
+                )
+            except Exception:
+                cur.execute(
+                    "INSERT OR REPLACE INTO campaign_actor_links"
+                    "(campaign_id, actor_id, confidence, reasons_json, linked_at)"
+                    " VALUES(?,?,?,?,?)",
+                    (cid, a, conf, json.dumps(reasons, ensure_ascii=False), now),
+                )
             links_created += 1
         campaigns_created.append({"campaign_id": cid, "members": group})
 
@@ -1369,7 +1563,6 @@ def _compute_campaigns(conn: sqlite3.Connection, config: dict) -> dict:
         "params": config,
         "cache_enabled": cache_enabled,
     }
-
 
 def _run_campaign_job(job_id: str, config: dict) -> None:
     with CAMPAIGN_JOB_LOCK:
@@ -3674,4 +3867,605 @@ async def environment_run_diagnostics():
             for r in filtered
         ],
     })
+
+
+# ---------------------------------------------------------------------------
+# Session Replay — PRO feature
+# ---------------------------------------------------------------------------
+
+_REPLAY_HIGH_VALUE_KINDS = frozenset({
+    "backup_download", "cloud_metadata", "infra_vault",
+    "root_console", "admin_secrets", "internal_config",
+})
+_REPLAY_WARN_KINDS = frozenset({
+    "token_used", "unknown_token", "auth_login", "auth_mfa",
+    "keys_issued", "token_issued", "auth_token_request",
+})
+_REPLAY_RECON_KINDS = frozenset({
+    "recon_docs", "recon_openapi", "recon_swagger", "recon_redoc",
+    "recon_env", "recon_config", "recon_security", "probe",
+})
+
+
+def _replay_kind_color(kind: str) -> str:
+    if kind in _REPLAY_HIGH_VALUE_KINDS:
+        return "danger"
+    if kind in _REPLAY_WARN_KINDS:
+        return "warn"
+    if kind in _REPLAY_RECON_KINDS:
+        return "recon"
+    return "neutral"
+
+
+def _load_replay_data(conn: sqlite3.Connection, session_id: str) -> dict:
+    """Load and enrich all replay data for a session. Returns a dict with
+    keys: session, steps, actor_ip, actor_ua, actor_geo, actor_score,
+    actor_err_total, total_points.  Raises HTTPException(404) if not found."""
+    cur = conn.cursor()
+
+    row = cur.execute("SELECT * FROM sessions WHERE session_id=?", (session_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="session not found")
+    sess = dict(row)
+    sess["started_fmt"] = fmt_ts(sess.get("started_at") or "")
+    sess["ended_fmt"] = fmt_ts(sess.get("ended_at") or "") if sess.get("ended_at") else "—"
+
+    def _parse_dt(s):
+        try:
+            return datetime.fromisoformat((s or "").replace("Z", "+00:00"))
+        except Exception:
+            return None
+
+    session_start_dt = _parse_dt(sess.get("started_at"))
+    session_end_dt = _parse_dt(sess.get("ended_at"))
+    duration_s = None
+    if session_start_dt and session_end_dt:
+        duration_s = max(0, int((session_end_dt - session_start_dt).total_seconds()))
+    sess["duration_s"] = duration_s
+
+    cur.execute(
+        "SELECT * FROM session_steps WHERE session_id=? ORDER BY seq ASC",
+        (session_id,),
+    )
+    steps_raw = [dict(r) for r in cur.fetchall()]
+
+    # Load actor events within the session window for enrichment
+    events_raw = []
+    window_start = sess.get("started_at") or ""
+    window_end = sess.get("ended_at") or _utc_now_iso()
+    if window_start:
+        cur.execute(
+            """
+            SELECT kind, method, path, ts, token, ip, ua,
+                   json_extract(extra_json, '$.latency_ms')        AS latency_ms,
+                   json_extract(extra_json, '$.points_delta')       AS points_delta,
+                   json_extract(extra_json, '$.geo')                AS geo_json,
+                   json_extract(extra_json, '$.trap_flags')         AS trap_flags,
+                   json_extract(extra_json, '$.scanner')            AS scanner,
+                   json_extract(extra_json, '$.recon')              AS recon,
+                   json_extract(extra_json, '$.token_valid')        AS token_valid,
+                   json_extract(extra_json, '$.modular')            AS modular_json,
+                   json_extract(extra_json, '$.replay_multiplier')  AS replay_multiplier,
+                   json_extract(extra_json, '$.err_consecutive')    AS err_consecutive
+            FROM events
+            WHERE actor_id=? AND ts >= ? AND ts <= ?
+            ORDER BY ts ASC
+            """,
+            (sess["actor_id"], window_start, window_end),
+        )
+        events_raw = [dict(r) for r in cur.fetchall()]
+
+    # Index events by (method, path) for nearest-timestamp matching
+    events_by_key: dict = {}
+    for ev in events_raw:
+        key = (ev.get("method", ""), ev.get("path", ""))
+        events_by_key.setdefault(key, []).append(ev)
+
+    actor_ip = None
+    actor_ua = None
+    actor_geo: dict = {}
+    total_points = 0
+    enriched_steps = []
+    prev_raw: dict | None = None
+
+    for step in steps_raw:
+        enriched = dict(step)
+        step_dt = _parse_dt(step.get("ts"))
+
+        # Relative timing for timeline positioning
+        if step_dt and session_start_dt:
+            offset_ms = max(0, int((step_dt - session_start_dt).total_seconds() * 1000))
+            enriched["ts_offset_ms"] = offset_ms
+            if duration_s and duration_s > 0:
+                enriched["ts_pct"] = min(100.0, round(offset_ms / (duration_s * 1000) * 100, 2))
+            else:
+                enriched["ts_pct"] = 0.0
+        else:
+            enriched["ts_offset_ms"] = 0
+            enriched["ts_pct"] = 0.0
+
+        # Parse step JSON fields
+        enriched["headers"] = _safe_json_loads(step.get("headers_json"), {})
+        enriched["query"] = _safe_json_loads(step.get("query_json"), {})
+        enriched["body"] = _safe_json_loads(step.get("body_json"), None)
+        enriched["response_body"] = _safe_json_loads(step.get("response_json"), None)
+
+        # Match to nearest event
+        key = (step.get("method", ""), step.get("path", ""))
+        candidates = events_by_key.get(key, [])
+        best_ev: dict | None = None
+        if candidates:
+            if step_dt:
+                best_delta = float("inf")
+                for ev in candidates:
+                    ev_dt = _parse_dt(ev.get("ts"))
+                    if ev_dt:
+                        delta = abs((ev_dt - step_dt).total_seconds())
+                        if delta < best_delta:
+                            best_delta = delta
+                            best_ev = ev
+            else:
+                best_ev = candidates[0]
+
+        if best_ev:
+            enriched["kind"] = best_ev.get("kind") or "probe"
+            enriched["token"] = best_ev.get("token") or ""
+            enriched["ip"] = best_ev.get("ip") or ""
+            enriched["ua"] = best_ev.get("ua") or ""
+            enriched["latency_ms"] = best_ev.get("latency_ms")
+            enriched["points_delta"] = int(best_ev.get("points_delta") or 0)
+            enriched["trap_flags"] = _safe_json_loads(best_ev.get("trap_flags"), [])
+            enriched["scanner"] = bool(best_ev.get("scanner"))
+            enriched["recon"] = bool(best_ev.get("recon"))
+            enriched["token_valid"] = best_ev.get("token_valid")
+            enriched["modular"] = _safe_json_loads(best_ev.get("modular_json"), {})
+            enriched["replay_multiplier"] = float(best_ev.get("replay_multiplier") or 1.0)
+            enriched["err_consecutive"] = int(best_ev.get("err_consecutive") or 0)
+            try:
+                geo = json.loads(best_ev.get("geo_json") or "{}")
+            except Exception:
+                geo = {}
+            enriched["geo"] = geo
+            if not actor_geo and geo:
+                actor_geo = geo
+            if not actor_ip:
+                actor_ip = best_ev.get("ip")
+            if not actor_ua:
+                actor_ua = best_ev.get("ua")
+            total_points += enriched["points_delta"]
+        else:
+            enriched.update({
+                "kind": "probe", "token": "", "ip": "", "ua": "",
+                "latency_ms": None, "points_delta": 0, "trap_flags": [],
+                "scanner": False, "recon": False, "token_valid": None,
+                "modular": {}, "replay_multiplier": 1.0, "err_consecutive": 0,
+                "geo": {},
+            })
+
+        enriched["kind_color"] = _replay_kind_color(enriched["kind"])
+
+        # Pre-compute anomalies
+        anomalies = []
+        if enriched.get("scanner"):
+            anomalies.append("scanner_ua")
+        if enriched.get("replay_multiplier", 1.0) >= 1.5:
+            anomalies.append("replay_bonus")
+        sb = enriched.get("stage_before") or 0
+        sa = enriched.get("stage_after") or sb
+        if sa - sb > 1:
+            anomalies.append("stage_jump")
+        if enriched["kind"] in _REPLAY_HIGH_VALUE_KINDS:
+            anomalies.append("high_value")
+        if enriched.get("err_consecutive", 0) >= 5:
+            anomalies.append("error_streak")
+        if enriched.get("token") and enriched.get("token_valid") is False:
+            anomalies.append("invalid_token")
+        if prev_raw:
+            try:
+                prev_dt = _parse_dt(prev_raw.get("ts"))
+                if step_dt and prev_dt:
+                    gap_ms = (step_dt - prev_dt).total_seconds() * 1000
+                    if 0 < gap_ms < 200:
+                        anomalies.append("fast_request")
+            except Exception:
+                pass
+        enriched["anomalies"] = anomalies
+        enriched_steps.append(enriched)
+        prev_raw = step
+
+    # If duration was unknown, distribute steps evenly across timeline
+    if not duration_s and len(steps_raw) > 1:
+        for i, step in enumerate(enriched_steps):
+            step["ts_pct"] = round(i / (len(enriched_steps) - 1) * 100, 2)
+
+    actor_row = cur.execute(
+        "SELECT score, err_total FROM actors WHERE actor_id=?",
+        (sess["actor_id"],),
+    ).fetchone()
+    actor_score = actor_row["score"] if actor_row else 0
+    actor_err_total = actor_row["err_total"] if actor_row else 0
+
+    return {
+        "session": sess,
+        "steps": enriched_steps,
+        "actor_ip": actor_ip or "",
+        "actor_ua": actor_ua or "",
+        "actor_geo": actor_geo,
+        "actor_score": actor_score,
+        "actor_err_total": actor_err_total,
+        "total_points": total_points,
+    }
+
+
+@app.get("/dashboard/replay", response_class=HTMLResponse)
+def replay_list(request: Request):
+    _require_feature(licensing.Feature.REPLAY)
+
+    try:
+        page = max(1, int(request.query_params.get("page") or 1))
+    except (ValueError, TypeError):
+        page = 1
+    try:
+        per_page = min(100, max(10, int(request.query_params.get("per_page") or 25)))
+    except (ValueError, TypeError):
+        per_page = 25
+
+    stage_min = (request.query_params.get("stage") or "").strip()
+    date_from = (request.query_params.get("date_from") or "").strip()
+    date_to = (request.query_params.get("date_to") or "").strip()
+    actor_q = (request.query_params.get("actor") or "").strip()
+
+    conditions: list = []
+    params: list = []
+    if stage_min:
+        try:
+            conditions.append("s.stage_max >= ?")
+            params.append(int(stage_min))
+        except (ValueError, TypeError):
+            pass
+    if date_from:
+        conditions.append("s.started_at >= ?")
+        params.append(date_from)
+    if date_to:
+        conditions.append("s.started_at <= ?")
+        params.append(date_to + "T23:59:59")
+    if actor_q:
+        conditions.append("s.actor_id LIKE ?")
+        params.append(f"%{actor_q}%")
+
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+    offset = (page - 1) * per_page
+
+    conn = db()
+    try:
+        ensure_schema(conn)
+        cur = conn.cursor()
+        total = cur.execute(f"SELECT COUNT(*) FROM sessions s {where}", params).fetchone()[0]
+        cur.execute(
+            f"""
+            SELECT s.session_id, s.actor_id, s.started_at, s.ended_at,
+                   s.stage_max, s.summary, s.fingerprint,
+                   (SELECT COUNT(*) FROM session_steps ss
+                    WHERE ss.session_id = s.session_id) AS step_count,
+                   (SELECT e.ip FROM events e
+                    WHERE e.actor_id = s.actor_id AND e.ts >= s.started_at
+                    LIMIT 1) AS ip,
+                   (SELECT json_extract(e.extra_json, '$.geo')
+                    FROM events e
+                    WHERE e.actor_id = s.actor_id AND e.ts >= s.started_at
+                    LIMIT 1) AS geo_json,
+                   (SELECT e.kind FROM events e
+                    WHERE e.actor_id = s.actor_id
+                      AND e.ts >= s.started_at
+                      AND e.kind IN ('root_console','infra_vault','cloud_metadata',
+                                     'admin_secrets','backup_download','internal_config',
+                                     'keys_issued','token_used','unknown_token')
+                    ORDER BY e.ts DESC LIMIT 1) AS top_kind
+            FROM sessions s {where}
+            ORDER BY s.started_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            params + [per_page, offset],
+        )
+        sessions = []
+        for r in cur.fetchall():
+            s = dict(r)
+            s["started_fmt"] = fmt_ts(s.get("started_at") or "")
+            s["ended_fmt"] = fmt_ts(s.get("ended_at") or "") if s.get("ended_at") else "—"
+            started_dt = None
+            ended_dt = None
+            try:
+                started_dt = datetime.fromisoformat((s["started_at"] or "").replace("Z", "+00:00"))
+            except Exception:
+                pass
+            try:
+                ended_dt = datetime.fromisoformat((s["ended_at"] or "").replace("Z", "+00:00"))
+            except Exception:
+                pass
+            if started_dt and ended_dt:
+                s["duration_s"] = max(0, int((ended_dt - started_dt).total_seconds()))
+            else:
+                s["duration_s"] = None
+            try:
+                geo = json.loads(s.get("geo_json") or "{}")
+                s["geo_flag"] = geo.get("flag", "")
+                s["geo_country"] = geo.get("country_iso2", "")
+                s["geo_name"] = geo.get("country_name", "")
+            except Exception:
+                s["geo_flag"] = ""
+                s["geo_country"] = ""
+                s["geo_name"] = ""
+            s["top_kind_color"] = _replay_kind_color(s.get("top_kind") or "probe")
+            sessions.append(s)
+
+        total_pages = max(1, (total + per_page - 1) // per_page)
+        return templates.TemplateResponse(
+            "replay_list.html",
+            {
+                "request": request,
+                "sessions": sessions,
+                "total": total,
+                "page": page,
+                "per_page": per_page,
+                "total_pages": total_pages,
+                "stage_min": stage_min,
+                "date_from": date_from,
+                "date_to": date_to,
+                "actor_q": actor_q,
+                **_license_context(),
+            },
+        )
+    finally:
+        conn.close()
+
+
+@app.get("/dashboard/replay/{session_id}", response_class=HTMLResponse)
+def replay_detail(session_id: str, request: Request):
+    _require_feature(licensing.Feature.REPLAY)
+    conn = db()
+    try:
+        ensure_schema(conn)
+        data = _load_replay_data(conn, session_id)
+        cur = conn.cursor()
+
+        open_cases = []
+        if _has_feature(licensing.Feature.CASES, action="overview_cases"):
+            cur.execute(
+                "SELECT id, title, severity FROM cases WHERE status='open' ORDER BY updated_at DESC LIMIT 100"
+            )
+            open_cases = [dict(r) for r in cur.fetchall()]
+
+        # Prepare JS-safe step payload (subset; excludes raw *_json columns)
+        steps_for_js = []
+        for st in data["steps"]:
+            steps_for_js.append({
+                "id": st.get("id"),
+                "seq": st.get("seq"),
+                "ts": st.get("ts", ""),
+                "ts_offset_ms": st.get("ts_offset_ms", 0),
+                "ts_pct": st.get("ts_pct", 0.0),
+                "method": st.get("method", ""),
+                "path": st.get("path", ""),
+                "query": st.get("query") or {},
+                "headers": st.get("headers") or {},
+                "body": st.get("body"),
+                "response_status": st.get("response_status"),
+                "response_body": st.get("response_body"),
+                "stage_before": st.get("stage_before", 0),
+                "stage_after": st.get("stage_after", 0),
+                "kind": st.get("kind", "probe"),
+                "kind_color": st.get("kind_color", "neutral"),
+                "points_delta": st.get("points_delta", 0),
+                "latency_ms": st.get("latency_ms"),
+                "trap_flags": st.get("trap_flags") or [],
+                "scanner": st.get("scanner", False),
+                "recon": st.get("recon", False),
+                "token": st.get("token", ""),
+                "token_valid": st.get("token_valid"),
+                "replay_multiplier": st.get("replay_multiplier", 1.0),
+                "err_consecutive": st.get("err_consecutive", 0),
+                "modular": st.get("modular") or {},
+                "anomalies": st.get("anomalies") or [],
+            })
+
+        session_js = {
+            "session_id": data["session"]["session_id"],
+            "actor_id": data["session"]["actor_id"],
+            "started_at": data["session"].get("started_at", ""),
+            "duration_s": data["session"].get("duration_s"),
+            "stage_max": data["session"].get("stage_max", 0),
+        }
+
+        return templates.TemplateResponse(
+            "replay_detail.html",
+            {
+                "request": request,
+                "session": data["session"],
+                "steps": data["steps"],
+                "actor_ip": data["actor_ip"],
+                "actor_ua": data["actor_ua"],
+                "actor_geo": data["actor_geo"],
+                "actor_score": data["actor_score"],
+                "actor_err_total": data["actor_err_total"],
+                "total_points": data["total_points"],
+                "cases": open_cases,
+                "steps_json": json.dumps(steps_for_js, ensure_ascii=False, default=str),
+                "session_json": json.dumps(session_js, ensure_ascii=False, default=str),
+                **_license_context(),
+            },
+        )
+    finally:
+        conn.close()
+
+
+@app.get("/api/replay/{session_id}", response_class=JSONResponse)
+def api_replay_session(session_id: str):
+    _require_feature(licensing.Feature.REPLAY)
+    conn = db()
+    try:
+        ensure_schema(conn)
+        data = _load_replay_data(conn, session_id)
+        steps_out = []
+        for st in data["steps"]:
+            steps_out.append({
+                "seq": st.get("seq"),
+                "ts": st.get("ts"),
+                "ts_offset_ms": st.get("ts_offset_ms", 0),
+                "method": st.get("method"),
+                "path": st.get("path"),
+                "query": st.get("query"),
+                "headers": st.get("headers"),
+                "body": st.get("body"),
+                "response_status": st.get("response_status"),
+                "stage_before": st.get("stage_before"),
+                "stage_after": st.get("stage_after"),
+                "kind": st.get("kind"),
+                "points_delta": st.get("points_delta"),
+                "latency_ms": st.get("latency_ms"),
+                "trap_flags": st.get("trap_flags"),
+                "anomalies": st.get("anomalies"),
+            })
+        return {
+            "session": {
+                "session_id": data["session"]["session_id"],
+                "actor_id": data["session"]["actor_id"],
+                "started_at": data["session"].get("started_at"),
+                "ended_at": data["session"].get("ended_at"),
+                "duration_s": data["session"].get("duration_s"),
+                "stage_max": data["session"].get("stage_max"),
+            },
+            "actor": {
+                "ip": data["actor_ip"],
+                "ua": data["actor_ua"],
+                "geo": data["actor_geo"],
+                "score": data["actor_score"],
+            },
+            "total_points": data["total_points"],
+            "steps": steps_out,
+        }
+    finally:
+        conn.close()
+
+
+@app.get("/api/replay/{session_id}/export/ndjson")
+def replay_export_ndjson(session_id: str):
+    _require_feature(licensing.Feature.REPLAY)
+    conn = db()
+    try:
+        ensure_schema(conn)
+        data = _load_replay_data(conn, session_id)
+    finally:
+        conn.close()
+
+    sess = data["session"]
+    lines = []
+    for st in data["steps"]:
+        record = {
+            "session_id": sess["session_id"],
+            "actor_id": sess["actor_id"],
+            "seq": st.get("seq"),
+            "ts": st.get("ts"),
+            "method": st.get("method"),
+            "path": st.get("path"),
+            "query": st.get("query") or {},
+            "headers": st.get("headers") or {},
+            "body": st.get("body"),
+            "response_status": st.get("response_status"),
+            "stage_before": st.get("stage_before"),
+            "stage_after": st.get("stage_after"),
+            "kind": st.get("kind"),
+            "points_delta": st.get("points_delta", 0),
+            "latency_ms": st.get("latency_ms"),
+            "trap_flags": st.get("trap_flags") or [],
+            "anomalies": st.get("anomalies") or [],
+            "geo": st.get("geo") or {},
+        }
+        lines.append(json.dumps(record, ensure_ascii=False, default=str))
+
+    short_id = sess["session_id"][:12]
+    return Response(
+        content="\n".join(lines),
+        media_type="application/x-ndjson",
+        headers={"Content-Disposition": f'attachment; filename="session_{short_id}.ndjson"'},
+    )
+
+
+@app.get("/api/replay/{session_id}/export/har")
+def replay_export_har(session_id: str):
+    _require_feature(licensing.Feature.REPLAY)
+    conn = db()
+    try:
+        ensure_schema(conn)
+        data = _load_replay_data(conn, session_id)
+    finally:
+        conn.close()
+
+    sess = data["session"]
+    entries = []
+    for st in data["steps"]:
+        headers_dict = st.get("headers") or {}
+        har_headers = [{"name": k, "value": str(v)} for k, v in headers_dict.items()]
+        query_dict = st.get("query") or {}
+        har_query = [{"name": k, "value": str(v)} for k, v in query_dict.items()]
+        body = st.get("body")
+        post_data = None
+        body_size = -1
+        if body is not None:
+            body_text = json.dumps(body, default=str) if isinstance(body, (dict, list)) else str(body)
+            post_data = {"mimeType": "application/json", "text": body_text}
+            body_size = len(body_text.encode("utf-8"))
+
+        entry: dict = {
+            "startedDateTime": st.get("ts", ""),
+            "time": st.get("latency_ms") or -1,
+            "request": {
+                "method": st.get("method", "GET"),
+                "url": f"https://honeypot{st.get('path', '/')}",
+                "httpVersion": "HTTP/1.1",
+                "headers": har_headers,
+                "queryString": har_query,
+                "cookies": [],
+                "headersSize": -1,
+                "bodySize": body_size,
+            },
+            "response": {
+                "status": st.get("response_status") or 0,
+                "statusText": "",
+                "httpVersion": "HTTP/1.1",
+                "headers": [],
+                "cookies": [],
+                "content": {"size": -1, "mimeType": "application/json"},
+                "redirectURL": "",
+                "headersSize": -1,
+                "bodySize": -1,
+            },
+            "cache": {},
+            "timings": {"send": 0, "wait": st.get("latency_ms") or -1, "receive": 0},
+            "_noctisapi": {
+                "kind": st.get("kind", ""),
+                "points_delta": st.get("points_delta", 0),
+                "stage_before": st.get("stage_before"),
+                "stage_after": st.get("stage_after"),
+                "actor_id": sess["actor_id"],
+                "anomalies": st.get("anomalies") or [],
+            },
+        }
+        if post_data:
+            entry["request"]["postData"] = post_data
+        entries.append(entry)
+
+    har = {
+        "log": {
+            "version": "1.2",
+            "creator": {"name": "NoctisAPI Session Replay", "version": "0.1.0"},
+            "comment": f"Session {sess['session_id']} — Actor {sess['actor_id']}",
+            "entries": entries,
+        }
+    }
+    short_id = sess["session_id"][:12]
+    return Response(
+        content=json.dumps(har, ensure_ascii=False, indent=2, default=str),
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="session_{short_id}.har"'},
+    )
 

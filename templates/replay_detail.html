@@ -1,0 +1,807 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+/* ── Layout ─────────────────────────────────────────────────── */
+.rp-wrap {
+  display:flex; flex-direction:column;
+  gap:0; min-height:calc(100vh - 62px);
+}
+/* ── Controls bar ───────────────────────────────────────────── */
+.rp-controls {
+  display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+  padding:10px 14px; background:var(--panel);
+  border-bottom:1px solid var(--stroke); position:sticky; top:62px; z-index:50;
+}
+.rp-ctrl-group { display:flex; align-items:center; gap:6px; }
+.rp-ctrl-sep { width:1px; height:22px; background:var(--stroke); margin:0 4px; }
+.rp-step-counter {
+  font-size:0.85rem; color:var(--muted); font-variant-numeric:tabular-nums;
+  min-width:60px; text-align:center;
+}
+.rp-speed-sel { padding:4px 8px; border-radius:6px; border:1px solid var(--stroke);
+  background:var(--panel2); color:var(--text); font-size:0.83rem; cursor:pointer; }
+.rp-btn-icon {
+  display:inline-flex; align-items:center; justify-content:center;
+  width:32px; height:32px; border-radius:8px; border:1px solid var(--stroke);
+  background:rgba(255,255,255,.04); color:var(--text); cursor:pointer;
+  font-size:1rem; transition:background .15s ease;
+}
+.rp-btn-icon:hover { background:rgba(255,255,255,.1); }
+.rp-btn-icon:disabled { opacity:.35; cursor:not-allowed; }
+.rp-btn-icon.active { background:rgba(255,201,64,.12); border-color:#ffc940; color:#ffc940; }
+/* ── Timeline rail ──────────────────────────────────────────── */
+.rp-timeline {
+  position:relative; padding:14px 14px 8px;
+  background:var(--panel); border-bottom:1px solid var(--stroke);
+  overflow:hidden;
+}
+.rp-timeline-track {
+  position:relative; height:28px;
+  background:rgba(255,255,255,.03);
+  border-radius:4px; margin:0 8px;
+}
+.rp-progress-fill {
+  position:absolute; left:0; top:0; bottom:0;
+  background:rgba(255,255,255,.04); border-radius:4px;
+  transition:width .25s ease; pointer-events:none;
+}
+.rp-cursor-line {
+  position:absolute; top:0; bottom:0; width:2px;
+  background:#e6e6e6; border-radius:1px;
+  transition:left .25s ease; pointer-events:none; z-index:5;
+}
+.rp-tick {
+  position:absolute; top:50%; transform:translate(-50%,-50%);
+  cursor:pointer; z-index:10;
+}
+.rp-tick-dot {
+  width:10px; height:10px; border-radius:50%;
+  border:2px solid transparent;
+  transition:transform .15s ease, border-color .15s ease;
+}
+.rp-tick:hover .rp-tick-dot { transform:scale(1.4); }
+.rp-tick.active .rp-tick-dot { transform:scale(1.6); border-color:#fff; }
+.rp-tick.neutral .rp-tick-dot { background:#9a9a9a; }
+.rp-tick.recon   .rp-tick-dot { background:#ffc940; }
+.rp-tick.warn    .rp-tick-dot { background:#f29020; }
+.rp-tick.danger  .rp-tick-dot { background:#f24040; }
+.rp-tick-tooltip {
+  position:absolute; bottom:20px; left:50%; transform:translateX(-50%);
+  background:rgba(0,0,0,.9); border:1px solid var(--stroke);
+  padding:4px 8px; border-radius:5px; white-space:nowrap;
+  font-size:0.72rem; color:var(--text); pointer-events:none;
+  opacity:0; transition:opacity .1s; z-index:20;
+}
+.rp-tick:hover .rp-tick-tooltip { opacity:1; }
+.rp-timeline-times {
+  display:flex; justify-content:space-between;
+  margin:4px 8px 0; font-size:0.7rem; color:var(--muted);
+}
+/* ── Body ───────────────────────────────────────────────────── */
+.rp-body {
+  display:grid; grid-template-columns:220px 1fr;
+  flex:1; overflow:hidden; min-height:0;
+}
+/* ── Sidebar ────────────────────────────────────────────────── */
+.rp-sidebar {
+  border-right:1px solid var(--stroke);
+  padding:14px; overflow-y:auto;
+  display:flex; flex-direction:column; gap:14px;
+  background:var(--panel);
+}
+.rp-sidebar h3 { font-size:0.72rem; text-transform:uppercase;
+  letter-spacing:.08em; color:var(--muted); margin:0 0 8px; }
+.sb-row {
+  display:flex; justify-content:space-between; align-items:baseline;
+  font-size:0.8rem; padding:3px 0;
+  border-bottom:1px solid rgba(255,255,255,.04);
+}
+.sb-label { color:var(--muted); }
+.sb-val { font-weight:600; text-align:right; max-width:120px;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.score-gauge {
+  height:4px; background:rgba(255,255,255,.08); border-radius:2px; margin:4px 0;
+}
+.score-gauge-fill {
+  height:100%; border-radius:2px;
+  background:linear-gradient(90deg,#ffc940,#f29020,#f24040);
+}
+/* ── Panels container ───────────────────────────────────────── */
+.rp-panels-wrap {
+  overflow-y:auto; padding:12px;
+  display:flex; flex-direction:column; gap:12px;
+}
+.rp-panels-grid {
+  display:grid; grid-template-columns:1fr 200px 1fr;
+  gap:10px; min-height:0;
+}
+.rp-panel {
+  background:var(--panel2); border:1px solid var(--stroke);
+  border-radius:8px; overflow:hidden; display:flex; flex-direction:column;
+  min-height:320px;
+}
+.rp-panel-head {
+  display:flex; align-items:center; justify-content:space-between;
+  padding:8px 12px; border-bottom:1px solid var(--stroke);
+  background:rgba(255,255,255,.02); flex-shrink:0;
+}
+.rp-panel-title { font-size:0.72rem; text-transform:uppercase;
+  letter-spacing:.08em; color:var(--muted); font-weight:700; }
+.rp-panel-body { padding:10px 12px; overflow-y:auto; flex:1; font-size:0.82rem; }
+/* ── Request panel ──────────────────────────────────────────── */
+.rp-method-path {
+  display:flex; align-items:baseline; gap:8px; flex-wrap:wrap;
+  padding:8px 12px; border-bottom:1px solid var(--stroke);
+  background:rgba(255,255,255,.015); flex-shrink:0;
+}
+.rp-method {
+  font-weight:700; font-size:0.9rem; font-family:monospace; flex-shrink:0;
+}
+.method-GET    { color:#7ee2b8; }
+.method-POST   { color:#79c0ff; }
+.method-PUT    { color:#f0883e; }
+.method-DELETE { color:#f24040; }
+.method-PATCH  { color:#d2a8ff; }
+.method-HEAD   { color:#a8d1ff; }
+.method-OPTIONS{ color:#9a9a9a; }
+.rp-path { color:var(--text); font-family:monospace; font-size:0.85rem;
+  word-break:break-all; }
+.rp-section-label {
+  font-size:0.68rem; text-transform:uppercase; letter-spacing:.08em;
+  color:var(--muted); margin:10px 0 4px; font-weight:600;
+}
+.rp-headers-block { font-family:monospace; font-size:0.78rem; }
+.hdr-line {
+  display:flex; gap:0; padding:1px 0;
+  border-bottom:1px solid rgba(255,255,255,.03);
+}
+.hdr-key { color:#79c0ff; flex-shrink:0; }
+.hdr-sep { color:var(--muted); margin:0 4px; }
+.hdr-val { color:var(--text); word-break:break-all; }
+.hdr-line.diff-added   { background:rgba(126,226,184,.06); }
+.hdr-line.diff-removed { background:rgba(242,64,64,.06); text-decoration:line-through; opacity:.6; }
+.hdr-line.diff-changed { background:rgba(255,201,64,.06); }
+.diff-indicator { width:14px; flex-shrink:0; color:var(--muted); font-size:0.75rem; }
+.diff-indicator.add { color:#7ee2b8; }
+.diff-indicator.rem { color:#f24040; }
+.diff-indicator.chg { color:#ffc940; }
+.rp-pre {
+  margin:0; padding:8px; background:rgba(255,255,255,.03);
+  border-radius:5px; font-family:monospace; font-size:0.78rem;
+  white-space:pre-wrap; word-break:break-all; color:var(--text);
+  max-height:220px; overflow-y:auto;
+}
+.rp-empty { color:var(--muted); font-size:0.8rem; font-style:italic; }
+.param-block { font-family:monospace; font-size:0.78rem; }
+.param-line { padding:1px 0; }
+.param-key { color:#d2a8ff; }
+.param-val { color:var(--text); }
+/* ── Decision panel ─────────────────────────────────────────── */
+.kind-display {
+  display:flex; flex-direction:column; gap:6px; padding:10px 12px;
+  border-bottom:1px solid var(--stroke); flex-shrink:0;
+}
+.kind-badge {
+  display:inline-block; padding:3px 10px; border-radius:4px;
+  font-size:0.78rem; font-family:monospace; font-weight:700;
+  letter-spacing:.03em;
+}
+.kind-neutral { background:rgba(154,154,154,.12); color:#9a9a9a; }
+.kind-recon   { background:rgba(255,201,64,.12);  color:#ffc940; }
+.kind-warn    { background:rgba(242,144,32,.12);  color:#f29020; }
+.kind-danger  { background:rgba(242,64,64,.14);   color:#f24040; }
+.decision-grid { padding:10px 12px; display:flex; flex-direction:column; gap:2px; }
+.dr-row { display:flex; justify-content:space-between; align-items:baseline;
+  padding:4px 0; border-bottom:1px solid rgba(255,255,255,.04);
+  font-size:0.8rem; gap:8px; }
+.dr-label { color:var(--muted); flex-shrink:0; }
+.dr-val { text-align:right; font-weight:600; word-break:break-all; }
+.dr-val.mono { font-family:monospace; font-size:0.78rem; font-weight:400; }
+.score-delta { font-family:monospace; }
+.score-delta.pos { color:#7ee2b8; }
+.score-delta.neg { color:#f24040; }
+.score-delta.zero{ color:var(--muted); }
+.stage-arrow strong { color:#79c0ff; }
+.tx-ok  { color:#7ee2b8; }
+.tx-err { color:#f24040; }
+/* ── Response panel ─────────────────────────────────────────── */
+.rp-status-bar {
+  display:flex; align-items:baseline; gap:8px;
+  padding:8px 12px; border-bottom:1px solid var(--stroke); flex-shrink:0;
+}
+.rp-status-code { font-size:1.3rem; font-weight:700; font-family:monospace; }
+.status-2xx { color:#7ee2b8; }
+.status-3xx { color:#79c0ff; }
+.status-4xx { color:#ffc940; }
+.status-5xx { color:#f24040; }
+.rp-status-text { color:var(--muted); font-size:0.83rem; }
+/* ── Anomaly badges ─────────────────────────────────────────── */
+.rp-anomaly-row {
+  display:flex; gap:6px; flex-wrap:wrap; align-items:center;
+  padding:0 12px 8px;
+}
+.rp-ab {
+  display:inline-flex; align-items:center; gap:4px;
+  padding:2px 8px; border-radius:99px; font-size:0.72rem; font-weight:600;
+  border:1px solid transparent;
+}
+.rp-ab.scanner_ua    { background:rgba(121,192,255,.1);  border-color:rgba(121,192,255,.3); color:#79c0ff; }
+.rp-ab.replay_bonus  { background:rgba(255,201,64,.1);   border-color:rgba(255,201,64,.3);  color:#ffc940; }
+.rp-ab.stage_jump    { background:rgba(242,64,64,.1);    border-color:rgba(242,64,64,.3);   color:#f24040; }
+.rp-ab.high_value    { background:rgba(242,64,64,.14);   border-color:rgba(242,64,64,.4);   color:#f24040; }
+.rp-ab.error_streak  { background:rgba(242,144,32,.1);   border-color:rgba(242,144,32,.3);  color:#f29020; }
+.rp-ab.invalid_token { background:rgba(210,168,255,.1);  border-color:rgba(210,168,255,.3); color:#d2a8ff; }
+.rp-ab.fast_request  { background:rgba(255,201,64,.1);   border-color:rgba(255,201,64,.3);  color:#ffc940; }
+/* ── Export bar ─────────────────────────────────────────────── */
+.rp-export-bar {
+  display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+  padding:10px 14px; border-top:1px solid var(--stroke);
+  background:var(--panel); flex-shrink:0;
+}
+/* ── Diff path ──────────────────────────────────────────────── */
+.diff-path-old { text-decoration:line-through; color:#f24040; opacity:.7; }
+.diff-path-new { color:#7ee2b8; }
+</style>
+
+{% set cases_enabled = "cases" in license_features %}
+
+<a class="back" href="/dashboard/replay">&larr; Back to replay list</a>
+
+<div class="page-head" style="margin-bottom:0;">
+  <div>
+    <h1 style="font-size:1.1rem;">
+      Session <span class="mono" style="color:var(--muted);font-size:0.9rem;">{{ session.session_id }}</span>
+    </h1>
+    <div class="sub">
+      Actor
+      <a class="link mono" href="/actor/{{ session.actor_id }}">{{ session.actor_id[:16] }}…</a>
+      &middot;
+      {% if actor_geo.flag %}{{ actor_geo.flag }}{% endif %}
+      {{ actor_geo.country_name or actor_geo.country_iso2 or '' }}
+      {% if actor_ip %}&middot; <span class="mono">{{ actor_ip }}</span>{% endif %}
+    </div>
+  </div>
+  <div class="kpis">
+    <div class="kpi">
+      <div class="kpi-label">Duration</div>
+      <div class="kpi-value">
+        {% if session.duration_s is not none %}
+          {% set d = session.duration_s %}
+          {% if d >= 3600 %}{{ d // 3600 }}h {{ (d % 3600) // 60 }}m
+          {% elif d >= 60 %}{{ d // 60 }}m {{ d % 60 }}s
+          {% else %}{{ d }}s
+          {% endif %}
+        {% else %}—{% endif %}
+      </div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Steps</div>
+      <div class="kpi-value">{{ steps|length }}</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Max stage</div>
+      <div class="kpi-value">S{{ session.stage_max or 0 }}</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Score</div>
+      <div class="kpi-value">+{{ total_points }}</div>
+    </div>
+  </div>
+</div>
+
+<div class="rp-wrap">
+
+  <!-- ── Controls ──────────────────────────────────────────────── -->
+  <div class="rp-controls">
+    <div class="rp-ctrl-group">
+      <button class="rp-btn-icon" id="rp-prev" title="Previous step (←)" onclick="RC.prev()">&#8592;</button>
+      <button class="rp-btn-icon" id="rp-play" title="Play / Pause (Space)" onclick="RC.togglePlay()">&#9654;</button>
+      <button class="rp-btn-icon" id="rp-next" title="Next step (→)" onclick="RC.next()">&#8594;</button>
+    </div>
+    <div class="rp-step-counter" id="rp-counter">1 / {{ steps|length }}</div>
+    <div class="rp-ctrl-sep"></div>
+    <div class="rp-ctrl-group">
+      <span style="font-size:0.8rem;color:var(--muted);">Speed</span>
+      <select class="rp-speed-sel" id="rp-speed" onchange="RC.setSpeed(this.value)">
+        <option value="0.5">0.5×</option>
+        <option value="1" selected>1×</option>
+        <option value="2">2×</option>
+        <option value="5">5×</option>
+        <option value="10">10×</option>
+      </select>
+    </div>
+    <div class="rp-ctrl-sep"></div>
+    <button class="rp-btn-icon" id="rp-diff" title="Toggle diff mode (D)"
+            onclick="RC.toggleDiff()" style="font-size:0.75rem;width:auto;padding:0 10px;">DIFF</button>
+    <div class="rp-ctrl-sep"></div>
+    <div class="rp-ctrl-group" style="margin-left:auto;">
+      <a class="btn btn-ghost btn-small" id="rp-export-ndjson"
+         href="/api/replay/{{ session.session_id }}/export/ndjson" download>NDJSON</a>
+      <a class="btn btn-ghost btn-small" id="rp-export-har"
+         href="/api/replay/{{ session.session_id }}/export/har" download>HAR</a>
+      {% if cases_enabled and cases %}
+      <button class="btn btn-ghost btn-small" onclick="addCurrentStepToCase()">Add to case</button>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- ── Timeline rail ─────────────────────────────────────────── -->
+  <div class="rp-timeline">
+    <div class="rp-timeline-track" id="rp-track">
+      <div class="rp-progress-fill" id="rp-progress"></div>
+      <div class="rp-cursor-line" id="rp-cursor"></div>
+      <!-- Ticks injected by JS -->
+    </div>
+    <div class="rp-timeline-times" id="rp-times"></div>
+  </div>
+
+  <!-- ── Body ──────────────────────────────────────────────────── -->
+  <div class="rp-body">
+
+    <!-- Sidebar -->
+    <div class="rp-sidebar">
+      <div>
+        <h3>Actor</h3>
+        <div class="sb-row"><span class="sb-label">Score</span>
+          <span class="sb-val">{{ actor_score }}</span></div>
+        <div class="score-gauge">
+          <div class="score-gauge-fill" style="width:{{ [actor_score, 200]|min / 200 * 100 }}%;"></div>
+        </div>
+        {% if actor_geo.flag or actor_geo.country_name %}
+        <div class="sb-row"><span class="sb-label">Country</span>
+          <span class="sb-val">{{ actor_geo.flag or '' }} {{ actor_geo.country_name or actor_geo.country_iso2 or '' }}</span></div>
+        {% endif %}
+        {% if actor_ua %}
+        <div class="sb-row" style="flex-direction:column;align-items:flex-start;">
+          <span class="sb-label" style="margin-bottom:3px;">User-Agent</span>
+          <span class="mono" style="font-size:0.72rem;color:var(--muted);word-break:break-all;line-height:1.4;">{{ actor_ua[:120] }}{% if actor_ua|length > 120 %}…{% endif %}</span>
+        </div>
+        {% endif %}
+        <div class="sb-row"><span class="sb-label">Errors total</span>
+          <span class="sb-val">{{ actor_err_total }}</span></div>
+      </div>
+      <div>
+        <h3>Active step</h3>
+        <div id="rp-sidebar-step">
+          <div class="sb-row"><span class="sb-label">Step</span><span class="sb-val" id="sb-seq">—</span></div>
+          <div class="sb-row"><span class="sb-label">Stage</span><span class="sb-val" id="sb-stage">—</span></div>
+          <div class="sb-row"><span class="sb-label">Points</span><span class="sb-val" id="sb-pts">—</span></div>
+          <div class="sb-row"><span class="sb-label">Kind</span><span class="sb-val mono" id="sb-kind">—</span></div>
+          <div class="sb-row"><span class="sb-label">Latency</span><span class="sb-val mono" id="sb-lat">—</span></div>
+        </div>
+      </div>
+      {% if cases_enabled and cases %}
+      <div>
+        <h3>Add to case</h3>
+        <select id="caseSelect" class="input" style="width:100%;margin-bottom:6px;font-size:0.8rem;">
+          <option value="">Select case…</option>
+          {% for c in cases %}
+          <option value="{{ c.id }}">#{{ c.id }} {{ c.title }}</option>
+          {% endfor %}
+        </select>
+        <input type="text" id="caseNote" class="input"
+               style="width:100%;font-size:0.8rem;margin-bottom:6px;"
+               placeholder="Note (optional)" autocomplete="off">
+        <button class="btn btn-primary" style="width:100%;font-size:0.8rem;"
+                onclick="addCurrentStepToCase()">Add step to case</button>
+        <button class="btn btn-ghost" style="width:100%;font-size:0.8rem;margin-top:4px;"
+                onclick="addSessionToCase()">Add session to case</button>
+      </div>
+      {% endif %}
+    </div>
+
+    <!-- Panels -->
+    <div class="rp-panels-wrap">
+      <div class="rp-panels-grid">
+
+        <!-- Request panel -->
+        <div class="rp-panel" id="panel-request">
+          <div class="rp-panel-head">
+            <span class="rp-panel-title">Request</span>
+            <div class="rp-anomaly-row" id="rp-anomalies" style="padding:0;"></div>
+          </div>
+          <div id="rp-method-path" class="rp-method-path"></div>
+          <div class="rp-panel-body" id="rp-req-body"></div>
+        </div>
+
+        <!-- Decision panel -->
+        <div class="rp-panel" id="panel-decision">
+          <div class="rp-panel-head">
+            <span class="rp-panel-title">Decision</span>
+          </div>
+          <div class="kind-display" id="rp-kind-display"></div>
+          <div class="decision-grid" id="rp-decision-grid"></div>
+        </div>
+
+        <!-- Response panel -->
+        <div class="rp-panel" id="panel-response">
+          <div class="rp-panel-head">
+            <span class="rp-panel-title">Response</span>
+          </div>
+          <div class="rp-status-bar" id="rp-status-bar"></div>
+          <div class="rp-panel-body" id="rp-resp-body"></div>
+        </div>
+
+      </div>
+    </div>
+  </div><!-- end rp-body -->
+
+</div><!-- end rp-wrap -->
+
+{% if cases_enabled %}
+<div id="rp-toast" class="toast" role="status" aria-live="polite"></div>
+{% endif %}
+
+<script>
+/* ─── Data ───────────────────────────────────────────────────── */
+const STEPS = {{ steps_json | safe }};
+const SESSION = {{ session_json | safe }};
+const SESSION_ID = SESSION.session_id;
+
+/* ─── Helpers ────────────────────────────────────────────────── */
+function _esc(s){
+  return String(s==null?'':s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function _statusText(c){
+  const m={200:'OK',201:'Created',204:'No Content',206:'Partial Content',
+    301:'Moved Permanently',302:'Found',304:'Not Modified',
+    400:'Bad Request',401:'Unauthorized',403:'Forbidden',404:'Not Found',
+    405:'Method Not Allowed',408:'Request Timeout',409:'Conflict',
+    422:'Unprocessable Entity',429:'Too Many Requests',
+    500:'Internal Server Error',502:'Bad Gateway',503:'Service Unavailable',504:'Gateway Timeout'};
+  return m[c]||'';
+}
+function _statusCls(c){
+  if(!c) return '';
+  if(c>=500) return 'status-5xx';
+  if(c>=400) return 'status-4xx';
+  if(c>=300) return 'status-3xx';
+  return 'status-2xx';
+}
+function _methodCls(m){ return 'method-'+(m||'GET').toUpperCase(); }
+function _fmtMs(ms){ return ms!=null ? ms+'ms' : '—'; }
+function _fmtOffset(ms){
+  if(ms==null) return '';
+  const s=Math.floor(ms/1000), m=Math.floor(s/60), sec=s%60;
+  return m ? m+'m '+String(sec).padStart(2,'0')+'s' : s+'s';
+}
+const ANOMALY_LABEL = {
+  scanner_ua:'🔍 Scanner', replay_bonus:'⚡ Replay',
+  stage_jump:'🚨 Stage jump', high_value:'💀 High value',
+  error_streak:'🔴 Error streak', invalid_token:'🔑 Invalid token',
+  fast_request:'⚡ Automated',
+};
+const SENSITIVE_HDRS = new Set(['authorization','x-api-key','cookie','set-cookie','x-auth-token','x-access-token','proxy-authorization']);
+function _redactHeader(key, val){
+  if(SENSITIVE_HDRS.has(key.toLowerCase())){
+    const s=String(val||'');
+    if(s.length>8) return s.slice(0,8)+'••••••••';
+  }
+  return String(val==null?'':val);
+}
+
+/* ─── Controller ─────────────────────────────────────────────── */
+const RC = {
+  idx: 0,
+  playing: false,
+  speed: 1,
+  diffMode: false,
+  _timer: null,
+
+  init(){
+    this._buildTimeline();
+    this.goto(0);
+    this._bindKeys();
+  },
+
+  goto(i){
+    if(i<0||i>=STEPS.length) return;
+    this.idx=i;
+    const step=STEPS[i];
+    const prev=i>0?STEPS[i-1]:null;
+    this._renderControls(i);
+    this._updateTimeline(i);
+    this._renderRequest(step, prev);
+    this._renderDecision(step);
+    this._renderResponse(step);
+    this._renderSidebar(step);
+  },
+
+  prev(){ this.goto(this.idx-1); },
+  next(){ this.goto(this.idx+1); },
+
+  togglePlay(){
+    if(this.playing){ this._pause(); } else { this._play(); }
+  },
+  _play(){
+    if(this.idx>=STEPS.length-1){ this.goto(0); }
+    this.playing=true;
+    document.getElementById('rp-play').innerHTML='&#9646;&#9646;';
+    this._scheduleNext();
+  },
+  _pause(){
+    this.playing=false;
+    document.getElementById('rp-play').innerHTML='&#9654;';
+    if(this._timer){ clearTimeout(this._timer); this._timer=null; }
+  },
+  _scheduleNext(){
+    if(!this.playing||this.idx>=STEPS.length-1){ this._pause(); return; }
+    const curr=STEPS[this.idx], nxt=STEPS[this.idx+1];
+    let delay=800;
+    if(curr.ts_offset_ms!=null && nxt.ts_offset_ms!=null){
+      const gap=nxt.ts_offset_ms-curr.ts_offset_ms;
+      delay=Math.min(Math.max(gap/this.speed,150),5000/this.speed);
+    }
+    this._timer=setTimeout(()=>{ this.goto(this.idx+1); this._scheduleNext(); }, delay);
+  },
+  setSpeed(v){ this.speed=parseFloat(v)||1; if(this.playing){ clearTimeout(this._timer); this._scheduleNext(); } },
+
+  toggleDiff(){
+    this.diffMode=!this.diffMode;
+    const btn=document.getElementById('rp-diff');
+    btn.classList.toggle('active',this.diffMode);
+    this.goto(this.idx);
+  },
+
+  _buildTimeline(){
+    const track=document.getElementById('rp-track');
+    const times=document.getElementById('rp-times');
+    const dur=SESSION.duration_s||0;
+
+    STEPS.forEach((st,i)=>{
+      const el=document.createElement('div');
+      el.className='rp-tick '+(st.kind_color||'neutral');
+      el.style.left=(st.ts_pct||0)+'%';
+      el.title='';
+      el.dataset.idx=i;
+      const dot=document.createElement('div');
+      dot.className='rp-tick-dot';
+      const tip=document.createElement('div');
+      tip.className='rp-tick-tooltip';
+      tip.textContent='#'+st.seq+' '+st.method+' '+st.path.slice(0,40)+(st.path.length>40?'…':'');
+      el.appendChild(dot);
+      el.appendChild(tip);
+      el.addEventListener('click',()=>RC.goto(i));
+      track.appendChild(el);
+    });
+
+    // Time labels
+    const labels=['0:00'];
+    if(dur>0){
+      [0.25,0.5,0.75,1].forEach(f=>{
+        const s=Math.round(dur*f);
+        const m=Math.floor(s/60), sec=s%60;
+        labels.push((m?m+'m ':'')+(m?String(sec).padStart(2,'0'):sec)+'s');
+      });
+    }
+    labels.forEach(l=>{ const sp=document.createElement('span'); sp.textContent=l; times.appendChild(sp); });
+  },
+
+  _renderControls(i){
+    document.getElementById('rp-counter').textContent=(i+1)+' / '+STEPS.length;
+    document.getElementById('rp-prev').disabled=i===0;
+    document.getElementById('rp-next').disabled=i===STEPS.length-1;
+  },
+
+  _updateTimeline(i){
+    document.querySelectorAll('#rp-track .rp-tick').forEach((el,j)=>{
+      el.classList.toggle('active',j===i);
+    });
+    const pct=STEPS[i].ts_pct||0;
+    document.getElementById('rp-progress').style.width=pct+'%';
+    document.getElementById('rp-cursor').style.left=pct+'%';
+  },
+
+  _renderRequest(step, prev){
+    // Method + path bar
+    let pathHtml;
+    const prevPath=prev?prev.path:'';
+    if(this.diffMode && prev && prevPath!==step.path){
+      pathHtml=`<span class="diff-path-old">${_esc(prevPath)}</span>`+
+               ` <span style="color:var(--muted);">→</span> `+
+               `<span class="diff-path-new">${_esc(step.path)}</span>`;
+    } else {
+      pathHtml=`<span class="rp-path">${_esc(step.path)}</span>`;
+    }
+    document.getElementById('rp-method-path').innerHTML=
+      `<span class="rp-method ${_methodCls(step.method)}">${_esc(step.method)}</span>${pathHtml}`;
+
+    // Anomaly badges
+    const anomHtml=(step.anomalies||[]).map(a=>
+      `<span class="rp-ab ${_esc(a)}">${ANOMALY_LABEL[a]||a}</span>`
+    ).join('');
+    document.getElementById('rp-anomalies').innerHTML=anomHtml;
+
+    // Request body (query + headers + body)
+    let html='';
+
+    const q=step.query||{};
+    if(Object.keys(q).length){
+      html+=`<div class="rp-section-label">Query params</div><div class="param-block">`;
+      for(const[k,v] of Object.entries(q)){
+        html+=`<div class="param-line"><span class="param-key">${_esc(k)}</span>`+
+              `<span style="color:var(--muted);">=</span><span class="param-val">${_esc(String(v))}</span></div>`;
+      }
+      html+='</div>';
+    }
+
+    html+=`<div class="rp-section-label">Headers</div><div class="rp-headers-block">`;
+    const hdrs=step.headers||{};
+    const prevHdrs=(prev&&prev.headers)||{};
+    const allKeys=new Set([...Object.keys(hdrs),...(this.diffMode?Object.keys(prevHdrs):[])]);
+    for(const key of allKeys){
+      const curr=hdrs[key]; const old=prevHdrs[key];
+      let cls='hdr-line'; let indCls=''; let ind='';
+      if(this.diffMode){
+        if(curr===undefined){ cls+=' diff-removed'; ind='−'; indCls='rem'; }
+        else if(old===undefined){ cls+=' diff-added'; ind='+'; indCls='add'; }
+        else if(String(curr)!==String(old)){ cls+=' diff-changed'; ind='~'; indCls='chg'; }
+      }
+      const val=curr!==undefined?_redactHeader(key,curr):_redactHeader(key,old);
+      html+=`<div class="${cls}"><span class="diff-indicator ${indCls}">${ind}</span>`+
+            `<span class="hdr-key">${_esc(key)}</span><span class="hdr-sep">:</span>`+
+            `<span class="hdr-val">${_esc(val)}</span></div>`;
+    }
+    html+='</div>';
+
+    html+=`<div class="rp-section-label">Body</div>`;
+    if(step.body!=null){
+      const bodyStr=typeof step.body==='string'?step.body:JSON.stringify(step.body,null,2);
+      html+=`<pre class="rp-pre">${_esc(bodyStr)}</pre>`;
+    } else {
+      html+=`<div class="rp-empty">(empty body)</div>`;
+    }
+
+    document.getElementById('rp-req-body').innerHTML=html;
+  },
+
+  _renderDecision(step){
+    const kc=step.kind_color||'neutral';
+    const replayBadge=step.replay_multiplier>=1.5
+      ?`<span class="rp-ab replay_bonus" style="font-size:0.72rem;">⚡ ×${step.replay_multiplier} replay</span>`:'';
+    document.getElementById('rp-kind-display').innerHTML=
+      `<span class="kind-badge kind-${kc}">${_esc(step.kind)}</span>${replayBadge}`+
+      (step.trap_flags&&step.trap_flags.length
+        ? `<div style="display:flex;gap:4px;flex-wrap:wrap;">${step.trap_flags.map(f=>`<span class="badge">${_esc(f)}</span>`).join('')}</div>`
+        : '');
+
+    const sb=step.stage_before||0, sa=step.stage_after||sb;
+    const stageHtml=sb!==sa
+      ?`S${sb} <span style="color:var(--muted);">→</span> <strong class="stage-arrow">S${sa}</strong>`
+      :`S${sa}`;
+    const pts=step.points_delta||0;
+    const ptsCls=pts>0?'pos':pts<0?'neg':'zero';
+
+    let rows=`
+      <div class="dr-row"><span class="dr-label">Points</span>
+        <span class="dr-val score-delta ${ptsCls}">${pts>0?'+':''}${pts}</span></div>
+      <div class="dr-row"><span class="dr-label">Stage</span>
+        <span class="dr-val">${stageHtml}</span></div>`;
+
+    if(step.latency_ms!=null){
+      rows+=`<div class="dr-row"><span class="dr-label">Latency</span>
+        <span class="dr-val mono">${step.latency_ms}ms</span></div>`;
+    }
+    if(step.token){
+      const tv=step.token_valid;
+      const tvHtml=tv===false?'<span class="tx-err">✗ invalid</span>':tv?'<span class="tx-ok">✓ valid</span>':'';
+      rows+=`<div class="dr-row"><span class="dr-label">Token</span>
+        <span class="dr-val mono" style="font-size:0.72rem;">${_esc(step.token.slice(0,32))}${step.token.length>32?'…':''} ${tvHtml}</span></div>`;
+    }
+    if(step.err_consecutive>=3){
+      rows+=`<div class="dr-row"><span class="dr-label">Consec. errors</span>
+        <span class="dr-val" style="color:#f29020;">${step.err_consecutive}</span></div>`;
+    }
+    const mod=step.modular||{};
+    if(mod.match_type){
+      rows+=`<div class="dr-row"><span class="dr-label">Match</span>
+        <span class="dr-val mono" style="font-size:0.72rem;">${_esc(mod.match_type)}</span></div>`;
+    }
+    if(mod.rule_hits>0){
+      rows+=`<div class="dr-row"><span class="dr-label">Rules hit</span>
+        <span class="dr-val">${mod.rule_hits}</span></div>`;
+    }
+    if(mod.mutation_policy&&mod.mutation_policy!=='none'){
+      rows+=`<div class="dr-row"><span class="dr-label">Mutation</span>
+        <span class="dr-val">${_esc(mod.mutation_policy)} (${mod.mutation_intensity})</span></div>`;
+    }
+
+    document.getElementById('rp-decision-grid').innerHTML=rows;
+  },
+
+  _renderResponse(step){
+    const st=step.response_status;
+    const cls=_statusCls(st);
+    document.getElementById('rp-status-bar').innerHTML=
+      `<span class="rp-status-code ${cls}">${st||'—'}</span>`+
+      `<span class="rp-status-text">${_statusText(st)}</span>`;
+
+    let html='';
+    if(step.response_body!=null){
+      const s=typeof step.response_body==='string'?step.response_body:JSON.stringify(step.response_body,null,2);
+      html=`<pre class="rp-pre">${_esc(s)}</pre>`;
+    } else {
+      html=`<div class="rp-empty">(response body not captured)</div>`;
+    }
+    document.getElementById('rp-resp-body').innerHTML=
+      `<div class="rp-section-label">Body</div>${html}`;
+  },
+
+  _renderSidebar(step){
+    const sa=step.stage_after!=null?step.stage_after:(step.stage_before||0);
+    const pts=step.points_delta||0;
+    document.getElementById('sb-seq').textContent='#'+step.seq;
+    document.getElementById('sb-stage').textContent='S'+sa;
+    document.getElementById('sb-pts').textContent=(pts>0?'+':'')+pts;
+    document.getElementById('sb-kind').textContent=step.kind||'—';
+    document.getElementById('sb-lat').textContent=_fmtMs(step.latency_ms);
+  },
+
+  _bindKeys(){
+    document.addEventListener('keydown',(e)=>{
+      if(e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA'||e.target.tagName==='SELECT') return;
+      if(e.key==='ArrowLeft'||e.key==='h'){ e.preventDefault(); this.prev(); }
+      else if(e.key==='ArrowRight'||e.key==='l'){ e.preventDefault(); this.next(); }
+      else if(e.key===' '){ e.preventDefault(); this.togglePlay(); }
+      else if(e.key==='d'){ this.toggleDiff(); }
+    });
+  },
+};
+
+RC.init();
+
+/* ─── Cases integration ─────────────────────────────────────── */
+{% if cases_enabled %}
+const LAST_CASE_KEY='hp_last_replay_case';
+const toastEl=document.getElementById('rp-toast');
+
+function _showToast(msg,type='info'){
+  if(!toastEl) return;
+  toastEl.textContent=msg;
+  toastEl.dataset.type=type;
+  toastEl.classList.add('is-visible');
+  setTimeout(()=>toastEl.classList.remove('is-visible'),3000);
+}
+function _caseId(){
+  const s=document.getElementById('caseSelect');
+  return s?s.value:'';
+}
+function _caseNote(){
+  const n=document.getElementById('caseNote');
+  return n?(n.value.trim()):'';
+}
+async function _submitEvidence(caseId,refType,refId,label){
+  try{
+    const p=new URLSearchParams({ref_type:refType,ref_id:refId});
+    const note=_caseNote();
+    if(note) p.append('note',note);
+    const res=await fetch(`/dashboard/cases/${caseId}/evidence?${p}`,{method:'POST'});
+    if(res.ok){ _showToast(`${label} added to case #${caseId}`,'success'); return true; }
+    else { _showToast('Error: '+await res.text(),'error'); return false; }
+  }catch(e){ _showToast('Error: '+e.message,'error'); return false; }
+}
+async function addCurrentStepToCase(){
+  const caseId=_caseId();
+  if(!caseId){ _showToast('Select a case first','error'); return; }
+  const step=STEPS[RC.idx];
+  if(!step){ return; }
+  await _submitEvidence(caseId,'step',step.id,'Step #'+step.seq);
+  try{ localStorage.setItem(LAST_CASE_KEY,caseId); }catch(e){}
+}
+async function addSessionToCase(){
+  const caseId=_caseId();
+  if(!caseId){ _showToast('Select a case first','error'); return; }
+  await _submitEvidence(caseId,'session',SESSION_ID,'Session');
+  try{ localStorage.setItem(LAST_CASE_KEY,caseId); }catch(e){}
+}
+// Restore last used case
+try{
+  const last=localStorage.getItem(LAST_CASE_KEY);
+  const sel=document.getElementById('caseSelect');
+  if(last&&sel) sel.value=last;
+}catch(e){}
+{% endif %}
+</script>
+{% endblock %}

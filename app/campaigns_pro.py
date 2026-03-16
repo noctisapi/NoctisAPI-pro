@@ -1,17 +1,13 @@
 from __future__ import annotations
 
-import base64
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import time
 from datetime import datetime, timezone
 from typing import Any
-
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import padding
-from cryptography.hazmat.primitives.serialization import load_pem_public_key
 
 
 PRO_STATE_TABLE = "campaign_pro_state"
@@ -19,10 +15,58 @@ PRO_STATUS_VERIFIED = "verified"
 PRO_STATUS_PENDING = "pending"
 PRO_STATUS_UNVERIFIED = "unverified"
 
+# ---------------------------------------------------------------------------
+# Behavior patterns: maps pattern name → set of event kinds that signal it.
+# Higher-severity patterns are listed first for priority resolution.
+# ---------------------------------------------------------------------------
+BEHAVIOR_PATTERNS: dict[str, frozenset[str]] = {
+    "infrastructure_probing": frozenset({
+        "infra_vault", "root_console", "internal_config", "admin_secrets",
+    }),
+    "data_exfiltration": frozenset({
+        "backup_download", "backup_list", "cloud_metadata",
+    }),
+    "key_theft": frozenset({
+        "keys_issued", "token_issued",
+    }),
+    "credential_harvesting": frozenset({
+        "auth_login", "auth_mfa", "unknown_token", "token_used", "auth_token_request",
+    }),
+    "reconnaissance": frozenset({
+        "probe", "recon_docs", "recon_openapi", "recon_swagger",
+        "recon_redoc", "recon_env", "recon_config", "recon_security",
+    }),
+}
+
+# Ordered from highest to lowest severity for tie-breaking
+_BEHAVIOR_SEVERITY_ORDER = [
+    "infrastructure_probing", "data_exfiltration", "key_theft",
+    "credential_harvesting", "reconnaissance",
+]
+
+# Paths associated with recon/admin targets (for fallback classifier)
+_RECON_PATH_FRAGMENTS = frozenset({
+    "/docs", "/openapi", "/.env", "/config", "/.well-known",
+    "/swagger", "/redoc", "/api-docs",
+})
+_ADMIN_PATH_FRAGMENTS = frozenset({
+    "/admin", "/internal", "/root", "/backup", "/infra",
+    "/cloud", "/vault", "/secret",
+})
+
+# UA version / build noise to strip before fingerprinting
+_UA_VERSION_RE = re.compile(r"/[\d][.\d]*")
+_UA_PAREN_RE = re.compile(r"\([^)]*\)")
+_UA_WHITESPACE_RE = re.compile(r"\s+")
+
 
 class CampaignProError(RuntimeError):
     pass
 
+
+# ---------------------------------------------------------------------------
+# Env helpers
+# ---------------------------------------------------------------------------
 
 def _env_int(name: str, default: int, min_value: int | None = None, max_value: int | None = None) -> int:
     raw = os.getenv(name)
@@ -60,41 +104,137 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def _decode_b64url(s: str) -> bytes:
-    raw = str(s or "").strip()
-    if not raw:
-        return b""
-    pad = "=" * ((4 - (len(raw) % 4)) % 4)
-    return base64.urlsafe_b64decode((raw + pad).encode("ascii"))
+# ---------------------------------------------------------------------------
+# Signal extraction helpers
+# ---------------------------------------------------------------------------
+
+def normalize_ua_fingerprint(ua: str) -> str:
+    """Return a stable, version-stripped fingerprint for a User-Agent string.
+
+    Strips version numbers (``/1.2.3``), parenthesised build strings, and
+    normalises whitespace.  If the result would exceed 120 chars it is replaced
+    with its SHA-256 prefix so the fingerprint stays indexable.
+    """
+    if not ua:
+        return ""
+    cleaned = _UA_VERSION_RE.sub("", ua)
+    cleaned = _UA_PAREN_RE.sub("", cleaned)
+    cleaned = _UA_WHITESPACE_RE.sub(" ", cleaned).strip().lower()
+    if not cleaned:
+        return ""
+    if len(cleaned) > 120:
+        return hashlib.sha256(cleaned.encode("utf-8", errors="ignore")).hexdigest()[:24]
+    return cleaned
 
 
-def _verify_jws_rs256_compact(jws_compact: str, public_key_pem: bytes) -> dict[str, Any]:
-    parts = (jws_compact or "").strip().split(".")
-    if len(parts) != 3:
-        raise ValueError("invalid_jws_format")
+def extract_token_prefix(token: str) -> str:
+    """Return a stable 8-char hex prefix-hash for a bearer/API token.
 
-    header_raw = _decode_b64url(parts[0])
-    payload_raw = _decode_b64url(parts[1])
-    signature = _decode_b64url(parts[2])
-    try:
-        header = json.loads(header_raw.decode("utf-8", errors="strict"))
-    except Exception:
-        raise ValueError("invalid_jws_header")
-    if not isinstance(header, dict) or str(header.get("alg") or "") != "RS256":
-        raise ValueError("invalid_jws_alg")
+    Strips common scheme prefixes (``Bearer``, ``Token``) before hashing, so
+    that the same credential encoded differently still maps to the same key.
+    Returns empty string for blank or very short tokens.
+    """
+    if not token:
+        return ""
+    t = token.strip()
+    for pfx in ("bearer ", "token ", "basic "):
+        if t.lower().startswith(pfx):
+            t = t[len(pfx):]
+            break
+    t = t.strip()
+    if len(t) < 4:
+        return ""
+    return hashlib.sha256(t[:128].encode("utf-8", errors="ignore")).hexdigest()[:8]
 
-    signing_input = (parts[0] + "." + parts[1]).encode("ascii")
-    pub = load_pem_public_key(public_key_pem)
-    pub.verify(signature, signing_input, padding.PKCS1v15(), hashes.SHA256())
 
-    try:
-        payload = json.loads(payload_raw.decode("utf-8", errors="strict"))
-    except Exception:
-        raise ValueError("invalid_jws_payload")
-    if not isinstance(payload, dict):
-        raise ValueError("invalid_jws_payload")
-    return payload
+def header_fingerprint(headers: dict[str, Any]) -> str:
+    """Return a 12-char hex fingerprint for a set of HTTP headers.
 
+    Only stable, non-session-specific headers are considered (Accept,
+    Accept-Language, Accept-Encoding, Connection, Accept-Charset).  This lets
+    us detect actors using the same HTTP client library across different IPs.
+    """
+    keys = [
+        "accept", "accept-language", "accept-encoding",
+        "accept-charset", "connection",
+    ]
+    parts = []
+    for k in keys:
+        v = headers.get(k) or headers.get(k.title()) or headers.get(k.upper()) or ""
+        parts.append(f"{k}={str(v)}")
+    sig = "|".join(parts)
+    if not sig.replace("|", "").replace("=", "").strip():
+        return ""
+    return hashlib.sha256(sig.encode("utf-8", errors="ignore")).hexdigest()[:12]
+
+
+def ip_subnet(ip: str) -> str:
+    """Return the /16 subnet for an IPv4 address (first two octets).
+
+    Returns empty string for IPv6 or invalid addresses.
+    """
+    if not ip or ":" in ip:
+        return ""
+    parts = ip.split(".")
+    if len(parts) >= 2:
+        try:
+            int(parts[0]); int(parts[1])
+            return f"{parts[0]}.{parts[1]}"
+        except ValueError:
+            pass
+    return ""
+
+
+# ---------------------------------------------------------------------------
+# Behavior pattern classification
+# ---------------------------------------------------------------------------
+
+def classify_behavior_pattern(
+    techniques: list[str],
+    endpoints: list[str],
+    feature_set: set[str],
+) -> str:
+    """Classify a campaign's dominant attack behaviour.
+
+    Scoring priority (highest first):
+    1. Count how many observed *technique* event kinds match each pattern.
+    2. If tied or no technique match, fall back to endpoint path heuristics.
+    3. If still undecided, use feature set path density.
+    """
+    pattern_scores: dict[str, int] = {}
+    for pattern, signals in BEHAVIOR_PATTERNS.items():
+        score = sum(1 for t in (techniques or []) if t in signals)
+        if score:
+            pattern_scores[pattern] = score
+
+    if pattern_scores:
+        top_score = max(pattern_scores.values())
+        top_patterns = [p for p, s in pattern_scores.items() if s == top_score]
+        # Resolve ties by severity
+        for sv in _BEHAVIOR_SEVERITY_ORDER:
+            if sv in top_patterns:
+                return sv
+        return top_patterns[0]
+
+    # Endpoint path heuristic
+    path_features = {f.split("::", 1)[1] for f in (feature_set or set()) if f.startswith("path::")}
+    all_paths = set(path_features) | {str(e) for e in (endpoints or [])}
+
+    recon_hits = sum(1 for p in all_paths if any(frag in p for frag in _RECON_PATH_FRAGMENTS))
+    admin_hits = sum(1 for p in all_paths if any(frag in p for frag in _ADMIN_PATH_FRAGMENTS))
+
+    if admin_hits >= 2 and admin_hits >= recon_hits:
+        return "targeted_attack"
+    if recon_hits >= 2 and recon_hits > admin_hits:
+        return "reconnaissance"
+    if len(all_paths) >= 12:
+        return "broad_scanning"
+    return "unknown"
+
+
+# ---------------------------------------------------------------------------
+# Scoring utilities
+# ---------------------------------------------------------------------------
 
 def stage_from_score(score: int) -> int:
     if score < 10:
@@ -128,8 +268,20 @@ def sha256_hex_text(value: str) -> str:
     return hashlib.sha256((value or "").encode("utf-8", errors="ignore")).hexdigest()
 
 
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
 def campaign_config_from_env() -> dict[str, Any]:
+    """Build the full campaign correlation configuration from environment vars.
+
+    Feature-extraction parameters control *what* data is collected per actor.
+    Signal-weight parameters control *how much* each signal type contributes to
+    the weighted Jaccard similarity.  Changing weights does NOT invalidate the
+    actor fingerprint cache; only feature-extraction parameters do.
+    """
     return {
+        # ── Feature extraction ──────────────────────────────────────────────
         "min_features": _env_int("HP_CAMPAIGN_MIN_FEATURES", 4, 1, 50),
         "min_intersection": _env_int("HP_CAMPAIGN_MIN_INTERSECTION", 3, 1, 50),
         "min_jaccard": _env_float("HP_CAMPAIGN_MIN_JACCARD", 0.4, 0.0, 1.0),
@@ -139,140 +291,38 @@ def campaign_config_from_env() -> dict[str, Any]:
         "actor_limit": _env_int("HP_CAMPAIGN_ACTOR_LIMIT", 200, 10, 500),
         "max_steps_per_session": _env_int("HP_CAMPAIGN_MAX_STEPS_PER_SESSION", 200, 20, 500),
         "max_events_per_actor": _env_int("HP_CAMPAIGN_MAX_EVENTS_PER_ACTOR", 120, 20, 500),
+        # ── Signal weights ──────────────────────────────────────────────────
+        # Each weight multiplies the feature's contribution to the Jaccard
+        # numerator and denominator.  Higher weight = stronger signal.
+        "w_path": _env_float("HP_CAMPAIGN_W_PATH", 1.0, 0.0, 10.0),
+        "w_stage": _env_float("HP_CAMPAIGN_W_STAGE", 1.5, 0.0, 10.0),
+        "w_time": _env_float("HP_CAMPAIGN_W_TIME", 0.8, 0.0, 10.0),
+        "w_err": _env_float("HP_CAMPAIGN_W_ERR", 1.2, 0.0, 10.0),
+        "w_ua": _env_float("HP_CAMPAIGN_W_UA", 2.0, 0.0, 10.0),
+        "w_geo": _env_float("HP_CAMPAIGN_W_GEO", 0.7, 0.0, 10.0),
+        "w_tok": _env_float("HP_CAMPAIGN_W_TOK", 3.0, 0.0, 10.0),
+        "w_hdr": _env_float("HP_CAMPAIGN_W_HDR", 1.3, 0.0, 10.0),
+        "w_subnet": _env_float("HP_CAMPAIGN_W_SUBNET", 0.9, 0.0, 10.0),
     }
 
 
-def parse_geo_asn_from_extra(extra_json: str) -> dict[str, str]:
-    try:
-        obj = json.loads(extra_json or "{}")
-        geo = obj.get("geo") if isinstance(obj.get("geo"), dict) else {}
-        asn = obj.get("asn") if isinstance(obj.get("asn"), dict) else {}
-        country = str(geo.get("country_iso2") or "").strip().upper()
-        asn_org = str(asn.get("org") or asn.get("name") or "").strip()
-        asn_num = str(asn.get("asn") or asn.get("number") or "").strip()
-        return {"country": country, "asn": asn_num or asn_org}
-    except Exception:
-        return {"country": "", "asn": ""}
+def campaign_cache_config_key(config: dict[str, Any]) -> dict[str, Any]:
+    """Return the subset of *config* that determines which features are extracted.
 
-
-def build_campaigns_snapshot(conn: sqlite3.Connection, config: dict[str, Any]) -> dict[str, Any]:
-    cur = conn.cursor()
-    cur.execute(
-        """
-        SELECT actor_id, last_seen, score
-        FROM actors
-        ORDER BY last_seen DESC, actor_id ASC
-        LIMIT ?
-        """,
-        (int(config["actor_limit"]),),
+    Signal weights do NOT affect what data is queried, so they are excluded
+    from the cache validity key.  This prevents weight-only changes from
+    invalidating all cached fingerprints.
+    """
+    extraction_keys = (
+        "max_sessions", "path_ngram_top_k", "path_top_k",
+        "max_steps_per_session", "max_events_per_actor",
     )
-    actor_rows = [dict(r) for r in cur.fetchall()]
-    actors: list[dict[str, Any]] = []
+    return {k: config[k] for k in extraction_keys if k in config}
 
-    for row in actor_rows:
-        actor_id = str(row.get("actor_id") or "")
-        if not actor_id:
-            continue
 
-        last_event = cur.execute(
-            "SELECT ip, ua, extra_json FROM events WHERE actor_id=? ORDER BY id DESC LIMIT 1",
-            (actor_id,),
-        ).fetchone()
-        ip = ""
-        ua = ""
-        geo_country = ""
-        geo_asn = ""
-        if last_event:
-            ip = str(last_event["ip"] or "")
-            ua = str(last_event["ua"] or "")
-            geo_asn_obj = parse_geo_asn_from_extra(str(last_event["extra_json"] or ""))
-            geo_country = geo_asn_obj["country"]
-            geo_asn = geo_asn_obj["asn"]
-
-        sessions = []
-        session_rows = cur.execute(
-            """
-            SELECT session_id, started_at
-            FROM sessions
-            WHERE actor_id=?
-            ORDER BY started_at DESC, session_id ASC
-            LIMIT ?
-            """,
-            (actor_id, int(config["max_sessions"])),
-        ).fetchall()
-        for sess in session_rows:
-            session_id = str(sess["session_id"] or "")
-            step_rows = cur.execute(
-                """
-                SELECT seq, ts, path, stage_before, stage_after, response_status
-                FROM session_steps
-                WHERE session_id=?
-                ORDER BY seq ASC, id ASC
-                LIMIT ?
-                """,
-                (session_id, int(config["max_steps_per_session"])),
-            ).fetchall()
-            steps = [
-                {
-                    "seq": int(st["seq"] or 0),
-                    "ts": str(st["ts"] or ""),
-                    "path": str(st["path"] or "/"),
-                    "stage_before": st["stage_before"],
-                    "stage_after": st["stage_after"],
-                    "response_status": st["response_status"],
-                }
-                for st in step_rows
-            ]
-            sessions.append(
-                {
-                    "session_id": session_id,
-                    "started_at": str(sess["started_at"] or ""),
-                    "steps": steps,
-                }
-            )
-
-        event_rows = cur.execute(
-            """
-            SELECT ts, path, method, kind, status, ua
-            FROM events
-            WHERE actor_id=?
-            ORDER BY id DESC
-            LIMIT ?
-            """,
-            (actor_id, int(config["max_events_per_actor"])),
-        ).fetchall()
-        events = [
-            {
-                "ts": str(ev["ts"] or ""),
-                "path": str(ev["path"] or "/"),
-                "method": str(ev["method"] or ""),
-                "kind": str(ev["kind"] or ""),
-                "status": ev["status"],
-                "ua": str(ev["ua"] or ""),
-            }
-            for ev in event_rows
-        ]
-
-        actors.append(
-            {
-                "actor_id": actor_id,
-                "last_seen": str(row.get("last_seen") or ""),
-                "stage": stage_from_score(int(row.get("score") or 0)),
-                "ip_hash": sha256_hex_text(ip) if ip else "",
-                "geo_country": geo_country,
-                "geo_asn": geo_asn,
-                "ua": ua,
-                "sessions": sessions,
-                "events": events,
-            }
-        )
-
-    return {
-        "schema_version": 1,
-        "config": config,
-        "actors": actors,
-    }
-
+# ---------------------------------------------------------------------------
+# DB helpers
+# ---------------------------------------------------------------------------
 
 def ensure_campaign_pro_state_table(conn: sqlite3.Connection) -> None:
     conn.execute(
@@ -366,125 +416,3 @@ def clear_campaign_tables(conn: sqlite3.Connection) -> None:
     cur.execute("DELETE FROM campaign_actor_links")
     cur.execute("DELETE FROM campaigns")
     conn.commit()
-
-
-def apply_verified_campaign_result(conn: sqlite3.Connection, result: dict[str, Any]) -> dict[str, Any]:
-    campaigns = result.get("campaigns") if isinstance(result.get("campaigns"), list) else []
-    links = result.get("links") if isinstance(result.get("links"), list) else []
-    metrics = result.get("metrics") if isinstance(result.get("metrics"), dict) else {}
-
-    cur = conn.cursor()
-    cur.execute("DELETE FROM campaign_actor_links")
-    cur.execute("DELETE FROM campaigns")
-
-    for camp in campaigns:
-        if not isinstance(camp, dict):
-            continue
-        cur.execute(
-            """
-            INSERT OR REPLACE INTO campaigns(
-                campaign_id, label, created_at, last_seen_at, score_avg, features_summary_json,
-                representative_session_id, first_seen_at, score_det, activity_json, timeline_json,
-                stage_flow_json, techniques_json, endpoints_json
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            """,
-            (
-                str(camp.get("campaign_id") or ""),
-                str(camp.get("label") or ""),
-                str(camp.get("created_at") or _utc_now_iso()),
-                str(camp.get("last_seen_at") or ""),
-                float(camp.get("score_avg") or 0.0),
-                json.dumps(camp.get("features_summary") or {}, ensure_ascii=False),
-                camp.get("representative_session_id"),
-                camp.get("first_seen_at"),
-                int(camp.get("score_det") or 0),
-                json.dumps(camp.get("activity") or {}, ensure_ascii=False),
-                json.dumps(camp.get("timeline") or {}, ensure_ascii=False),
-                json.dumps(camp.get("stage_flow") or {}, ensure_ascii=False),
-                json.dumps(camp.get("techniques") or [], ensure_ascii=False),
-                json.dumps(camp.get("endpoints") or [], ensure_ascii=False),
-            ),
-        )
-
-    for link in links:
-        if not isinstance(link, dict):
-            continue
-        cur.execute(
-            "INSERT OR REPLACE INTO campaign_actor_links(campaign_id, actor_id, confidence, reasons_json, linked_at) VALUES(?,?,?,?,?)",
-            (
-                str(link.get("campaign_id") or ""),
-                str(link.get("actor_id") or ""),
-                float(link.get("confidence") or 0.0),
-                json.dumps(link.get("reasons") or {}, ensure_ascii=False),
-                str(link.get("linked_at") or _utc_now_iso()),
-            ),
-        )
-    conn.commit()
-    return metrics
-
-
-def load_results_public_key_pem() -> bytes:
-    path = (os.getenv("PRO_RESULTS_PUBLIC_KEY_PATH") or "/app/app/pro_results_public_key.pem").strip()
-    with open(path, "rb") as f:
-        return f.read()
-
-
-def verify_signed_campaign_result(
-    *,
-    data: dict[str, Any],
-    expected_snapshot_hash: str,
-    expected_app_id: str,
-    expected_instance_id: str,
-    expected_license_key_hash: str,
-) -> tuple[dict[str, Any], dict[str, Any], int]:
-    result = data.get("result")
-    sig = str(data.get("result_sig") or "").strip()
-    if not isinstance(result, dict) or not sig:
-        raise CampaignProError("missing_result_or_signature")
-
-    try:
-        public_key_pem = load_results_public_key_pem()
-    except Exception as exc:
-        raise CampaignProError(f"results_pubkey_load_failed:{exc.__class__.__name__}")
-    try:
-        payload = _verify_jws_rs256_compact(sig, public_key_pem)
-    except Exception as exc:
-        raise CampaignProError(f"invalid_result_signature:{exc.__class__.__name__}")
-    now = int(time.time())
-    exp_raw = payload.get("exp")
-    if exp_raw is None:
-        exp_raw = payload.get("expires_at")
-    try:
-        exp = int(exp_raw)
-    except Exception:
-        raise CampaignProError("signature_missing_exp")
-    if exp <= now:
-        raise CampaignProError("signature_expired")
-
-    if str(payload.get("op") or "") != "campaigns_recompute":
-        raise CampaignProError("signature_op_mismatch")
-    if str(payload.get("snapshot_hash") or "") != expected_snapshot_hash:
-        raise CampaignProError("signature_snapshot_hash_mismatch")
-    if str(payload.get("app_id") or "") != (expected_app_id or ""):
-        raise CampaignProError("signature_app_id_mismatch")
-    if str(payload.get("instance_id") or "") != (expected_instance_id or ""):
-        raise CampaignProError("signature_instance_id_mismatch")
-
-    payload_lkh = str(payload.get("license_key_hash") or "")
-    if expected_license_key_hash and payload_lkh and payload_lkh != expected_license_key_hash:
-        raise CampaignProError("signature_license_key_hash_mismatch")
-
-    expected_result_hash = sha256_hex_obj(result)
-    if str(payload.get("result_hash") or "") != expected_result_hash:
-        raise CampaignProError("signature_result_hash_mismatch")
-
-    expires_at_resp = data.get("expires_at")
-    if expires_at_resp is not None:
-        try:
-            expires_at_resp_int = int(expires_at_resp)
-        except Exception:
-            raise CampaignProError("invalid_expires_at")
-        if expires_at_resp_int <= now:
-            raise CampaignProError("response_expired")
-
-    return result, payload, exp

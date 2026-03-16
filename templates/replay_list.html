@@ -1,0 +1,165 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .kind-dot {
+    display:inline-block;width:8px;height:8px;border-radius:50%;flex-shrink:0;
+  }
+  .kind-dot.danger { background:#f24040; }
+  .kind-dot.warn   { background:#f29020; }
+  .kind-dot.recon  { background:#ffc940; }
+  .kind-dot.neutral{ background:#9a9a9a; }
+  .stage-pill {
+    display:inline-block;padding:2px 8px;border-radius:4px;font-size:0.75rem;
+    font-weight:700;font-family:monospace;background:rgba(255,255,255,.06);color:var(--muted);
+  }
+  .stage-pill.sp-danger { background:rgba(242,64,64,.15);color:#f24040; }
+  .stage-pill.sp-warn   { background:rgba(242,144,32,.15);color:#f29020; }
+  .stage-pill.sp-info   { background:rgba(121,192,255,.1);color:#79c0ff; }
+  .rp-dur { color:var(--muted);font-size:0.8rem; }
+  .pagination { display:flex;gap:6px;align-items:center;padding:12px 14px;flex-wrap:wrap; }
+  .pagination a.btn, .pagination span.btn { min-width:36px; }
+  .pagination .page-info { color:var(--muted);font-size:0.83rem;padding:0 4px; }
+  .filters-bar {
+    padding:10px 14px;border-bottom:1px solid var(--stroke);
+    display:flex;gap:8px;flex-wrap:wrap;align-items:center;
+  }
+</style>
+
+<div class="page-head">
+  <div>
+    <h1>Session Replay</h1>
+    <div class="sub">Full attacker interaction playback &middot; PRO</div>
+  </div>
+  <div class="kpis">
+    <div class="kpi">
+      <div class="kpi-label">Total sessions</div>
+      <div class="kpi-value">{{ total }}</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Page</div>
+      <div class="kpi-value">{{ page }} / {{ total_pages }}</div>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-head">
+    <div class="card-title">Sessions</div>
+    <div class="card-sub">Most recent first</div>
+  </div>
+
+  <div class="filters-bar">
+    <form method="get" action="/dashboard/replay" style="display:contents;">
+      <input type="text" name="actor" class="input" style="width:200px;"
+             placeholder="Actor ID…" value="{{ actor_q }}" autocomplete="off">
+      <select name="stage" class="input" style="width:130px;">
+        <option value="">All stages</option>
+        {% for n in range(9) %}
+        <option value="{{ n }}" {% if stage_min == n|string %}selected{% endif %}>S{{ n }}+</option>
+        {% endfor %}
+      </select>
+      <input type="text" name="date_from" id="rpDateFrom" class="input" style="width:130px;"
+             placeholder="From date" value="{{ date_from }}" autocomplete="off">
+      <input type="text" name="date_to" id="rpDateTo" class="input" style="width:130px;"
+             placeholder="To date" value="{{ date_to }}" autocomplete="off">
+      <button type="submit" class="btn btn-primary btn-small">Filter</button>
+      <a href="/dashboard/replay" class="btn btn-ghost btn-small">Clear</a>
+    </form>
+  </div>
+
+  {% if sessions %}
+  <div class="table-wrap">
+    <table class="table table-sortable" id="replayTable">
+      <thead>
+        <tr>
+          <th data-type="text" style="width:140px;">Session</th>
+          <th data-type="text" style="width:140px;">Actor</th>
+          <th data-type="text" style="width:60px;">Geo</th>
+          <th data-type="date">Started</th>
+          <th data-type="text">Duration</th>
+          <th data-type="number" style="width:80px;">Steps</th>
+          <th data-type="number" style="width:90px;">Stage</th>
+          <th data-type="text" style="width:120px;">Top threat</th>
+          <th data-type="none" style="width:90px;"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in sessions %}
+        {% set stage = s.stage_max or 0 %}
+        {% set dur = s.duration_s %}
+        <tr>
+          <td class="mono" style="font-size:0.8rem;">
+            {{ s.session_id[:14] }}…
+          </td>
+          <td>
+            <a class="link mono" style="font-size:0.8rem;"
+               href="/actor/{{ s.actor_id }}">{{ s.actor_id[:14] }}…</a>
+          </td>
+          <td class="mono" style="font-size:0.9rem;">
+            {% if s.geo_flag %}{{ s.geo_flag }}{% endif %}
+            <span class="muted" style="font-size:0.75rem;">{{ s.geo_country }}</span>
+          </td>
+          <td class="mono">{{ s.started_fmt }}</td>
+          <td class="rp-dur">
+            {% if dur is not none %}
+              {% if dur >= 3600 %}{{ (dur // 3600) }}h {{ ((dur % 3600) // 60) }}m
+              {% elif dur >= 60 %}{{ dur // 60 }}m {{ dur % 60 }}s
+              {% else %}{{ dur }}s
+              {% endif %}
+            {% else %}—{% endif %}
+          </td>
+          <td class="mono">{{ s.step_count or 0 }}</td>
+          <td>
+            <span class="stage-pill {% if stage >= 5 %}sp-danger{% elif stage >= 3 %}sp-warn{% elif stage >= 1 %}sp-info{% endif %}">
+              S{{ stage }}
+            </span>
+          </td>
+          <td>
+            {% if s.top_kind %}
+            <span style="display:inline-flex;align-items:center;gap:6px;">
+              <span class="kind-dot {{ s.top_kind_color }}"></span>
+              <span class="mono" style="font-size:0.78rem;">{{ s.top_kind }}</span>
+            </span>
+            {% else %}
+            <span class="muted" style="font-size:0.8rem;">—</span>
+            {% endif %}
+          </td>
+          <td>
+            <a class="btn btn-primary btn-small"
+               href="/dashboard/replay/{{ s.session_id }}">▶ Replay</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% if total_pages > 1 %}
+  <div class="pagination">
+    {% if page > 1 %}
+    <a class="btn btn-ghost btn-small"
+       href="/dashboard/replay?page={{ page - 1 }}&per_page={{ per_page }}&stage={{ stage_min }}&date_from={{ date_from }}&date_to={{ date_to }}&actor={{ actor_q }}">← Prev</a>
+    {% endif %}
+    <span class="page-info">{{ page }} of {{ total_pages }} ({{ total }} sessions)</span>
+    {% if page < total_pages %}
+    <a class="btn btn-ghost btn-small"
+       href="/dashboard/replay?page={{ page + 1 }}&per_page={{ per_page }}&stage={{ stage_min }}&date_from={{ date_from }}&date_to={{ date_to }}&actor={{ actor_q }}">Next →</a>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {% else %}
+  <div class="case-empty" style="margin:20px 14px;">
+    No sessions found{% if stage_min or date_from or date_to or actor_q %} matching the current filters{% endif %}.
+  </div>
+  {% endif %}
+</div>
+
+<script>
+  // Date pickers
+  if(typeof flatpickr !== 'undefined'){
+    flatpickr('#rpDateFrom', {dateFormat:'Y-m-d', allowInput:true});
+    flatpickr('#rpDateTo',   {dateFormat:'Y-m-d', allowInput:true});
+  }
+</script>
+{% endblock %}

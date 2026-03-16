@@ -32,9 +32,6 @@ def _canonical_feature(feature: str) -> str:
     return str(feature or "").strip().lower()
 
 
-def _canonical_action(action: str) -> str:
-    return str(action or "access").strip().lower()
-
 
 def _lease_allows_feature(feature_name: str, lease_features: set[str]) -> bool:
     aliases = _LEASE_FEATURE_ALIASES.get(feature_name, {feature_name})
@@ -43,7 +40,6 @@ def _lease_allows_feature(feature_name: str, lease_features: set[str]) -> bool:
 
 def authorize_pro_feature(*, feature: str, action: str = "access", force_refresh: bool = False) -> tuple[bool, str]:
     feature_name = _canonical_feature(feature)
-    _canonical_action(action)
     if feature_name not in _ALLOWLIST:
         return False, "unknown_feature"
 
