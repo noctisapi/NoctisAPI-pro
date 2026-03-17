@@ -50,7 +50,7 @@
             </td>
             <td class="mono">{{ s.step_count|default(0) }}</td>
             <td class="muted" style="font-size:0.83rem;">{{ s.summary or '—' }}</td>
-            <td><a class="btn btn-outline btn-small" href="/dashboard/sessions/{{ s.session_id }}">View</a></td>
+            <td><a class="btn btn-primary btn-small" href="/dashboard/replay/{{ s.session_id }}">▶ Replay</a></td>
           </tr>
           {% endfor %}
         </tbody>

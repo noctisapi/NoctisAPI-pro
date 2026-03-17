@@ -3108,6 +3108,11 @@ def actor_sessions(actor_id: str, request: Request):
 
 @app.get("/dashboard/sessions/{session_id}", response_class=HTMLResponse)
 def session_detail(session_id: str, request: Request):
+    return RedirectResponse(url=f"/dashboard/replay/{session_id}", status_code=301)
+
+
+@app.get("/dashboard/sessions/{session_id}/_legacy", response_class=HTMLResponse)
+def session_detail_legacy(session_id: str, request: Request):
     conn = db()
     try:
         cur = conn.cursor()
