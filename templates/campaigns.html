@@ -204,15 +204,15 @@
           </td>
           <td>
             <div><span class="member-chip">{{ c.member_count }}</span></div>
-            {% if c.ip_diversity %}<div class="member-sub">{{ c.ip_diversity }} IPs</div>{% endif %}
+            {% if c.ip_diversity is not none %}<div class="member-sub">{{ c.ip_diversity }} IPs</div>{% endif %}
           </td>
           <td>
             {% if bp and bp != 'unknown' %}
             <span class="bp-pill bp-{{ bp }}">{{ bp | replace('_', ' ') }}</span>
             {% else %}<span class="muted" style="font-size:0.8rem;">—</span>{% endif %}
           </td>
-          <td class="mono" style="font-size:0.82rem;">{{ c.request_count or '—' }}</td>
-          <td class="mono" style="font-size:0.82rem;">{{ c.ip_diversity or '—' }}</td>
+          <td class="mono" style="font-size:0.82rem;">{{ c.request_count if c.request_count is not none else '—' }}</td>
+          <td class="mono" style="font-size:0.82rem;">{{ c.ip_diversity if c.ip_diversity is not none else '—' }}</td>
           <td class="mono muted" style="font-size:0.82rem;">{{ (c.last_seen_at or '—')[:10] }}</td>
           <td>
             <button class="btn btn-danger btn-small" type="button"

@@ -1421,13 +1421,13 @@ def _compute_campaigns(conn: sqlite3.Connection, config: dict) -> dict:
 
         try:
             cur.execute(
-                "SELECT COUNT(DISTINCT e.id), COUNT(DISTINCT e.session_id), COUNT(DISTINCT e.ip) "
+                "SELECT COUNT(DISTINCT e.id), COUNT(DISTINCT e.ip) "
                 "FROM events e WHERE e.actor_id IN ({}) ".format(",".join("?" * len(group))),
                 group,
             )
             cnt_row = cur.fetchone()
             request_count = int(cnt_row[0] or 0) if cnt_row else 0
-            ip_diversity = int(cnt_row[2] or 0) if cnt_row else 0
+            ip_diversity = int(cnt_row[1] or 0) if cnt_row else 0
         except Exception:
             request_count = 0
             ip_diversity = 0

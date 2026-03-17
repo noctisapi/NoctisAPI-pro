@@ -207,17 +207,17 @@
     </div>
     <div class="camp-kpi">
       <div class="ck-label">Requests</div>
-      <div class="ck-value">{{ campaign.request_count or '—' }}</div>
+      <div class="ck-value">{{ campaign.request_count if campaign.request_count is not none else '—' }}</div>
       <div class="ck-sub">total</div>
     </div>
     <div class="camp-kpi">
       <div class="ck-label">Sessions</div>
-      <div class="ck-value">{{ campaign.session_count or '—' }}</div>
+      <div class="ck-value">{{ campaign.session_count if campaign.session_count is not none else '—' }}</div>
       <div class="ck-sub">total</div>
     </div>
     <div class="camp-kpi">
       <div class="ck-label">IP Diversity</div>
-      <div class="ck-value">{{ campaign.ip_diversity or '—' }}</div>
+      <div class="ck-value">{{ campaign.ip_diversity if campaign.ip_diversity is not none else '—' }}</div>
       <div class="ck-sub">unique IPs</div>
     </div>
     <div class="camp-kpi">
