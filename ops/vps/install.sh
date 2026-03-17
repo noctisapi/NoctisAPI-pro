@@ -1,19 +1,23 @@
 #!/usr/bin/env bash
-# NoctisAPI PRO — zero-friction installer
+# NoctisAPI PRO — self-contained installer
 # ─────────────────────────────────────────────────────────────────────────────
-# Usage (from repo root on the VPS):
-#   bash ops/vps/install.sh
+# Does not require the source repository. Run from any directory:
 #
-# Re-running is safe:
-#   - If .env.prod already exists, the wizard is skipped and deploy runs.
-#   - Delete .env.prod to reconfigure from scratch.
+#   bash install.sh
+#
+# What it does:
+#   1. Prompts for required values and writes .env.prod (skipped if exists)
+#   2. Writes docker-compose.prod.yml (skipped if exists)
+#   3. Logs in to GHCR if a token is provided
+#   4. Pulls the image and starts the stack
+#
+# Re-running is safe: existing .env.prod and compose file are never overwritten.
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-ENV_FILE="${ROOT_DIR}/.env.prod"
-ENV_EXAMPLE="${ROOT_DIR}/.env.prod.example"
+INSTALL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENV_FILE="${INSTALL_DIR}/.env.prod"
+COMPOSE_FILE="${INSTALL_DIR}/docker-compose.prod.yml"
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 _ask() {
@@ -25,21 +29,14 @@ _ask() {
     while true; do
       read -r -p "  ${prompt}: " answer
       [[ -n "${answer}" ]] && { echo "${answer}"; return; }
-      echo "    (required — cannot be empty)" >&2
+      echo "    (required)" >&2
     done
   fi
 }
 
-_ask_secret() {
-  local prompt="$1" answer
-  read -r -s -p "  ${prompt} (hidden): " answer
-  echo >&2
-  echo "${answer}"
-}
-
 _ask_optional() {
   local prompt="$1" answer
-  read -r -p "  ${prompt} [leave blank to skip]: " answer
+  read -r -p "  ${prompt} [blank to skip]: " answer
   echo "${answer:-}"
 }
 
@@ -50,61 +47,45 @@ _ask_optional_secret() {
   echo "${answer:-}"
 }
 
-_sed_inplace() {
-  # portable sed -i for both GNU and BSD
-  sed -i "s|$1|$2|" "${ENV_FILE}"
-}
-
-_append() {
-  echo "$1" >> "${ENV_FILE}"
-}
-
-# ── prereqs ───────────────────────────────────────────────────────────────────
+# ── prereqs ──────────────────────────────────────────────────────────────────
 echo ""
 echo "  NoctisAPI PRO — Installation Wizard"
 echo "  ════════════════════════════════════"
 echo ""
 
-if ! command -v docker >/dev/null 2>&1; then
-  echo "  ERROR: docker is not installed." >&2
-  exit 1
-fi
-if ! docker compose version >/dev/null 2>&1; then
-  echo "  ERROR: docker compose plugin not found (requires Docker 20.10+)." >&2
-  exit 1
-fi
+command -v docker >/dev/null 2>&1 || { echo "  ERROR: docker is not installed." >&2; exit 1; }
+docker compose version >/dev/null 2>&1 || { echo "  ERROR: docker compose plugin not found (requires Docker 20.10+)." >&2; exit 1; }
 
-# ── skip wizard if .env.prod already exists ───────────────────────────────────
+# ── step 1: .env.prod ─────────────────────────────────────────────────────────
 if [[ -f "${ENV_FILE}" ]]; then
   echo "  .env.prod already exists — skipping wizard."
   echo "  Delete ${ENV_FILE} and re-run to reconfigure."
   echo ""
+  # Read existing values for use later
+  HP_IMAGE="$(grep -E '^HP_IMAGE=' "${ENV_FILE}" | head -1 | cut -d= -f2- | tr -d '\r')"
+  APP_VERSION="$(grep -E '^APP_VERSION=' "${ENV_FILE}" | head -1 | cut -d= -f2- | tr -d '\r')"
+  GHCR_TOKEN="${GHCR_TOKEN:-$(grep -E '^GHCR_TOKEN=' "${ENV_FILE}" | head -1 | cut -d= -f2- | tr -d '\r' || true)}"
 else
-  # ── required values ─────────────────────────────────────────────────────────
-  echo "  Required values"
-  echo "  ───────────────"
-  HP_IMAGE=$(_ask     "Docker image"                "ghcr.io/noctisapi/noctisapi-pro")
-  APP_VERSION=$(_ask  "Image tag / version"         "latest")
-  HP_PUBLIC_HOST=$(_ask "Public API domain"         "")
-  ACME_EMAIL=$(_ask   "Let's Encrypt email"         "")
-  HP_DEPLOYMENT_ID=$(_ask "Deployment label"        "prod-001")
+  echo "  Step 1/3 — Configuration"
+  echo "  ─────────────────────────"
+  HP_IMAGE=$(_ask     "Docker image"          "ghcr.io/noctisapi/noctisapi-pro")
+  APP_VERSION=$(_ask  "Image tag / version"   "latest")
+  HP_PUBLIC_HOST=$(_ask "Public API domain"   "")
+  ACME_EMAIL=$(_ask   "Let's Encrypt email"   "")
+  HP_DEPLOYMENT_ID=$(_ask "Deployment label"  "prod-001")
 
-  # ── auto-generate HP_SEED ───────────────────────────────────────────────────
   HP_SEED="$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null \
            || openssl rand -hex 32)"
   echo "  HP_SEED: auto-generated."
 
-  # ── optional: registry auth ─────────────────────────────────────────────────
   echo ""
   echo "  Registry auth (skip if image is public)"
-  echo "  ────────────────────────────────────────"
+  echo "  ─────────────────────────────────────────"
   GHCR_TOKEN=$(_ask_optional_secret "GHCR personal access token")
 
-  # ── optional: GeoIP ─────────────────────────────────────────────────────────
   echo ""
-  echo "  MaxMind GeoLite2 (optional — skip to disable IP geolocation)"
-  echo "  Free account: https://www.maxmind.com/en/geolite2/signup"
-  echo "  ─────────────────────────────────────────────────────────────"
+  echo "  MaxMind GeoLite2 (optional — free at maxmind.com)"
+  echo "  ───────────────────────────────────────────────────"
   MAXMIND_ACCOUNT_ID=$(_ask_optional "MaxMind Account ID")
   if [[ -n "${MAXMIND_ACCOUNT_ID}" ]]; then
     MAXMIND_LICENSE_KEY=$(_ask_optional_secret "MaxMind License Key")
@@ -112,38 +93,244 @@ else
     MAXMIND_LICENSE_KEY=""
   fi
 
-  # ── write .env.prod ──────────────────────────────────────────────────────────
   echo ""
   echo "  Writing ${ENV_FILE}…"
-  cp "${ENV_EXAMPLE}" "${ENV_FILE}"
+  cat > "${ENV_FILE}" <<ENVEOF
+# NoctisAPI PRO — generated by install.sh
+APP_ENV=prod
+APP_VERSION=${APP_VERSION}
+HP_IMAGE=${HP_IMAGE}
 
-  _sed_inplace "^HP_IMAGE=.*"                   "HP_IMAGE=${HP_IMAGE}"
-  _sed_inplace "^APP_VERSION=.*"                "APP_VERSION=${APP_VERSION}"
-  _sed_inplace "^HP_PUBLIC_HOST=.*"             "HP_PUBLIC_HOST=${HP_PUBLIC_HOST}"
-  _sed_inplace "^HP_ADMIN_HOST=.*"              "#HP_ADMIN_HOST="
-  _sed_inplace "^HP_PUBLIC_BASE_URL=.*"         "HP_PUBLIC_BASE_URL=https://${HP_PUBLIC_HOST}"
-  _sed_inplace "^HONEYPOT_PUBLIC_BASE_URL=.*"   "HONEYPOT_PUBLIC_BASE_URL=https://${HP_PUBLIC_HOST}"
-  _sed_inplace "^ACME_EMAIL=.*"                 "ACME_EMAIL=${ACME_EMAIL}"
-  _sed_inplace "^HP_SEED=.*"                    "HP_SEED=${HP_SEED}"
-  _sed_inplace "^HP_DEPLOYMENT_ID=.*"           "HP_DEPLOYMENT_ID=${HP_DEPLOYMENT_ID}"
-  _sed_inplace "^MAXMIND_ACCOUNT_ID=.*"         "MAXMIND_ACCOUNT_ID=${MAXMIND_ACCOUNT_ID}"
-  _sed_inplace "^MAXMIND_LICENSE_KEY=.*"        "MAXMIND_LICENSE_KEY=${MAXMIND_LICENSE_KEY}"
+# Database (fixed — container paths)
+HP_DB_PATH=/data/honeypot.db
+DATABASE_URL=sqlite+pysqlite:////data/honeypot.db
 
-  [[ -n "${GHCR_TOKEN}" ]] && _append "GHCR_TOKEN=${GHCR_TOKEN}"
+# GeoIP (auto-downloaded on first start if MaxMind credentials are set)
+MAXMIND_ACCOUNT_ID=${MAXMIND_ACCOUNT_ID}
+MAXMIND_LICENSE_KEY=${MAXMIND_LICENSE_KEY}
+HP_GEOIP_DB=/data/GeoLite2-Country.mmdb
 
+# Public domain / TLS
+HP_PUBLIC_HOST=${HP_PUBLIC_HOST}
+HP_PUBLIC_BASE_URL=https://${HP_PUBLIC_HOST}
+HONEYPOT_PUBLIC_BASE_URL=https://${HP_PUBLIC_HOST}
+ACME_EMAIL=${ACME_EMAIL}
+
+# Internal network (fixed)
+HONEYPOT_MONITOR_BASE_URL=http://app:8000
+HONEYPOT_MONITOR_UA=HealthCheck/1.0,curl/
+
+# Core secret
+HP_SEED=${HP_SEED}
+
+# Licensing (offline)
+HP_LICENSE_MODE=offline
+HP_ENFORCE_LICENSE=1
+HP_LICENSE_STATUS_REFRESH_SECONDS=30
+HP_LICENSE_STATUS_MAX_REFRESH_SECONDS=300
+HP_DEPLOYMENT_ID=${HP_DEPLOYMENT_ID}
+INSTANCE_ID_PATH=/var/lib/myapp/instance_id
+HP_OFFLINE_LICENSE_PATH=/var/lib/myapp/license.json
+HP_OFFLINE_LICENSE_STATE_PATH=/var/lib/myapp/license_state.json
+HP_OFFLINE_PUBLIC_KEYS_BUNDLE_PATH=/app/app/offline_public_keys.json
+
+# Campaign defaults
+HP_CAMPAIGN_MIN_FEATURES=4
+HP_CAMPAIGN_MIN_INTERSECTION=3
+HP_CAMPAIGN_MIN_JACCARD=0.4
+HP_CAMPAIGN_MAX_SESSIONS=5
+HP_CAMPAIGN_PATH_NGRAM_TOP_K=12
+HP_CAMPAIGN_PATH_TOP_K=10
+HP_CAMPAIGN_ACTOR_LIMIT=200
+HP_CAMPAIGN_AUTO_RECOMPUTE_THRESHOLD=0
+HP_CAMPAIGN_AUTO_RECOMPUTE_INTERVAL=3600
+
+# Data retention
+HP_RETENTION_EVENTS_DAYS=30
+HP_RETENTION_SESSIONS_DAYS=30
+HP_RETENTION_STEPS_DAYS=30
+HP_RETENTION_CHECKS_DAYS=14
+HP_RETENTION_TOKENS_DAYS=90
+HP_RETENTION_JOBS_DAYS=30
+HP_RETENTION_ENABLE=1
+
+# Logging
+LOG_LEVEL=info
+
+# Host fingerprint
+HP_HOST_MACHINE_ID_PATH=/etc/host-machine-id
+ENVEOF
+
+  [[ -n "${GHCR_TOKEN}" ]] && echo "GHCR_TOKEN=${GHCR_TOKEN}" >> "${ENV_FILE}"
   chmod 600 "${ENV_FILE}"
   echo "  .env.prod written (mode 600)."
 fi
 
-# ── deploy ────────────────────────────────────────────────────────────────────
-echo "  Starting deploy…"
-echo ""
-GHCR_TOKEN="${GHCR_TOKEN:-}" bash "${SCRIPT_DIR}/deploy.sh"
+# ── step 2: docker-compose.prod.yml ──────────────────────────────────────────
+if [[ -f "${COMPOSE_FILE}" ]]; then
+  echo "  docker-compose.prod.yml already exists — skipping."
+else
+  echo ""
+  echo "  Step 2/3 — Compose file"
+  echo "  ─────────────────────────"
+  mkdir -p "${INSTALL_DIR}/data/siem"
+  cat > "${COMPOSE_FILE}" <<'COMPOSEEOF'
+services:
+  migrate:
+    image: ${HP_IMAGE}:${APP_VERSION}
+    user: "0:0"
+    command: ["sh", "-c", "chown -R 10001:0 /data /var/lib/myapp && alembic upgrade head && python scripts/download_geoip.py"]
+    env_file:
+      - .env.prod
+    volumes:
+      - hp_prod_data:/data
+      - hp_prod_myapp:/var/lib/myapp
+    restart: "no"
 
+  app:
+    image: ${HP_IMAGE}:${APP_VERSION}
+    user: "10001:0"
+    env_file:
+      - .env.prod
+    environment:
+      - PYTHONPATH=/app
+    command: ["python", "main.py"]
+    volumes:
+      - hp_prod_data:/data
+      - hp_prod_myapp:/var/lib/myapp
+      - /etc/machine-id:/etc/host-machine-id:ro
+      - ./data/siem:/var/log/noctisapi
+    expose:
+      - "8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "scripts/check_app_ready.py"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.hp-api.rule=Host(`${HP_PUBLIC_HOST}`)"
+      - "traefik.http.routers.hp-api.entrypoints=websecure"
+      - "traefik.http.routers.hp-api.tls.certresolver=letsencrypt"
+      - "traefik.http.services.hp-api.loadbalancer.server.port=8000"
+      - "traefik.http.routers.hp-api.middlewares=hp-public-ratelimit"
+      - "traefik.http.middlewares.hp-public-ratelimit.ratelimit.average=${HP_PUBLIC_RATELIMIT_AVG:-120}"
+      - "traefik.http.middlewares.hp-public-ratelimit.ratelimit.burst=${HP_PUBLIC_RATELIMIT_BURST:-240}"
+      - "traefik.http.routers.hp-health.rule=Host(`${HP_PUBLIC_HOST}`) && (Path(`/health`) || Path(`/status`))"
+      - "traefik.http.routers.hp-health.entrypoints=websecure"
+      - "traefik.http.routers.hp-health.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.hp-health.service=hp-api"
+      - "traefik.http.routers.hp-health.priority=100"
+      - "traefik.http.routers.hp-health.middlewares=hp-monitor-headers,hp-monitor-ratelimit"
+      - "traefik.http.middlewares.hp-monitor-headers.headers.customrequestheaders.X-Internal-Monitor=1"
+      - "traefik.http.middlewares.hp-monitor-ratelimit.ratelimit.average=30"
+      - "traefik.http.middlewares.hp-monitor-ratelimit.ratelimit.burst=60"
+      - "traefik.http.routers.hp-internal.rule=PathPrefix(`/`)"
+      - "traefik.http.routers.hp-internal.entrypoints=webinternal"
+      - "traefik.http.routers.hp-internal.service=hp-api"
+      - "traefik.http.routers.hp-internal.priority=120"
+      - "traefik.http.routers.hp-internal.middlewares=hp-monitor-headers,hp-monitor-ratelimit"
+
+  admin:
+    image: ${HP_IMAGE}:${APP_VERSION}
+    user: "10001:0"
+    env_file:
+      - .env.prod
+    environment:
+      - PYTHONPATH=/app
+      - HONEYPOT_MONITOR_BASE_URL=http://app:8000
+    command: ["python", "main_panel.py"]
+    volumes:
+      - hp_prod_data:/data
+      - hp_prod_myapp:/var/lib/myapp
+      - /etc/machine-id:/etc/host-machine-id:ro
+    expose:
+      - "9001"
+    ports:
+      - "127.0.0.1:9001:9001"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  traefik:
+    image: traefik:v2.11
+    restart: unless-stopped
+    command:
+      - "--api.dashboard=false"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.webinternal.address=:8081"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
+      - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+    ports:
+      - "80:80"
+      - "443:443"
+      - "127.0.0.1:8081:8081"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik_letsencrypt:/letsencrypt
+    depends_on:
+      app:
+        condition: service_healthy
+      admin:
+        condition: service_started
+
+volumes:
+  hp_prod_data:
+  hp_prod_myapp:
+  traefik_letsencrypt:
+COMPOSEEOF
+  echo "  docker-compose.prod.yml written."
+fi
+
+# ── step 3: pull and start ────────────────────────────────────────────────────
+echo ""
+echo "  Step 3/3 — Deploy"
+echo "  ───────────────────"
+
+# GHCR login if token available
+if [[ -n "${GHCR_TOKEN:-}" ]]; then
+  GHCR_USER="$(echo "${HP_IMAGE:-}" | sed 's|ghcr\.io/\([^/]*\)/.*|\1|')"
+  printf '%s' "${GHCR_TOKEN}" | docker login ghcr.io -u "${GHCR_USER:-noctisapi}" --password-stdin
+fi
+
+echo "  Pulling image…"
+pull_log="$(mktemp)"
+set +e
+docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" pull 2>&1 | tee "${pull_log}"
+pull_rc="${PIPESTATUS[0]}"
+set -e
+if [[ "${pull_rc}" -ne 0 ]]; then
+  if grep -qiE 'denied|unauthorized|authentication required' "${pull_log}"; then
+    echo "" >&2
+    echo "  ERROR: registry authentication failed." >&2
+    echo "  Set GHCR_TOKEN in the environment and re-run:" >&2
+    echo "    GHCR_TOKEN=<token> bash install.sh" >&2
+  fi
+  rm -f "${pull_log}"
+  exit "${pull_rc}"
+fi
+rm -f "${pull_log}"
+
+echo "  Starting services…"
+docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" up -d --remove-orphans
+docker image prune -f >/dev/null 2>&1 || true
+
+# ── done ─────────────────────────────────────────────────────────────────────
 echo ""
 echo "  Done."
 echo ""
-HP_PUBLIC_HOST_DISPLAY="$(grep -E '^HP_PUBLIC_HOST=' "${ENV_FILE}" | cut -d= -f2- | tr -d '\r' || echo '?')"
+HP_PUBLIC_HOST_DISPLAY="$(grep -E '^HP_PUBLIC_HOST=' "${ENV_FILE}" | head -1 | cut -d= -f2- | tr -d '\r' || echo '?')"
 echo "  Honeypot API  : https://${HP_PUBLIC_HOST_DISPLAY}"
 echo "  Admin panel   : http://localhost:9001/dashboard  (via SSH tunnel)"
 echo ""

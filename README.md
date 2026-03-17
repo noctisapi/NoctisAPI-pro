@@ -93,38 +93,19 @@ Readme_images/     Screenshots for this README
 
 ---
 
-## Quick Start — Development
-
-```bash
-# 1. Clone
-git clone https://github.com/noctisapi/NoctisAPI-pro
-cd NoctisAPI-pro
-
-# 2. Start dev stack
-docker compose -f compose/docker-compose.dev.yml up --build
-```
-
-| Service | URL |
-|---|---|
-| Public API (Swagger) | `http://127.0.0.1:8000/docs` |
-| Admin Panel | `http://127.0.0.1:9001` |
-
-The dev stack runs a one-shot database migrator before starting services. SQLite is stored automatically in the `hp_dev_data` Docker volume.
-
----
-
 ## Production Deployment
 
-See [`documentation/ops/vps/DEPLOY.md`](documentation/ops/vps/DEPLOY.md) for the full step-by-step guide.
+Deployment requires only Docker — no source code needed.
 
 ```bash
-# Clone to server and run the installer
-git clone https://github.com/noctisapi/NoctisAPI-pro /opt/noctisapi-pro
-cd /opt/noctisapi-pro
-bash ops/vps/install.sh
+# 1. Create an install directory and place install.sh inside it
+mkdir -p /opt/noctisapi && cd /opt/noctisapi
+
+# 2. Run the installer
+bash install.sh
 ```
 
-The installer prompts for your domain, email, image tag, and (optionally) MaxMind credentials for GeoIP — then writes `.env.prod` and brings up the full stack. Re-running is safe: if `.env.prod` already exists the wizard is skipped and only the deploy runs.
+The installer prompts for your domain, email, image tag, and (optionally) MaxMind credentials for GeoIP — then pulls the Docker image and brings up the full stack. Re-running is safe: existing `.env.prod` and `docker-compose.prod.yml` are never overwritten.
 
 ---
 
@@ -203,7 +184,7 @@ HP_HOST_MACHINE_ID_PATH=/etc/host-machine-id
 
 ## Open Source Core
 
-The open-source Core version (without PRO features) is available at:
+The open-source Core version (without PRO features) is available as a public Docker image and at:
 [github.com/noctisapi/noctisapi-core](https://github.com/noctisapi/noctisapi-core)
 
 ---
