@@ -135,18 +135,6 @@ else
   echo "  .env.prod written (mode 600)."
 fi
 
-# ── license.json hint ─────────────────────────────────────────────────────────
-echo ""
-echo "  License file"
-echo "  ────────────"
-echo "  If you have a license.json, copy it into the container after first start:"
-echo ""
-echo "    docker cp /path/to/license.json \$(docker compose --env-file ${ENV_FILE} \\"
-echo "      -f ${ROOT_DIR}/compose/docker-compose.prod.yml ps -q admin):/var/lib/myapp/license.json"
-echo "    docker compose --env-file ${ENV_FILE} \\"
-echo "      -f ${ROOT_DIR}/compose/docker-compose.prod.yml restart admin app"
-echo ""
-
 # ── deploy ────────────────────────────────────────────────────────────────────
 echo "  Starting deploy…"
 echo ""
