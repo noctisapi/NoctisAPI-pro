@@ -156,6 +156,22 @@
   .sb-fill-ep    { background: linear-gradient(90deg, #7ab8f5, #7ee2b8); }
   .sb-fill-tech  { background: linear-gradient(90deg, #ffc940, #f0b06a); }
   .sb-val { font-family: monospace; font-size: 0.78rem; min-width: 32px; text-align: right; color: var(--text); }
+  .bp-pill {
+    display: inline-block;
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 2px 9px;
+    border-radius: 4px;
+    white-space: nowrap;
+  }
+  .bp-infrastructure_probing { background:rgba(231,76,60,.18); color:#f2a6a6; }
+  .bp-data_exfiltration      { background:rgba(230,126,34,.18); color:#f0b06a; }
+  .bp-key_theft              { background:rgba(255,179,0,.18);  color:#ffc940; }
+  .bp-credential_harvesting  { background:rgba(74,144,226,.18); color:#7ab8f5; }
+  .bp-reconnaissance         { background:rgba(155,89,182,.18); color:#c39bd3; }
+  .bp-targeted_attack        { background:rgba(231,76,60,.12);  color:#f2a6a6; }
+  .bp-broad_scanning         { background:rgba(26,191,107,.12); color:#7ee2b8; }
+  .bp-unknown                { background:rgba(255,255,255,.06); color:var(--muted); }
 </style>
 
 <div class="page-head">
@@ -179,9 +195,30 @@
       <div class="ck-sub">deterministic</div>
     </div>
     <div class="camp-kpi">
+      <div class="ck-label">Confidence</div>
+      {% set conf_pct = ((campaign.confidence_score or 0) * 100) | round(1) %}
+      <div class="ck-value">{{ conf_pct }}%</div>
+      <div class="ck-sub">avg similarity</div>
+    </div>
+    <div class="camp-kpi">
       <div class="ck-label">Members</div>
       <div class="ck-value">{{ campaign.summary.group_size or links|length }}</div>
       <div class="ck-sub">actors</div>
+    </div>
+    <div class="camp-kpi">
+      <div class="ck-label">Requests</div>
+      <div class="ck-value">{{ campaign.request_count or '—' }}</div>
+      <div class="ck-sub">total</div>
+    </div>
+    <div class="camp-kpi">
+      <div class="ck-label">Sessions</div>
+      <div class="ck-value">{{ campaign.session_count or '—' }}</div>
+      <div class="ck-sub">total</div>
+    </div>
+    <div class="camp-kpi">
+      <div class="ck-label">IP Diversity</div>
+      <div class="ck-value">{{ campaign.ip_diversity or '—' }}</div>
+      <div class="ck-sub">unique IPs</div>
     </div>
     <div class="camp-kpi">
       <div class="ck-label">Duration</div>
@@ -209,6 +246,13 @@
       <div class="dg-val mono">{{ campaign.summary.seed_actor or '—' }}</div>
     </div>
     <div class="dg-row">
+      <div class="dg-key">Behavior</div>
+      <div class="dg-val">
+        {% set bp = campaign.behavior_pattern or "unknown" %}
+        <span class="bp-pill bp-{{ bp }}">{{ bp | replace("_", " ") }}</span>
+      </div>
+    </div>
+    <div class="dg-row">
       <div class="dg-key">Stage Flow</div>
       <div class="dg-val mono">{{ campaign.summary.stage_flow or campaign.stage_detail.flow or '—' }}</div>
     </div>
@@ -223,6 +267,30 @@
       <div class="dg-key">Timing</div>
       <div class="dg-val">{{ campaign.summary.timing or 'unknown' }}</div>
     </div>
+    {% if campaign.summary.geo_iso2 %}
+    <div class="dg-row">
+      <div class="dg-key">Top Geo</div>
+      <div class="dg-val mono">{{ campaign.summary.geo_iso2 }}</div>
+    </div>
+    {% endif %}
+    {% if campaign.summary.ua_fp %}
+    <div class="dg-row">
+      <div class="dg-key">UA Fingerprint</div>
+      <div class="dg-val mono" style="font-size:0.8rem;">{{ campaign.summary.ua_fp }}</div>
+    </div>
+    {% endif %}
+    {% if campaign.summary.top_subnets %}
+    <div class="dg-row">
+      <div class="dg-key">Top Subnets</div>
+      <div class="dg-val">
+        <div class="path-list">
+          {% for s in campaign.summary.top_subnets %}
+          <span class="path-chip">{{ s }}.x.x</span>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+    {% endif %}
     {% if campaign.techniques %}
     <div class="dg-row">
       <div class="dg-key">Techniques</div>
@@ -417,11 +485,23 @@
             </div>
             {% endif %}
             <div class="tiny-text" style="margin-top:4px;">
-              {% if reason.overlap_count %}{{ reason.overlap_count }} paths{% endif %}
+              {% if reason.overlap_count %}{{ reason.overlap_count }} features{% endif %}
               {% if reason.shared_stage_flow %} &middot; stage {{ reason.shared_stage_flow }}{% endif %}
               {% if reason.shared_timing %} &middot; {{ reason.shared_timing }}{% endif %}
               {% if reason.shared_errors %} &middot; errors {{ reason.shared_errors|join(', ') }}{% endif %}
+              {% if reason.shared_geos %} &middot; geo {{ reason.shared_geos|join(', ') }}{% endif %}
+              {% if reason.shared_ua_fps %} &middot; UA match{% endif %}
+              {% if reason.shared_tokens %} &middot; token reuse{% endif %}
+              {% if reason.shared_subnets %} &middot; subnet {{ reason.shared_subnets|join(', ') }}{% endif %}
+              {% if reason.shared_hdrs %} &middot; hdr match{% endif %}
             </div>
+            {% if l.signal_scores %}
+            <div style="display:flex;flex-wrap:wrap;gap:3px;margin-top:5px;">
+              {% for sig, val in l.signal_scores.items() %}
+              <span style="font-size:0.68rem;font-family:monospace;background:rgba(255,255,255,.06);border-radius:3px;padding:1px 5px;color:var(--muted);">{{ sig }}:{{ val }}</span>
+              {% endfor %}
+            </div>
+            {% endif %}
           </td>
         </tr>
         {% endfor %}

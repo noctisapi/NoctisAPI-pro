@@ -3395,7 +3395,7 @@ def campaign_detail(campaign_id: str, request: Request):
         camp["stage_detail"] = _safe_json_loads(camp.get("stage_flow_json"), {})
         camp["techniques"] = _safe_json_loads(camp.get("techniques_json"), [])
         camp["endpoints"] = _safe_json_loads(camp.get("endpoints_json"), [])
-        cur.execute("SELECT actor_id, confidence, reasons_json, linked_at FROM campaign_actor_links WHERE campaign_id=?", (campaign_id,))
+        cur.execute("SELECT actor_id, confidence, reasons_json, linked_at, signal_scores_json FROM campaign_actor_links WHERE campaign_id=?", (campaign_id,))
         links = [dict(r) for r in cur.fetchall()]
         actor_ids = [l["actor_id"] for l in links]
         actor_meta = {}
@@ -3460,6 +3460,7 @@ def campaign_detail(campaign_id: str, request: Request):
             link.update(geo)
             shared_stage = link["reasons"].get("shared_stage_flow") or ""
             link["reasons"]["shared_stage_flow"] = _sanitize_stage_flow(shared_stage)
+            link["signal_scores"] = _safe_json_loads(link.get("signal_scores_json"), {})
 
         if geo_reader:
             try:

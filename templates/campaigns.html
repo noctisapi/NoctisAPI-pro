@@ -2,7 +2,6 @@
 {% block content %}
 {% set pro_state = campaigns_pro_state or {} %}
 <style>
-  /* Score pill */
   .score-pill {
     display: inline-block;
     font-weight: 800;
@@ -16,96 +15,59 @@
   .score-med    { background:rgba(255,179,0,.15);  color:#ffc940; }
   .score-low    { background:rgba(26,191,107,.15); color:#7ee2b8; }
 
-  /* Job status card */
-  .job-card {
-    border: 1px solid var(--stroke);
-    border-radius: 10px;
-    padding: 14px 18px;
-    margin: 16px 0 0;
-    font-size: 0.84rem;
-    display: none;
-  }
-  .job-card.visible { display: block; }
-  .job-card-head {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-bottom: 8px;
+  .bp-pill {
+    display: inline-block;
+    font-size: 0.72rem;
     font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 4px;
+    white-space: nowrap;
   }
-  .job-status-dot {
-    width: 8px; height: 8px;
-    border-radius: 50%;
-    flex-shrink: 0;
-  }
-  .dot-queued  { background:#ffc940; box-shadow:0 0 6px #ffc940; animation: pulse 1.2s infinite; }
-  .dot-running { background:#7ab8f5; box-shadow:0 0 6px #7ab8f5; animation: pulse 0.8s infinite; }
+  .bp-infrastructure_probing { background:rgba(231,76,60,.18); color:#f2a6a6; }
+  .bp-data_exfiltration      { background:rgba(230,126,34,.18); color:#f0b06a; }
+  .bp-key_theft              { background:rgba(255,179,0,.18);  color:#ffc940; }
+  .bp-credential_harvesting  { background:rgba(74,144,226,.18); color:#7ab8f5; }
+  .bp-reconnaissance         { background:rgba(155,89,182,.18); color:#c39bd3; }
+  .bp-targeted_attack        { background:rgba(231,76,60,.12);  color:#f2a6a6; }
+  .bp-broad_scanning         { background:rgba(26,191,107,.12); color:#7ee2b8; }
+  .bp-unknown                { background:rgba(255,255,255,.06); color:var(--muted); }
+
+  .conf-mini { display:flex; align-items:center; gap:5px; }
+  .conf-mini-bg { flex:1; min-width:40px; height:4px; background:rgba(255,255,255,.08); border-radius:2px; }
+  .conf-mini-fill { height:100%; border-radius:2px; background:linear-gradient(90deg,#7ab8f5,#b8a9ff); }
+  .conf-mini-val { font-family:monospace; font-size:0.75rem; color:var(--muted); min-width:30px; }
+
+  .job-card { border:1px solid var(--stroke); border-radius:10px; padding:14px 18px; margin:16px 0 0; font-size:0.84rem; display:none; }
+  .job-card.visible { display:block; }
+  .job-card-head { display:flex; align-items:center; gap:10px; margin-bottom:8px; font-weight:600; }
+  .job-status-dot { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+  .dot-queued    { background:#ffc940; box-shadow:0 0 6px #ffc940; animation:pulse 1.2s infinite; }
+  .dot-running   { background:#7ab8f5; box-shadow:0 0 6px #7ab8f5; animation:pulse 0.8s infinite; }
   .dot-completed { background:#7ee2b8; }
   .dot-failed    { background:#f2a6a6; }
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+  .job-metrics { display:flex; flex-wrap:wrap; gap:14px; font-size:0.78rem; color:var(--muted); }
+  .job-metric { display:flex; flex-direction:column; gap:2px; }
+  .job-metric .jm-val { font-weight:700; color:var(--text); font-family:monospace; }
 
-  .job-metrics {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 14px;
-    font-size: 0.78rem;
-    color: var(--muted);
-  }
-  .job-metric { display: flex; flex-direction: column; gap: 2px; }
-  .job-metric .jm-val { font-weight: 700; color: var(--text); font-family: monospace; }
-
-  /* Verification banner */
-  .verify-banner {
-    border-radius: 8px;
-    padding: 10px 16px;
-    font-size: 0.85rem;
-    margin-bottom: 16px;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
+  .verify-banner { border-radius:8px; padding:10px 16px; font-size:0.85rem; margin-bottom:16px; display:flex; align-items:center; gap:10px; }
   .verify-ok      { background:rgba(26,191,107,.08); border:1px solid rgba(26,191,107,.3); color:#7ee2b8; }
   .verify-pending { background:rgba(255,179,0,.08);  border:1px solid rgba(255,179,0,.3);  color:#ffc940; }
   .verify-error   { background:rgba(231,76,60,.08);  border:1px solid rgba(231,76,60,.3);  color:#f2a6a6; }
   .verify-none    { background:rgba(255,255,255,.04); border:1px solid var(--stroke); color:var(--muted); }
 
-  .member-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    background: rgba(255,255,255,.06);
-    border-radius: 999px;
-    padding: 2px 9px;
-    font-size: 0.8rem;
-  }
+  .member-chip { display:inline-flex; align-items:center; gap:4px; background:rgba(255,255,255,.06); border-radius:999px; padding:2px 9px; font-size:0.8rem; }
+  .member-sub  { font-size:0.68rem; color:var(--muted); font-family:monospace; }
 
-  /* Filter bar */
-  .filter-card {
-    background: linear-gradient(180deg, var(--panel2), var(--panel));
-    border: 1px solid var(--stroke);
-    border-radius: 16px;
-    padding: 14px 20px;
-    margin-bottom: 14px;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
-    align-items: flex-end;
-  }
-  .filter-field { display: flex; flex-direction: column; gap: 4px; }
-  .filter-field label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
-  .filter-field.flex-1 { flex: 1; min-width: 180px; }
+  .filter-card { background:linear-gradient(180deg,var(--panel2),var(--panel)); border:1px solid var(--stroke); border-radius:16px; padding:14px 20px; margin-bottom:14px; display:flex; flex-wrap:wrap; gap:10px; align-items:flex-end; }
+  .filter-field { display:flex; flex-direction:column; gap:4px; }
+  .filter-field label { font-size:0.72rem; text-transform:uppercase; letter-spacing:0.05em; color:var(--muted); }
+  .filter-field.flex-1 { flex:1; min-width:180px; }
 
-  /* Job history */
-  .job-history-table td { vertical-align: middle; font-size: 0.82rem; }
-  .hist-dot {
-    display: inline-block;
-    width: 7px; height: 7px;
-    border-radius: 50%;
-    margin-right: 5px;
-    vertical-align: middle;
-  }
-  .hist-completed { background: #7ee2b8; }
-  .hist-failed    { background: #f2a6a6; }
+  .job-history-table td { vertical-align:middle; font-size:0.82rem; }
+  .hist-dot { display:inline-block; width:7px; height:7px; border-radius:50%; margin-right:5px; vertical-align:middle; }
+  .hist-completed { background:#7ee2b8; }
+  .hist-failed    { background:#f2a6a6; }
 </style>
 
 <div class="page-head">
@@ -114,16 +76,10 @@
     <div class="sub">Detected lateral movement groups &middot; auto-clustered by behavioral similarity</div>
   </div>
   <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;">
-    <button
-      id="recomputeBtn"
-      class="btn btn-primary"
-      type="button"
-      onclick="recomputeCampaigns(this)"
-    >Recompute groups</button>
+    <button id="recomputeBtn" class="btn btn-primary" type="button" onclick="recomputeCampaigns(this)">Recompute groups</button>
   </div>
 </div>
 
-<!-- Verification state banner -->
 {% set vstatus = pro_state.status or 'none' %}
 {% if vstatus == 'verified' %}
 <div class="verify-banner verify-ok">
@@ -148,7 +104,6 @@
 </div>
 {% endif %}
 
-<!-- Job progress card (shown via JS) -->
 <div class="job-card" id="jobCard">
   <div class="job-card-head">
     <span class="job-status-dot" id="jobDot"></span>
@@ -158,7 +113,6 @@
   <div class="job-metrics" id="jobMetrics"></div>
 </div>
 
-<!-- Filter bar -->
 {% if campaigns %}
 <div class="filter-card">
   <div class="filter-field flex-1">
@@ -175,6 +129,20 @@
     </select>
   </div>
   <div class="filter-field">
+    <label>Behavior</label>
+    <select class="input" id="campBehavior" onchange="filterCampaigns()" style="width:180px;">
+      <option value="">All behaviors</option>
+      <option value="infrastructure_probing">Infrastructure Probing</option>
+      <option value="data_exfiltration">Data Exfiltration</option>
+      <option value="key_theft">Key Theft</option>
+      <option value="credential_harvesting">Credential Harvesting</option>
+      <option value="reconnaissance">Reconnaissance</option>
+      <option value="targeted_attack">Targeted Attack</option>
+      <option value="broad_scanning">Broad Scanning</option>
+      <option value="unknown">Unknown</option>
+    </select>
+  </div>
+  <div class="filter-field">
     <label>Min members</label>
     <select class="input" id="campMinMembers" onchange="filterCampaigns()" style="width:130px;">
       <option value="">Any</option>
@@ -187,7 +155,6 @@
 </div>
 {% endif %}
 
-<!-- Campaigns table -->
 <div class="card" style="margin-top:0;">
   <div class="card-head">
     <div class="card-title">Campaigns</div>
@@ -202,34 +169,51 @@
           <th data-type="text">ID</th>
           <th data-type="text">Label</th>
           <th data-type="number" style="width:80px;">Score</th>
+          <th data-type="number" style="width:100px;">Confidence</th>
           <th data-type="number" style="width:90px;">Members</th>
-          <th data-type="date" style="width:175px;">First Seen</th>
-          <th data-type="date" style="width:175px;">Last Seen</th>
+          <th data-type="text" style="width:150px;">Behavior</th>
+          <th data-type="number" style="width:80px;">Requests</th>
+          <th data-type="number" style="width:70px;">IPs</th>
+          <th data-type="date" style="width:130px;">Last Seen</th>
           <th style="width:90px;"></th>
         </tr>
       </thead>
       <tbody id="campBody">
         {% for c in campaigns %}
         {% set score = c.score_det or 0 %}
-        <tr data-label="{{ (c.label or '')|lower }}" data-score="{{ score }}" data-members="{{ c.member_count or 0 }}">
+        {% set conf = ((c.confidence_score or 0) * 100) | round(1) %}
+        {% set bp = c.behavior_pattern or 'unknown' %}
+        <tr data-label="{{ (c.label or '')|lower }}" data-score="{{ score }}" data-members="{{ c.member_count or 0 }}" data-behavior="{{ bp }}">
           <td class="mono" style="font-size:0.82rem;">
             <a class="link" href="/dashboard/campaigns/{{ c.campaign_id }}">{{ c.campaign_id }}</a>
           </td>
           <td style="font-weight:500;">{{ c.label or '—' }}</td>
           <td>
-            {% if score >= 70 %}
-            <span class="score-pill score-high">{{ score }}</span>
-            {% elif score >= 40 %}
-            <span class="score-pill score-med">{{ score }}</span>
-            {% else %}
-            <span class="score-pill score-low">{{ score }}</span>
+            {% if score >= 70 %}<span class="score-pill score-high">{{ score }}</span>
+            {% elif score >= 40 %}<span class="score-pill score-med">{{ score }}</span>
+            {% else %}<span class="score-pill score-low">{{ score }}</span>
             {% endif %}
           </td>
           <td>
-            <span class="member-chip">{{ c.member_count }}</span>
+            {% if c.confidence_score %}
+            <div class="conf-mini">
+              <div class="conf-mini-bg"><div class="conf-mini-fill" style="width:{{ conf | int }}%;"></div></div>
+              <span class="conf-mini-val">{{ conf }}%</span>
+            </div>
+            {% else %}<span class="muted">—</span>{% endif %}
           </td>
-          <td class="mono muted" style="font-size:0.82rem;">{{ c.first_seen_at or '—' }}</td>
-          <td class="mono muted" style="font-size:0.82rem;">{{ c.last_seen_at or '—' }}</td>
+          <td>
+            <div><span class="member-chip">{{ c.member_count }}</span></div>
+            {% if c.ip_diversity %}<div class="member-sub">{{ c.ip_diversity }} IPs</div>{% endif %}
+          </td>
+          <td>
+            {% if bp and bp != 'unknown' %}
+            <span class="bp-pill bp-{{ bp }}">{{ bp | replace('_', ' ') }}</span>
+            {% else %}<span class="muted" style="font-size:0.8rem;">—</span>{% endif %}
+          </td>
+          <td class="mono" style="font-size:0.82rem;">{{ c.request_count or '—' }}</td>
+          <td class="mono" style="font-size:0.82rem;">{{ c.ip_diversity or '—' }}</td>
+          <td class="mono muted" style="font-size:0.82rem;">{{ (c.last_seen_at or '—')[:10] }}</td>
           <td>
             <button class="btn btn-danger btn-small" type="button"
               onclick="deleteCampaign('{{ c.campaign_id }}', this)">Delete</button>
@@ -246,7 +230,6 @@
   {% endif %}
 </div>
 
-<!-- Job History -->
 {% if job_history %}
 <div class="card" style="margin-top:14px;">
   <div class="card-head">
@@ -270,10 +253,7 @@
       <tbody>
         {% for j in job_history %}
         <tr>
-          <td>
-            <span class="hist-dot hist-{{ j.status }}"></span>
-            {{ j.status }}
-          </td>
+          <td><span class="hist-dot hist-{{ j.status }}"></span>{{ j.status }}</td>
           <td class="mono muted">{{ j.finished_at or '—' }}</td>
           <td class="mono">{{ j.duration_ms or '—' }}{% if j.duration_ms %} ms{% endif %}</td>
           <td class="mono">{{ j.actors_considered or '—' }}</td>
@@ -290,11 +270,11 @@
 {% endif %}
 
 <script>
-  const jobCard     = document.getElementById('jobCard');
-  const jobDot      = document.getElementById('jobDot');
-  const jobLabel    = document.getElementById('jobLabel');
-  const jobTime     = document.getElementById('jobTime');
-  const jobMetrics  = document.getElementById('jobMetrics');
+  const jobCard      = document.getElementById('jobCard');
+  const jobDot       = document.getElementById('jobDot');
+  const jobLabel     = document.getElementById('jobLabel');
+  const jobTime      = document.getElementById('jobTime');
+  const jobMetrics   = document.getElementById('jobMetrics');
   const recomputeBtn = document.getElementById('recomputeBtn');
   const recomputeEnabled = {{ (campaigns_recompute_enabled|default(true))|tojson }};
   let jobPollTimer = null;
@@ -303,37 +283,28 @@
   function renderJobCard(job) {
     if (!job || !job.status || job.status === 'none' || job.status === 'disabled') {
       jobCard.classList.remove('visible');
-      if (recomputeEnabled) {
-        recomputeBtn.disabled = false;
-        recomputeBtn.textContent = 'Recompute groups';
-      }
+      if (recomputeEnabled) { recomputeBtn.disabled = false; recomputeBtn.textContent = 'Recompute groups'; }
       return;
     }
-
     jobCard.classList.add('visible');
     jobDot.className = 'job-status-dot dot-' + job.status;
-
     const labels = { queued:'Queued', running:'Running…', completed:'Completed', failed:'Failed' };
     jobLabel.textContent = 'Recompute — ' + (labels[job.status] || job.status);
-
-    if (job.status === 'queued')    jobTime.textContent = job.created_at || '';
-    else if (job.status === 'running') jobTime.textContent = 'started ' + (job.started_at || '');
+    if (job.status === 'queued')         jobTime.textContent = job.created_at || '';
+    else if (job.status === 'running')   jobTime.textContent = 'started ' + (job.started_at || '');
     else if (job.status === 'completed') jobTime.textContent = (job.duration_ms !== undefined ? job.duration_ms + ' ms' : '');
-    else if (job.status === 'failed')   jobTime.textContent = '';
-
+    else if (job.status === 'failed')    jobTime.textContent = '';
     const metrics = [];
-    if (job.actors_considered  !== undefined) metrics.push({ label: 'Actors', val: job.actors_considered });
-    if (job.campaigns_count    !== undefined) metrics.push({ label: 'Campaigns', val: job.campaigns_count });
-    if (job.merges_done        !== undefined && job.merges_done > 0) metrics.push({ label: 'Merges', val: job.merges_done });
-    if (job.features_built     !== undefined) metrics.push({ label: 'Features built', val: job.features_built });
-    if (job.features_cached    !== undefined) metrics.push({ label: 'From cache', val: job.features_cached });
-    if (job.links_created      !== undefined) metrics.push({ label: 'Links created', val: job.links_created });
-    if (job.status === 'failed' && job.error) metrics.push({ label: 'Error', val: job.error });
-
+    if (job.actors_considered !== undefined) metrics.push({ label:'Actors', val: job.actors_considered });
+    if (job.campaigns_count   !== undefined) metrics.push({ label:'Campaigns', val: job.campaigns_count });
+    if (job.merges_done       !== undefined && job.merges_done > 0) metrics.push({ label:'Merges', val: job.merges_done });
+    if (job.features_built    !== undefined) metrics.push({ label:'Features built', val: job.features_built });
+    if (job.features_cached   !== undefined) metrics.push({ label:'From cache', val: job.features_cached });
+    if (job.links_created     !== undefined) metrics.push({ label:'Links created', val: job.links_created });
+    if (job.status === 'failed' && job.error) metrics.push({ label:'Error', val: job.error });
     jobMetrics.innerHTML = metrics.map(m =>
       `<div class="job-metric"><span>${escHtml(m.label)}</span><span class="jm-val">${escHtml(String(m.val))}</span></div>`
     ).join('');
-
     const busy = job.status === 'queued' || job.status === 'running';
     recomputeBtn.disabled = !recomputeEnabled || busy;
     recomputeBtn.textContent = busy ? 'Recomputing…' : 'Recompute groups';
@@ -356,8 +327,7 @@
   }
 
   async function recomputeCampaigns(btn) {
-    btn.disabled = true;
-    btn.textContent = 'Starting…';
+    btn.disabled = true; btn.textContent = 'Starting…';
     try {
       const res = await fetch('/dashboard/campaigns/recompute', { method: 'POST' });
       if (res.ok) {
@@ -366,78 +336,64 @@
         autoRefreshOnComplete = true;
         if (!jobPollTimer) jobPollTimer = setTimeout(fetchJobStatus, 1500);
       } else {
-        const text = await res.text();
-        alert('Error: ' + text);
-        btn.disabled = false;
-        btn.textContent = 'Recompute groups';
+        alert('Error: ' + await res.text());
+        btn.disabled = false; btn.textContent = 'Recompute groups';
       }
     } catch (e) {
       alert('Error: ' + e.message);
-      btn.disabled = false;
-      btn.textContent = 'Recompute groups';
+      btn.disabled = false; btn.textContent = 'Recompute groups';
     }
   }
 
   async function deleteCampaign(campaignId, btn) {
     if (!confirm(`Delete campaign ${campaignId}? This cannot be undone.`)) return;
-    btn.disabled = true;
-    btn.textContent = '…';
+    btn.disabled = true; btn.textContent = '…';
     try {
       const res = await fetch(`/dashboard/campaigns/${campaignId}`, { method: 'DELETE' });
-      if (res.ok) {
-        btn.closest('tr').remove();
-      } else {
-        const text = await res.text();
-        alert('Error deleting campaign: ' + text);
-        btn.disabled = false;
-        btn.textContent = 'Delete';
-      }
-    } catch (e) {
-      alert('Error: ' + e.message);
-      btn.disabled = false;
-      btn.textContent = 'Delete';
-    }
+      if (res.ok) { btn.closest('tr').remove(); }
+      else { alert('Error: ' + await res.text()); btn.disabled = false; btn.textContent = 'Delete'; }
+    } catch (e) { alert('Error: ' + e.message); btn.disabled = false; btn.textContent = 'Delete'; }
   }
 
   function escHtml(s) {
     return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   }
 
-  /* ── Campaign filter ── */
   function filterCampaigns() {
-    const q       = (document.getElementById('campSearch')?.value || '').toLowerCase();
+    const q    = (document.getElementById('campSearch')?.value || '').toLowerCase();
     const scoreF  = document.getElementById('campScore')?.value || '';
+    const bpF     = document.getElementById('campBehavior')?.value || '';
     const minM    = parseInt(document.getElementById('campMinMembers')?.value || '0', 10);
     let visible = 0;
     document.querySelectorAll('#campBody tr').forEach(tr => {
       const label   = tr.dataset.label || '';
       const score   = parseFloat(tr.dataset.score || '0');
       const members = parseInt(tr.dataset.members || '0', 10);
-      const matchText  = !q || label.includes(q);
-      const matchScore = !scoreF ||
+      const bp      = tr.dataset.behavior || '';
+      const matchText    = !q || label.includes(q);
+      const matchScore   = !scoreF ||
         (scoreF === 'high' && score >= 70) ||
         (scoreF === 'med'  && score >= 40 && score < 70) ||
         (scoreF === 'low'  && score < 40);
+      const matchBp      = !bpF || bp === bpF;
       const matchMembers = !minM || members >= minM;
-      const show = matchText && matchScore && matchMembers;
+      const show = matchText && matchScore && matchBp && matchMembers;
       tr.style.display = show ? '' : 'none';
       if (show) visible++;
     });
     const total = document.querySelectorAll('#campBody tr').length;
     const countEl = document.getElementById('campCount');
     if (countEl) {
-      const anyFilter = q || scoreF || minM;
+      const anyFilter = q || scoreF || bpF || minM;
       countEl.textContent = anyFilter ? `${visible} / ${total} groups` : `${total} group${total !== 1 ? 's' : ''}`;
     }
   }
 
   function clearCampFilter() {
-    const s = document.getElementById('campSearch');
-    const sc = document.getElementById('campScore');
-    const mm = document.getElementById('campMinMembers');
-    if (s) s.value = '';
-    if (sc) sc.value = '';
-    if (mm) mm.value = '';
+    ['campSearch','campScore','campBehavior','campMinMembers'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.value = '';
+    });
     filterCampaigns();
   }
 
