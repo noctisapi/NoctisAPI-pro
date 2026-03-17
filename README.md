@@ -97,12 +97,10 @@ Readme_images/     Screenshots for this README
 
 ```bash
 # 1. Clone
-git clone https://github.com/0x-unkwn0wn/noctisapi-pro
-cd noctisapi-pro
+git clone https://github.com/noctisapi/NoctisAPI-pro
+cd NoctisAPI-pro
 
-# 2. (Optional) Add GeoIP — place GeoLite2-Country.mmdb in data/
-
-# 3. Start dev stack
+# 2. Start dev stack
 docker compose -f compose/docker-compose.dev.yml up --build
 ```
 
@@ -120,18 +118,13 @@ The dev stack runs a one-shot database migrator before starting services. SQLite
 See [`documentation/ops/vps/DEPLOY.md`](documentation/ops/vps/DEPLOY.md) for the full step-by-step guide.
 
 ```bash
-# 1. Clone to server
-git clone https://github.com/0x-unkwn0wn/noctisapi-pro /opt/noctisapi-pro
+# Clone to server and run the installer
+git clone https://github.com/noctisapi/NoctisAPI-pro /opt/noctisapi-pro
 cd /opt/noctisapi-pro
-
-# 2. Configure environment
-cp .env.prod.example .env.prod
-# Edit .env.prod — see Environment Variables below
-
-# 3. Build and start
-docker build -t ghcr.io/0x-unkwn0wn/noctisapi-pro:latest .
-docker compose --env-file .env.prod -f compose/docker-compose.prod.yml up -d
+bash ops/vps/install.sh
 ```
+
+The installer prompts for your domain, email, image tag, and (optionally) MaxMind credentials for GeoIP — then writes `.env.prod` and brings up the full stack. Re-running is safe: if `.env.prod` already exists the wizard is skipped and only the deploy runs.
 
 ---
 
@@ -173,23 +166,9 @@ See `.env.prod.example` for the full annotated reference.
 
 ## PRO Licensing
 
-PRO features are enforced through the separate PRO backend. Without backend-validated licensing, the instance runs in Core mode with all PRO features disabled.
+PRO features use offline license verification — no outbound call to a backend is required. Without a valid license the instance runs in Core mode with all PRO features disabled.
 
-**Recommended configuration:**
-
-| Variable | Description |
-|---|---|
-| `LICENSE_KEY` | Your PRO license key (`sk_live_...`) |
-| `PRO_BACKEND_URL` | License validation endpoint |
-| `LICENSING_PINNED_PUBLIC_KEY_PATH` | Path to pinned RSA public key PEM (default: `/app/app/licensing_server_public_key.pem`) |
-| `INSTANCE_ID_PATH` | Stable installation identifier (default: `/var/lib/myapp/instance_id`) |
-| `HP_PRO_LEASE_CACHE_PATH` | Signed lease cache path (default: `/var/lib/myapp/pro_lease_cache.json`) |
-
-**Hardening:**
-- Public keys are loaded from pinned file paths only
-- Lease JWS is always verified locally with the pinned key
-- Offline grace period is bounded by a client-side constant — not configurable via env
-- If the lease expires and the backend is unreachable, the app falls back to Core mode
+Upload your `license.json` from the admin panel UI after first start, or place it at the path set by `HP_OFFLINE_LICENSE_PATH` (default: `/var/lib/myapp/license.json`).
 
 **Debugging license state:**
 ```bash
@@ -205,21 +184,12 @@ python /app/scripts/print_licensing_identity.py
 # Option A — set directly:
 INSTANCE_FINGERPRINT_SHA256=<64-char hex>
 
-# Option B — mount host machine-id:
-# Mount /etc/machine-id → /etc/host-machine-id
+# Option B — mount host machine-id (already in the prod compose):
 HP_HOST_MACHINE_ID_PATH=/etc/host-machine-id
 ```
 
 ---
 
-## Notes
-
-- Do not commit `.env.prod` or `GeoLite2-Country.mmdb` — both are in `.gitignore`
-- `HP_SEED` must be a long, stable random secret — changing it breaks existing actor IDs
-- `HONEYPOT_MONITOR_BASE_URL=http://app:8000` is already hardcoded in the prod compose file — do not set it in `.env.prod`
-- Manual override of PRO tier is disabled — licensing is backend-validated only
-
----
 
 ## Use Cases
 
@@ -234,7 +204,7 @@ HP_HOST_MACHINE_ID_PATH=/etc/host-machine-id
 ## Open Source Core
 
 The open-source Core version (without PRO features) is available at:
-[github.com/0x-unkwn0wn/noctisapi-core](https://github.com/0x-unkwn0wn/noctisapi-core)
+[github.com/noctisapi/noctisapi-core](https://github.com/noctisapi/noctisapi-core)
 
 ---
 
