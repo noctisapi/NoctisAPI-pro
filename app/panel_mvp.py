@@ -3299,6 +3299,11 @@ def list_campaigns(request: Request):
                   c.last_seen_at,
                   c.first_seen_at,
                   c.score_det,
+                  c.confidence_score,
+                  c.behavior_pattern,
+                  c.request_count,
+                  c.session_count,
+                  c.ip_diversity,
                   COUNT(l.actor_id) AS member_count
                 FROM campaigns c
                 LEFT JOIN campaign_actor_links l ON l.campaign_id = c.campaign_id
