@@ -2,7 +2,7 @@ services:
   migrate:
     image: ${HP_IMAGE:-ghcr.io/0x-unkwn0wn/noctisapi-pro}:${APP_VERSION}
     user: "0:0"
-    command: ["sh", "-c", "chown -R 10001:0 /data /var/lib/myapp && alembic upgrade head"]
+    command: ["sh", "-c", "chown -R 10001:0 /data /var/lib/myapp && alembic upgrade head && python scripts/download_geoip.py"]
     env_file:
       - ../.env.prod
     volumes:
@@ -21,7 +21,6 @@ services:
     volumes:
       - hp_prod_data:/data
       - hp_prod_myapp:/var/lib/myapp
-      - ../data/GeoLite2-Country.mmdb:/app/data/GeoLite2-Country.mmdb:ro
       - /etc/machine-id:/etc/host-machine-id:ro
       - ../data/siem:/var/log/noctisapi
     expose:
@@ -73,7 +72,6 @@ services:
     volumes:
       - hp_prod_data:/data
       - hp_prod_myapp:/var/lib/myapp
-      - ../data/GeoLite2-Country.mmdb:/app/data/GeoLite2-Country.mmdb:ro
       - /etc/machine-id:/etc/host-machine-id:ro
     expose:
       - "9001"
