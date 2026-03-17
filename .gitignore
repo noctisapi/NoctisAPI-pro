@@ -15,8 +15,9 @@ ENV/
 # Environment files
 .env
 .env.*
-# example prod file should be committed so users know what to set
+# example files should be committed
 !.env.prod.example
+!dist/.env.example
 
 # Logs
 *.log
@@ -49,5 +50,5 @@ Thumbs.db
 tests/
 
 # Build / cache
-dist/
 build/
+# dist/ is intentionally tracked — customer-facing deploy files

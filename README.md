@@ -95,17 +95,18 @@ Readme_images/     Screenshots for this README
 
 ## Production Deployment
 
-Deployment requires only Docker — no source code needed.
+Requires only Docker. No source code needed.
 
 ```bash
-# 1. Create an install directory and place install.sh inside it
 mkdir -p /opt/noctisapi && cd /opt/noctisapi
 
-# 2. Run the installer
-bash install.sh
+curl -fsSL https://get.noctisapi.com/docker-compose.yml -o docker-compose.yml
+curl -fsSL https://get.noctisapi.com/.env.example -o .env
+# Edit .env — fill in HP_PUBLIC_HOST, ACME_EMAIL, and HP_SEED
+docker compose up -d
 ```
 
-The installer prompts for your domain, email, image tag, and (optionally) MaxMind credentials for GeoIP — then pulls the Docker image and brings up the full stack. Re-running is safe: existing `.env.prod` and `docker-compose.prod.yml` are never overwritten.
+`HP_SEED` can be generated with: `openssl rand -hex 32`
 
 ---
 
