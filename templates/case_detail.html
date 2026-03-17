@@ -433,7 +433,7 @@
         <div class="evidence-item-head">
           <div>
             <div class="evidence-title">
-              <a class="link" href="/dashboard/sessions/{{ s.session_id }}">Session {{ s.session_id_short }}</a>
+              <a class="link" href="/dashboard/replay/{{ s.session_id }}">Session {{ s.session_id_short }}</a>
             </div>
             <div class="evidence-meta">
               Actor <span class="mono">{{ s.actor_id }}</span> &middot;
@@ -464,7 +464,7 @@
           <div>
             <div class="evidence-title">
               Step #{{ st.seq }} &mdash;
-              <a class="link mono" href="/dashboard/sessions/{{ st.session_id }}">{{ st.session_id[:8] }}</a>
+              <a class="link mono" href="/dashboard/replay/{{ st.session_id }}">{{ st.session_id[:8] }}</a>
             </div>
             <div class="evidence-meta">
               <span class="mono">{{ st.method }} {{ st.path }}</span> &middot;

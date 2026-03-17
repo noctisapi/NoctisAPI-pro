@@ -298,7 +298,7 @@
 
   {% if campaign.summary.representative_session_id or campaign.representative_session_id %}
   <div style="padding:14px 20px;border-top:1px solid var(--stroke);">
-    <a class="btn btn-primary btn-small" href="/dashboard/sessions/{{ campaign.summary.representative_session_id or campaign.representative_session_id }}">
+    <a class="btn btn-primary btn-small" href="/dashboard/replay/{{ campaign.summary.representative_session_id or campaign.representative_session_id }}">
       Open Representative Replay
     </a>
   </div>

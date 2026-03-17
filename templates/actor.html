@@ -38,7 +38,7 @@
       <span class="btn-label">Add to Case</span>
     </button>
     {% if actor.latest_session_id %}
-    <a class="btn btn-outline" href="/dashboard/sessions/{{ actor.latest_session_id }}">
+    <a class="btn btn-outline" href="/dashboard/replay/{{ actor.latest_session_id }}">
       <span class="btn-label">Latest Session</span>
     </a>
     {% endif %}
@@ -80,9 +80,9 @@
     {% endif %}
     <div class="campaign-actions">
       {% if actor_campaign.representative_session_id %}
-        <a class="btn btn-primary btn-small" href="/dashboard/sessions/{{ actor_campaign.representative_session_id }}">Representative Session</a>
+        <a class="btn btn-primary btn-small" href="/dashboard/replay/{{ actor_campaign.representative_session_id }}">Representative Session</a>
       {% elif actor.latest_session_id %}
-        <a class="btn btn-outline btn-small" href="/dashboard/sessions/{{ actor.latest_session_id }}">Latest Session</a>
+        <a class="btn btn-outline btn-small" href="/dashboard/replay/{{ actor.latest_session_id }}">Latest Session</a>
       {% endif %}
     </div>
   </div>
