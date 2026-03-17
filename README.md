@@ -98,15 +98,10 @@ Readme_images/     Screenshots for this README
 Requires only Docker. No source code needed.
 
 ```bash
-mkdir -p /opt/noctisapi && cd /opt/noctisapi
-
-curl -fsSL https://get.noctisapi.com/docker-compose.yml -o docker-compose.yml
-curl -fsSL https://get.noctisapi.com/.env.example -o .env
-# Edit .env — fill in HP_PUBLIC_HOST, ACME_EMAIL, and HP_SEED
-docker compose up -d
+curl -fsSL https://get.noctisapi.com/setup | bash
 ```
 
-`HP_SEED` can be generated with: `openssl rand -hex 32`
+Prompts for your domain and Let's Encrypt email — everything else is automatic. Re-running is safe: existing `.env` is never overwritten.
 
 ---
 
