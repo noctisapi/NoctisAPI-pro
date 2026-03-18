@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import logging
 import os
@@ -13,15 +14,14 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.serialization import load_pem_public_key
 
-# Fixed path where the RSA public key is embedded in the Docker image.
-# Matches: COPY . /app  →  app/licensing_server_public_key.pem  →  /app/app/licensing_server_public_key.pem
 PUBLIC_KEY_PATH = "/app/app/licensing_server_public_key.pem"
+_EXPECTED_PUBKEY_SHA256 = "118a86fc8f1c69609a71e3f314957a8221dd03febdf01745dc0be0d0a4088aea"
 
 
 def load_public_key_pem() -> bytes:
-    """Load the RSA public key PEM from the fixed image path.
+    """Load and verify the RSA public key PEM from the fixed image path.
 
-    Raises RuntimeError if the file is missing, unreadable, or empty.
+    Raises RuntimeError if the file is missing, unreadable, empty, or tampered.
     Callers should catch this and degrade to CORE.
     """
     try:
@@ -29,6 +29,8 @@ def load_public_key_pem() -> bytes:
             data = f.read()
         if not data:
             raise ValueError("PEM file is empty")
+        if hashlib.sha256(data).hexdigest() != _EXPECTED_PUBKEY_SHA256:
+            raise ValueError("public key integrity check failed")
         return data
     except Exception as exc:
         raise RuntimeError(

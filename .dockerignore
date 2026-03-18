@@ -1,0 +1,58 @@
+# Version control
+.git/
+.gitignore
+
+# Python artifacts
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Dev / test
+tests/
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Docs & metadata
+docs/
+documentation/
+Readme_images/
+README.md
+
+# Docker / compose / ops
+Dockerfile
+.dockerignore
+docker-compose.yml
+compose/
+ops/
+dist/
+
+# Data & runtime artifacts
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Secrets & env
+.env
+.env.*
+# Exclude private keys but keep public keys shipped with the app
+*.key
+# Root-level PEM files only (app/licensing_server_public_key.pem is needed)
+/*.pem
+
+# Scripts not needed at runtime
+backup_sqlite.sh
+Makefile
+
+# Editor
+.vscode/
+.idea/
+*.swp

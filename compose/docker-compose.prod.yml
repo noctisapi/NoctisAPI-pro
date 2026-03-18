@@ -13,6 +13,13 @@ services:
   app:
     image: ${HP_IMAGE:-ghcr.io/0x-unkwn0wn/noctisapi-pro}:${APP_VERSION}
     user: "10001:0"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     env_file:
       - ../.env.prod
     environment:
@@ -63,6 +70,13 @@ services:
   admin:
     image: ${HP_IMAGE:-ghcr.io/0x-unkwn0wn/noctisapi-pro}:${APP_VERSION}
     user: "10001:0"
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,noexec,nosuid
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     env_file:
       - ../.env.prod
     environment:
