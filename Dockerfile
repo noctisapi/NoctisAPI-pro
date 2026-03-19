@@ -45,11 +45,8 @@ COPY alembic.ini   ./alembic.ini
 COPY main.py       ./main.py
 COPY main_panel.py ./main_panel.py
 
-# Compile Python sources to bytecode and remove originals.
-# main.py / main_panel.py are kept as entry-point stubs (no PRO logic).
-RUN python -m compileall -q -j 0 app/ honey_licensing/ scripts/ \
-    && find app/ honey_licensing/ scripts/ \
-       -name "*.py" ! -name "__init__.py" -delete
+# Compile Python sources to bytecode for faster startup.
+RUN python -m compileall -q -j 0 app/ honey_licensing/ scripts/
 
 RUN useradd -r -u 10001 -g root appuser \
     && chown -R appuser:root /data /var/lib/myapp /app
