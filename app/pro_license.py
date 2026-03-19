@@ -12,6 +12,36 @@ from honey_licensing.offline_license import load_public_key_pem, resolve_local_l
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Online gate
+# ---------------------------------------------------------------------------
+# Set by app/license_online.py at startup via set_online_gate().
+# When set, is_pro_enabled() requires BOTH offline valid AND online allowed.
+# When None, online checks are not configured and offline validation is sufficient.
+_ONLINE_GATE_LOCK = threading.Lock()
+_ONLINE_GATE: Optional[Any] = None  # Callable[[], bool] | None
+
+
+def set_online_gate(fn: Optional[Any]) -> None:
+    """Register the online gate callback. Called once at app startup."""
+    global _ONLINE_GATE
+    with _ONLINE_GATE_LOCK:
+        _ONLINE_GATE = fn
+
+
+def _check_online_gate() -> bool:
+    """Return True if online gate is not configured or allows PRO."""
+    with _ONLINE_GATE_LOCK:
+        gate = _ONLINE_GATE
+    if gate is None:
+        return True
+    try:
+        return bool(gate())
+    except Exception:
+        logger.warning("pro_license: online gate raised an exception; denying PRO as failsafe")
+        return False
+
+
 _STATUS_LOCK = threading.Lock()
 _STATUS_CACHE: dict[str, Any] = {
     "checked_at": 0,
@@ -205,8 +235,20 @@ def get_backend_license_snapshot(*, force_refresh: bool = False) -> dict[str, An
 
 
 def is_pro_enabled() -> bool:
+    """Return True only when BOTH offline validation passes AND the online gate allows.
+
+    State machine:
+      offline invalid                              => False  (INVALID)
+      offline valid + online active                => True   (PRO_ACTIVE)
+      offline valid + online error within grace    => True   (PRO_GRACE)
+      offline valid + online revoked/expired/susp  => False  (PRO_OFF)
+      offline valid + online error grace exhausted => False  (PRO_OFF)
+      offline valid + no online check configured   => True   (offline-only mode)
+    """
     snapshot = get_backend_license_snapshot(force_refresh=False)
-    return bool(snapshot.get("pro_enabled"))
+    if not snapshot.get("pro_enabled"):
+        return False
+    return _check_online_gate()
 
 
 def clear_cache() -> None:
@@ -227,3 +269,19 @@ def clear_cache() -> None:
             "license_generation": 0,
             "deployment_id": None,
         }
+
+
+def get_online_state_snapshot() -> Optional[dict[str, Any]]:
+    """Return the current online license state dict, or None if not configured.
+
+    Reads from the license_online manager without importing it at module level
+    (avoids circular imports — license_online imports from pro_license).
+    """
+    try:
+        from app import license_online  # local import to avoid circular dependency
+        mgr = license_online.get_manager()
+        if mgr is None:
+            return None
+        return mgr.get_online_state()
+    except Exception:
+        return None

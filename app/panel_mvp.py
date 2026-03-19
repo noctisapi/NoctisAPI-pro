@@ -28,6 +28,7 @@ from app import pro_license
 from app import pro_ops
 from app import license_runtime
 from app import api_modular
+from app import license_online
 from app.honeypot_monitor import HoneypotAvailabilityMonitor, get_history as hp_get_history, get_summary as hp_get_summary
 from honey_licensing.client import compute_client_identity
 from honey_licensing.offline_license import LicenseVerifier, load_public_key_pem
@@ -382,16 +383,32 @@ def admin_license_status():
     Internal licensing debug endpoint.
 
     Intended for the admin service (typically bound to 127.0.0.1 in production).
+    Includes both offline and online license state.
     """
     snapshot = _license_runtime_snapshot()
     identity = compute_client_identity()
+    online_state = pro_license.get_online_state_snapshot()
     return {
-        "pro_enabled": bool(snapshot.get("pro_enabled")),
+        "pro_enabled": bool(licensing.is_pro_enabled()),
         "feature_flags": licensing.feature_flags(),
         "client_identity": identity,
         "licensing": snapshot,
+        "online": online_state,
         "config": _license_config_snapshot(),
         "hint": _license_error_hint(snapshot.get("last_error")),
+    }
+
+
+@app.get("/dashboard/license/online-status", include_in_schema=False, response_class=JSONResponse)
+def dashboard_license_online_status():
+    """Current online validation state (for admin UI polling)."""
+    online_state = pro_license.get_online_state_snapshot()
+    mgr = license_online.get_manager()
+    return {
+        "online_checks_configured": mgr is not None,
+        "online_allowed": license_online.is_online_allowed(),
+        "pro_enabled": bool(licensing.is_pro_enabled()),
+        "state": online_state,
     }
 
 
@@ -481,6 +498,13 @@ async def dashboard_license_upload(file: UploadFile = File(...)):
         licensing_snapshot["refresh_error"] = licensing_snapshot.get("last_error")
     hint = _license_error_hint(licensing_snapshot.get("refresh_error") or licensing_snapshot.get("last_error"))
     licensing_snapshot["hint"] = hint
+
+    # Trigger an immediate online check so the new license_id is validated right away.
+    # Run in a background thread to avoid blocking the upload response.
+    mgr = license_online.get_manager()
+    if mgr is not None and licensing_snapshot.get("valid"):
+        t = threading.Thread(target=mgr.check_now, name="license-online-check-after-upload", daemon=True)
+        t.start()
 
     return {
         "saved": True,

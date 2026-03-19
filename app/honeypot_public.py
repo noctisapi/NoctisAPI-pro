@@ -182,6 +182,7 @@ async def _startup_checks() -> None:
     licensing.set_pro_enabled_provider(pro_license.is_pro_enabled)
     pro_license.get_backend_license_snapshot(force_refresh=True)
     pro_ops.clear_cache()
+    _start_online_license_manager()
     conn = _db()
     try:
         _ensure_schema(conn)
@@ -195,9 +196,49 @@ async def _startup_checks() -> None:
 
 @app.on_event("shutdown")
 async def _shutdown_tasks() -> None:
+    from app import license_online as _lo
+    mgr = _lo.get_manager()
+    if mgr is not None:
+        mgr.stop()
     licensing.set_pro_enabled_provider(None)
+    pro_license.set_online_gate(None)
     pro_license.clear_cache()
     pro_ops.clear_cache()
+
+
+def _start_online_license_manager() -> None:
+    """Initialize and start the online license manager if configured.
+
+    Extracts license_id from the offline snapshot and instance_id from the
+    client identity, then registers the online gate with pro_license.
+    Safe to call even when HP_LICENSING_SERVER_URL is not set (no-op).
+    """
+    from app import license_online as _lo
+    from honey_licensing.client import compute_client_identity
+
+    def _get_license_id() -> Optional[str]:
+        try:
+            snap = pro_license.get_backend_license_snapshot(force_refresh=False)
+            lid = str(snap.get("license_id") or "").strip()
+            return lid or None
+        except Exception:
+            return None
+
+    def _get_instance_id() -> str:
+        try:
+            identity = compute_client_identity()
+            return str(identity.get("instance_id") or "").strip()
+        except Exception:
+            return ""
+
+    mgr = _lo.init_manager(
+        get_license_id_fn=_get_license_id,
+        get_instance_id_fn=_get_instance_id,
+    )
+    if mgr is not None:
+        pro_license.set_online_gate(_lo.is_online_allowed)
+        mgr.start()
+        _logger.info("startup: online license manager started")
 
 
 def _utc_now_iso() -> str:
