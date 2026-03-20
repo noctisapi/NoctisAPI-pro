@@ -231,9 +231,17 @@ def _start_online_license_manager() -> None:
         except Exception:
             return ""
 
+    def _get_instance_fingerprint() -> Optional[str]:
+        try:
+            from honey_licensing.client import compute_instance_fingerprint_sha256_hex
+            return compute_instance_fingerprint_sha256_hex()
+        except Exception:
+            return None
+
     mgr = _lo.init_manager(
         get_license_id_fn=_get_license_id,
         get_instance_id_fn=_get_instance_id,
+        get_instance_fingerprint_fn=_get_instance_fingerprint,
     )
     if mgr is not None:
         pro_license.set_online_gate(_lo.is_online_allowed)

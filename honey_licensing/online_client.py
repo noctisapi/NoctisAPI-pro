@@ -34,11 +34,12 @@ class LicenseCheckRequest:
     instance_id: str
     product: str
     version: str
+    instance_fingerprint: Optional[str] = None
 
 
 @dataclass(frozen=True)
 class LicenseCheckResponse:
-    status: Literal["active", "revoked", "expired", "suspended"]
+    status: Literal["active", "revoked", "expired", "suspended", "reuse_limit_exceeded"]
     expires_at: Optional[str] = None
     grace_period_seconds: Optional[int] = None
     reason: Optional[str] = None
@@ -63,7 +64,7 @@ class OnlineCheckError(RuntimeError):
 # ---------------------------------------------------------------------------
 
 
-_VALID_STATUSES = frozenset(("active", "revoked", "expired", "suspended"))
+_VALID_STATUSES = frozenset(("active", "revoked", "expired", "suspended", "reuse_limit_exceeded"))
 
 # HTTP status codes that should not be retried (clear protocol-level errors)
 _NO_RETRY_HTTP_STATUSES = frozenset((400, 401, 403, 404, 422, 501))
@@ -106,6 +107,8 @@ class OnlineLicenseClient:
             "product": req.product,
             "version": req.version,
         }
+        if req.instance_fingerprint:
+            payload["instance_fingerprint"] = req.instance_fingerprint
         headers = {
             "X-License-Check-Token": self._shared_secret,
             "Content-Type": "application/json",
