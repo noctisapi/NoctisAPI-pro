@@ -85,7 +85,7 @@ jobs:
 
       - name: Notify licensing server of new image version
         run: |
-          curl --fail -s -X POST "${{ secrets.LICENSING_SERVER_URL }}/v1/distribution/set-version" \
+          curl --fail -v -X POST "${{ secrets.LICENSING_SERVER_URL }}/v1/distribution/set-version" \
             -H "X-Admin-Token: ${{ secrets.LICENSING_ADMIN_TOKEN }}" \
             -H "Content-Type: application/json" \
             -d "{\"version\": \"${{ steps.version.outputs.sha }}\"}"
