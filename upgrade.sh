@@ -25,7 +25,7 @@ LICENSING_SERVER="${LICENSING_SERVER:-https://license.unkwn0wn.com}"
 LICENSE_KEY=""
 LICENSE_FILE=""
 INSTALL_DIR="$(pwd)"
-IMAGE_NAME="noctisapi/noctisapi-pro"
+LOCAL_IMAGE="noctisapi-pro"   # stable local tag — no external registry dependency
 AUTO_YES=0
 
 # ---------------------------------------------------------------------------
@@ -113,7 +113,7 @@ echo -e "${BOLD}  NoctisAPI Core → Pro Upgrade${RESET}"
 echo -e "${BOLD}──────────────────────────────────────────────${RESET}"
 echo -e "  Install dir : ${INSTALL_DIR}"
 echo -e "  PRO version : ${VERSION}"
-echo -e "  Image       : ${IMAGE_NAME}:${VERSION}"
+echo -e "  Image       : ${LOCAL_IMAGE}:${VERSION} (local)"
 echo -e "${BOLD}──────────────────────────────────────────────${RESET}"
 echo ""
 if [[ "$AUTO_YES" -eq 0 ]]; then
@@ -134,8 +134,20 @@ info "Downloading ${FILENAME}..."
 curl --progress-bar --location -o "${TMP_DIR}/${FILENAME}" "$DOWNLOAD_URL"
 
 info "Loading Docker image..."
-docker load -i "${TMP_DIR}/${FILENAME}"
-info "Image loaded: ${IMAGE_NAME}:${VERSION}"
+LOAD_OUTPUT=$(docker load -i "${TMP_DIR}/${FILENAME}")
+LOADED_REF=$(echo "$LOAD_OUTPUT" | grep "^Loaded image:" | grep -v "^Loaded image ID:" | awk '{print $NF}' || true)
+if [[ -z "$LOADED_REF" ]]; then
+  LOADED_REF=$(echo "$LOAD_OUTPUT" | grep "^Loaded image ID:" | awk '{print $NF}' || true)
+fi
+[[ -z "$LOADED_REF" ]] && error "Could not determine loaded image ref:\n${LOAD_OUTPUT}"
+
+info "Retagging to local stable name: ${LOCAL_IMAGE}:${VERSION} / ${LOCAL_IMAGE}:latest"
+docker tag "$LOADED_REF" "${LOCAL_IMAGE}:${VERSION}"
+docker tag "$LOADED_REF" "${LOCAL_IMAGE}:latest"
+if [[ "$LOADED_REF" != sha256:* ]]; then
+  docker rmi "$LOADED_REF" 2>/dev/null || true
+fi
+info "Image loaded: ${LOCAL_IMAGE}:${VERSION}"
 
 # ---------------------------------------------------------------------------
 # Step 3 — Update .env
@@ -156,10 +168,13 @@ _env_set() {
 # Create .env if it doesn't exist
 touch "$ENV_FILE"
 
-_env_set "HP_IMAGE"       "${IMAGE_NAME}"
-_env_set "APP_VERSION"    "${VERSION}"
+_env_set "HP_IMAGE"    "${LOCAL_IMAGE}"
+_env_set "APP_VERSION" "${VERSION}"
 
-# PRO licensing vars (only add if not already present)
+# GeoIP: Pro stores it in the data volume at /data/ (not a bind-mount like Core)
+_env_set "HP_GEOIP_DB" "/data/GeoLite2-Country.mmdb"
+
+# PRO licensing vars
 _env_set "HP_LICENSE_MODE"                      "offline"
 _env_set "HP_ENFORCE_LICENSE"                   "1"
 _env_set "HP_LICENSE_STATUS_REFRESH_SECONDS"    "30"
@@ -171,50 +186,213 @@ _env_set "HP_OFFLINE_PUBLIC_KEYS_BUNDLE_PATH"   "/app/app/offline_public_keys.js
 
 info ".env updated"
 
+# Preserve old compose project name so existing volumes survive
+OLD_PROJECT=$(cd "$INSTALL_DIR" && docker compose config --format json 2>/dev/null \
+  | jq -r '.name // ""' 2>/dev/null || echo "")
+if [[ -n "$OLD_PROJECT" ]]; then
+  _env_set "COMPOSE_PROJECT_NAME" "$OLD_PROJECT"
+  COMPOSE_PROJECT="$OLD_PROJECT"
+else
+  COMPOSE_PROJECT=$(basename "$INSTALL_DIR")
+fi
+
+ENV_BASENAME=$(basename "$ENV_FILE")
+
 # ---------------------------------------------------------------------------
-# Step 4 — Install license.json into volume (if provided)
+# Step 3b — Write Pro docker-compose.yml (replaces Core compose)
+# ---------------------------------------------------------------------------
+step "3b/5" "Writing Pro docker-compose.yml"
+
+[[ -f "$COMPOSE_FILE" ]] && cp "$COMPOSE_FILE" "${COMPOSE_FILE}.core-backup" && info "Backed up existing compose to docker-compose.yml.core-backup"
+mkdir -p "${INSTALL_DIR}/data/siem"
+
+cat > "$COMPOSE_FILE" <<'COMPOSE_EOF'
+# NoctisAPI PRO — written by upgrade.sh
+# Images are loaded locally from tar; pull_policy: never prevents any registry pull.
+services:
+  migrate:
+    image: ${HP_IMAGE:-noctisapi-pro}:${APP_VERSION:-latest}
+    pull_policy: never
+    user: "0:0"
+    command: ["sh", "-c", "chown -R 10001:0 /data /var/lib/myapp && alembic upgrade head && python scripts/download_geoip.py"]
+    env_file:
+      - ENVFILE_PLACEHOLDER
+    volumes:
+      - hp_prod_data:/data
+      - hp_prod_myapp:/var/lib/myapp
+    restart: "no"
+
+  app:
+    image: ${HP_IMAGE:-noctisapi-pro}:${APP_VERSION:-latest}
+    pull_policy: never
+    user: "10001:0"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    env_file:
+      - ENVFILE_PLACEHOLDER
+    environment:
+      - PYTHONPATH=/app
+    command: ["python", "main.py"]
+    volumes:
+      - hp_prod_data:/data
+      - hp_prod_myapp:/var/lib/myapp
+      - /etc/machine-id:/etc/host-machine-id:ro
+      - ./data/siem:/var/log/noctisapi
+    expose:
+      - "8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "scripts/check_app_ready.py"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.hp-api.rule=Host(`${HP_PUBLIC_HOST}`)"
+      - "traefik.http.routers.hp-api.entrypoints=websecure"
+      - "traefik.http.routers.hp-api.tls.certresolver=letsencrypt"
+      - "traefik.http.services.hp-api.loadbalancer.server.port=8000"
+      - "traefik.http.routers.hp-api.middlewares=hp-public-ratelimit"
+      - "traefik.http.middlewares.hp-public-ratelimit.ratelimit.average=${HP_PUBLIC_RATELIMIT_AVG:-120}"
+      - "traefik.http.middlewares.hp-public-ratelimit.ratelimit.burst=${HP_PUBLIC_RATELIMIT_BURST:-240}"
+      - "traefik.http.routers.hp-health.rule=Host(`${HP_PUBLIC_HOST}`) && (Path(`/health`) || Path(`/status`))"
+      - "traefik.http.routers.hp-health.entrypoints=websecure"
+      - "traefik.http.routers.hp-health.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.hp-health.service=hp-api"
+      - "traefik.http.routers.hp-health.priority=100"
+      - "traefik.http.routers.hp-health.middlewares=hp-monitor-headers,hp-monitor-ratelimit"
+      - "traefik.http.middlewares.hp-monitor-headers.headers.customrequestheaders.X-Internal-Monitor=1"
+      - "traefik.http.middlewares.hp-monitor-ratelimit.ratelimit.average=30"
+      - "traefik.http.middlewares.hp-monitor-ratelimit.ratelimit.burst=60"
+      - "traefik.http.routers.hp-internal.rule=PathPrefix(`/`)"
+      - "traefik.http.routers.hp-internal.entrypoints=webinternal"
+      - "traefik.http.routers.hp-internal.service=hp-api"
+      - "traefik.http.routers.hp-internal.priority=120"
+      - "traefik.http.routers.hp-internal.middlewares=hp-monitor-headers,hp-monitor-ratelimit"
+
+  admin:
+    image: ${HP_IMAGE:-noctisapi-pro}:${APP_VERSION:-latest}
+    pull_policy: never
+    user: "10001:0"
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,noexec,nosuid
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    env_file:
+      - ENVFILE_PLACEHOLDER
+    environment:
+      - PYTHONPATH=/app
+      - HONEYPOT_MONITOR_BASE_URL=http://app:8000
+    command: ["python", "main_panel.py"]
+    volumes:
+      - hp_prod_data:/data
+      - hp_prod_myapp:/var/lib/myapp
+      - /etc/machine-id:/etc/host-machine-id:ro
+    expose:
+      - "9001"
+    ports:
+      - "127.0.0.1:9001:9001"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  traefik:
+    image: traefik:v2.11
+    restart: unless-stopped
+    command:
+      - "--api.dashboard=false"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.webinternal.address=:8081"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
+      - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+    ports:
+      - "80:80"
+      - "443:443"
+      - "127.0.0.1:8081:8081"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik_letsencrypt:/letsencrypt
+    depends_on:
+      app:
+        condition: service_healthy
+      admin:
+        condition: service_started
+
+volumes:
+  hp_prod_data:
+  hp_prod_myapp:
+  traefik_letsencrypt:
+COMPOSE_EOF
+
+sed -i "s|ENVFILE_PLACEHOLDER|${ENV_BASENAME}|g" "$COMPOSE_FILE"
+info "docker-compose.yml written"
+
+# ---------------------------------------------------------------------------
+# Step 4 — Install license.json into volume
 # ---------------------------------------------------------------------------
 step "4/5" "Installing license.json"
 
+LIC_TMP="${TMP_DIR}/license.json"
+
 if [[ -n "$LICENSE_FILE" ]]; then
-  if [[ ! -f "$LICENSE_FILE" ]]; then
-    error "License file not found: ${LICENSE_FILE}"
-  fi
-  if ! jq empty "$LICENSE_FILE" 2>/dev/null; then
-    error "Invalid JSON in license file: ${LICENSE_FILE}"
-  fi
-
-  VOLUME_NAME=$(cd "$INSTALL_DIR" && docker compose config --format json 2>/dev/null \
-    | jq -r '.volumes | to_entries[] | select(.value.name? // .key | test("myapp")) | .value.name // .key' \
-    | head -1)
-
-  if [[ -z "$VOLUME_NAME" ]]; then
-    # Fallback: derive volume name from compose project
-    PROJECT=$(basename "$INSTALL_DIR")
-    VOLUME_NAME="${PROJECT}_hp_prod_myapp"
-  fi
-
-  info "Installing license.json into volume ${VOLUME_NAME}..."
-  cp "$LICENSE_FILE" "${TMP_DIR}/license.json"
-  docker run --rm \
-    -v "${VOLUME_NAME}:/var/lib/myapp" \
-    -v "${TMP_DIR}/license.json:/tmp/license.json:ro" \
-    busybox sh -c "cp /tmp/license.json /var/lib/myapp/license.json && chown 10001:0 /var/lib/myapp/license.json && chmod 600 /var/lib/myapp/license.json"
-  info "license.json installed"
+  [[ ! -f "$LICENSE_FILE" ]] && error "License file not found: ${LICENSE_FILE}"
+  jq empty "$LICENSE_FILE" 2>/dev/null || error "Invalid JSON in license file: ${LICENSE_FILE}"
+  cp "$LICENSE_FILE" "$LIC_TMP"
+  info "Using provided license file"
 else
-  warn "No --license-file provided. Skipping license.json installation."
-  warn "You can install it later with:"
-  warn "  docker run --rm -v <volume>:/var/lib/myapp -v /path/to/license.json:/tmp/license.json:ro \\"
-  warn "    busybox sh -c 'cp /tmp/license.json /var/lib/myapp/license.json'"
+  info "Fetching license.json from license server..."
+  HTTP_CODE=$(curl --silent --output "$LIC_TMP" --write-out "%{http_code}" \
+    -H "X-License-Key: ${LICENSE_KEY}" \
+    "${LICENSING_SERVER}/v1/distribution/license-file")
+  if [[ "$HTTP_CODE" != "200" ]]; then
+    DETAIL=$(jq -r '.detail // "unknown"' "$LIC_TMP" 2>/dev/null || echo "unknown")
+    case "$HTTP_CODE" in
+      404) error "No license.json issued yet. Contact support." ;;
+      *)   error "Could not fetch license.json (HTTP $HTTP_CODE): $DETAIL" ;;
+    esac
+  fi
+  jq empty "$LIC_TMP" 2>/dev/null || error "Invalid license.json received from server."
+  info "license.json fetched from server"
 fi
 
+VOLUME_NAME="${COMPOSE_PROJECT}_hp_prod_myapp"
+docker volume create "$VOLUME_NAME" &>/dev/null || true
+info "Installing into volume ${VOLUME_NAME}..."
+docker run --rm \
+  -v "${VOLUME_NAME}:/var/lib/myapp" \
+  -v "${LIC_TMP}:/tmp/license.json:ro" \
+  busybox sh -c \
+    "mkdir -p /var/lib/myapp && \
+     cp /tmp/license.json /var/lib/myapp/license.json && \
+     chown 10001:0 /var/lib/myapp/license.json && \
+     chmod 600 /var/lib/myapp/license.json"
+info "license.json installed"
+
 # ---------------------------------------------------------------------------
-# Step 5 — Restart services
+# Step 5 — Restart services (no pull — images are already local)
 # ---------------------------------------------------------------------------
 step "5/5" "Restarting services"
 
 cd "$INSTALL_DIR"
-info "Pulling image reference and restarting..."
+info "Restarting with PRO image (local, no pull)..."
 docker compose up -d --remove-orphans
 
 # ---------------------------------------------------------------------------
