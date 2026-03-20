@@ -263,7 +263,9 @@ class OnlineLicenseManager:
                 "reason": None if status == _STATUS_ACTIVE else f"server_returned_{status}",
             }
             self._state = new_state
-        self._save_state(new_state)
+        # reuse_limit_exceeded is transient — don't persist it so a restart doesn't stay blocked
+        if status != "reuse_limit_exceeded":
+            self._save_state(new_state)
 
     def _apply_check_error(self, *, license_id: str, error: str) -> None:
         now = _utc_now_iso()
