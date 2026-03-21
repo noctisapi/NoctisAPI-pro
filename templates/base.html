@@ -31,7 +31,12 @@
         <a class="link" href="/dashboard/honeypot">API Health</a>
         <a class="link" href="/dashboard/environment">Environment</a>
       </div>
-      <div class="muted" title="Access restricted to local interface">🔒 PRIVATE ACCESS</div>
+      <div style="display:flex;align-items:center;gap:12px;">
+        <span class="muted" title="Access restricted to local interface">🔒 PRIVATE ACCESS</span>
+        <form method="post" action="/logout" style="margin:0;">
+          <button type="submit" class="btn" style="font-size:12px;padding:4px 10px;">Logout</button>
+        </form>
+      </div>
     </div>
     <div class="container">
       {% block content %}{% endblock %}

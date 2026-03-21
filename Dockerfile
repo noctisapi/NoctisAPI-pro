@@ -19,7 +19,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app \
     PATH="/opt/venv/bin:$PATH" \
-    HP_ENFORCE_LICENSE=0 \
+    HP_ENFORCE_LICENSE=1 \
     HP_APP_ID=noctisapi-pro \
     INSTANCE_ID_PATH=/var/lib/myapp/instance_id
 

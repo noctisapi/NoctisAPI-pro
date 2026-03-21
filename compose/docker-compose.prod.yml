@@ -82,6 +82,7 @@ services:
     environment:
       - PYTHONPATH=/app
       - HONEYPOT_MONITOR_BASE_URL=http://app:8000
+      - HP_PANEL_TOKEN=${HP_PANEL_TOKEN}
     command: ["python", "main_panel.py"]
     volumes:
       - hp_prod_data:/data

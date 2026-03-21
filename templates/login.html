@@ -1,0 +1,119 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>NoctisAPI — Login</title>
+    <link rel="icon" type="image/png" href="/static/favicon.png?v=20260207" />
+    <link rel="stylesheet" href="/static/style.css?v=20260306" />
+    <style>
+      .login-wrap {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
+      }
+      .login-card {
+        background: var(--panel);
+        border: 1px solid var(--stroke);
+        border-radius: 12px;
+        padding: 40px 36px;
+        width: 100%;
+        max-width: 380px;
+      }
+      .login-brand {
+        font-size: 15px;
+        font-weight: 700;
+        letter-spacing: 1.5px;
+        text-transform: uppercase;
+        color: var(--muted);
+        margin-bottom: 28px;
+      }
+      .login-title {
+        font-size: 20px;
+        font-weight: 600;
+        margin: 0 0 24px;
+      }
+      .login-label {
+        display: block;
+        font-size: 12px;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: .5px;
+        margin-bottom: 6px;
+      }
+      .login-input {
+        width: 100%;
+        background: var(--panel2);
+        border: 1px solid var(--stroke);
+        border-radius: 6px;
+        color: var(--text);
+        font-size: 14px;
+        padding: 10px 12px;
+        outline: none;
+        margin-bottom: 16px;
+        transition: border-color .15s;
+      }
+      .login-input:focus {
+        border-color: #555;
+      }
+      .login-error {
+        background: rgba(220, 60, 60, .12);
+        border: 1px solid rgba(220, 60, 60, .3);
+        border-radius: 6px;
+        color: #f08080;
+        font-size: 13px;
+        padding: 9px 12px;
+        margin-bottom: 16px;
+      }
+      .login-submit {
+        width: 100%;
+        padding: 11px;
+        font-size: 14px;
+        border-radius: 6px;
+        background: rgba(255,255,255,.07);
+        border: 1px solid var(--stroke);
+        color: var(--text);
+        cursor: pointer;
+        font-weight: 600;
+        transition: background .15s;
+      }
+      .login-submit:hover { background: rgba(255,255,255,.12); }
+      .login-note {
+        font-size: 11px;
+        color: var(--muted);
+        margin-top: 18px;
+        line-height: 1.5;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="login-wrap">
+      <div class="login-card">
+        <div class="login-brand">NoctisAPI</div>
+        <h1 class="login-title">Panel access</h1>
+        {% if error %}
+        <div class="login-error">Invalid token. Try again.</div>
+        {% endif %}
+        <form method="post" action="/login" autocomplete="off">
+          <input type="hidden" name="next" value="{{ next }}" />
+          <label class="login-label" for="token">Access token</label>
+          <input
+            class="login-input"
+            type="password"
+            id="token"
+            name="token"
+            placeholder="HP_PANEL_TOKEN"
+            autofocus
+            required
+          />
+          <button class="login-submit" type="submit">Enter →</button>
+        </form>
+        <p class="login-note">
+          Session valid for 8 hours. Token is set via <code>HP_PANEL_TOKEN</code>.<br />
+          If unset, check container logs for the auto-generated token.
+        </p>
+      </div>
+    </div>
+  </body>
+</html>

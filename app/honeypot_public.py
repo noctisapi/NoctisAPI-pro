@@ -160,9 +160,26 @@ def _warn_if_default_seed() -> None:
             raise RuntimeError("HP_SEED must be set (HP_REQUIRE_SEED=1).")
 
 
+def _warn_startup_security() -> None:
+    fp_override = (os.getenv("INSTANCE_FINGERPRINT_SHA256") or "").strip()
+    if fp_override:
+        _logger.warning(
+            "SECURITY WARNING: INSTANCE_FINGERPRINT_SHA256 is set to a hardcoded value (%s...). "
+            "This bypasses machine-binding checks and should ONLY be used in development.",
+            fp_override[:12],
+        )
+    if not (os.getenv("HP_ENFORCE_LICENSE") or "").strip():
+        _logger.warning(
+            "SECURITY WARNING: HP_ENFORCE_LICENSE is not set in the environment. "
+            "The Dockerfile default is 1 — if you see this, an explicit override is active. "
+            "License enforcement may be disabled."
+        )
+
+
 @app.on_event("startup")
 async def _startup_checks() -> None:
     _warn_if_default_seed()
+    _warn_startup_security()
     import os as _os
     from app.system_settings import load_settings_overrides, ensure_settings_table
     _ss_conn = _db()

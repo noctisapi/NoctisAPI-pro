@@ -100,6 +100,7 @@ fi
 DOWNLOAD_URL=$(jq -r '.download_url'   /tmp/_noctis_resp.json)
 FILENAME=$(jq -r '.filename'           /tmp/_noctis_resp.json)
 VERSION=$(jq -r '.image_version'       /tmp/_noctis_resp.json)
+EXPECTED_SHA256=$(jq -r '.sha256 // empty' /tmp/_noctis_resp.json 2>/dev/null || true)
 rm -f /tmp/_noctis_resp.json
 
 info "License valid — PRO image version: ${BOLD}${VERSION}${RESET}"
@@ -132,6 +133,27 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 
 info "Downloading ${FILENAME}..."
 curl --progress-bar --location -o "${TMP_DIR}/${FILENAME}" "$DOWNLOAD_URL"
+
+# Verify SHA256 checksum if the server provided one
+if [[ -n "${EXPECTED_SHA256:-}" ]]; then
+  info "Verifying SHA256 checksum..."
+  if command -v sha256sum &>/dev/null; then
+    ACTUAL_SHA256=$(sha256sum "${TMP_DIR}/${FILENAME}" | awk '{print $1}')
+  elif command -v shasum &>/dev/null; then
+    ACTUAL_SHA256=$(shasum -a 256 "${TMP_DIR}/${FILENAME}" | awk '{print $1}')
+  else
+    warn "sha256sum / shasum not available — skipping verification"
+    ACTUAL_SHA256=""
+  fi
+  if [[ -n "$ACTUAL_SHA256" ]]; then
+    if [[ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]]; then
+      error "SHA256 mismatch!\n  Expected : ${EXPECTED_SHA256}\n  Actual   : ${ACTUAL_SHA256}\nThe download may be corrupted or tampered with."
+    fi
+    info "Checksum verified: ${ACTUAL_SHA256}"
+  fi
+else
+  warn "Server did not provide a SHA256 checksum — skipping integrity check."
+fi
 
 info "Loading Docker image..."
 LOAD_OUTPUT=$(docker load -i "${TMP_DIR}/${FILENAME}")

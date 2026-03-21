@@ -1,7 +1,9 @@
-# panel_mvp.py (sin auth, solo protegido por SSH tunnel)
+# panel_mvp.py
 import hashlib
+import hmac as _hmac
 import logging
 import os
+import secrets as _secrets
 import time
 import threading
 import json
@@ -47,8 +49,87 @@ _CAMPAIGN_AUTO_INTERVAL = int(os.getenv("HP_CAMPAIGN_AUTO_RECOMPUTE_INTERVAL", "
 # Used to identify internal panelâ†’public requests so they are not logged as actors.
 _HP_MONITOR_SECRET = os.getenv("HP_MONITOR_SECRET", "").strip()
 
+# ---------------------------------------------------------------------------
+# Panel authentication
+# ---------------------------------------------------------------------------
+_PANEL_SESSION_COOKIE = "hp_panel_session"
+_PANEL_SESSION_TTL = 8 * 3600  # 8 hours
+_PANEL_AUTH_BYPASS = {"/health", "/ready", "/login", "/logout"}
+
+_raw_panel_token = os.getenv("HP_PANEL_TOKEN", "").strip()
+if not _raw_panel_token:
+    _raw_panel_token = _secrets.token_hex(24)
+    _logger.warning(
+        "HP_PANEL_TOKEN is not set. Panel is using a one-time auto-generated token "
+        "for this session: %s  — Set HP_PANEL_TOKEN in your environment to persist "
+        "access across restarts.",
+        _raw_panel_token,
+    )
+_PANEL_TOKEN_BYTES = _raw_panel_token.encode()
+
+
+def _make_session_token() -> str:
+    expires = int(time.time()) + _PANEL_SESSION_TTL
+    mac = _hmac.new(_PANEL_TOKEN_BYTES, f"panel:{expires}".encode(), "sha256").hexdigest()
+    return f"{expires}:{mac}"
+
+
+def _verify_session_token(token: str) -> bool:
+    try:
+        expires_str, provided_mac = token.split(":", 1)
+        expires = int(expires_str)
+        if time.time() > expires:
+            return False
+        expected_mac = _hmac.new(
+            _PANEL_TOKEN_BYTES, f"panel:{expires}".encode(), "sha256"
+        ).hexdigest()
+        return _hmac.compare_digest(provided_mac, expected_mac)
+    except Exception:
+        return False
+
+
+class _PanelAuthMiddleware:
+    """ASGI middleware that enforces session-cookie auth on all panel routes."""
+
+    def __init__(self, app_inner):
+        self._app = app_inner
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] not in ("http", "websocket"):
+            await self._app(scope, receive, send)
+            return
+
+        path = scope.get("path", "")
+        if path.startswith("/static/") or path in _PANEL_AUTH_BYPASS:
+            await self._app(scope, receive, send)
+            return
+
+        headers = {k: v for k, v in scope.get("headers", [])}
+        cookie_header = headers.get(b"cookie", b"").decode("latin-1")
+        session_token = None
+        for part in cookie_header.split(";"):
+            name, _, value = part.strip().partition("=")
+            if name.strip() == _PANEL_SESSION_COOKIE:
+                session_token = value.strip()
+                break
+
+        if session_token and _verify_session_token(session_token):
+            await self._app(scope, receive, send)
+            return
+
+        from urllib.parse import quote as _quote
+        redirect_url = f"/login?next={_quote(path, safe='')}"
+        resp_headers = [
+            (b"location", redirect_url.encode()),
+            (b"content-type", b"text/html; charset=utf-8"),
+        ]
+        await send({"type": "http.response.start", "status": 302, "headers": resp_headers})
+        await send({"type": "http.response.body", "body": b"", "more_body": False})
+
+
 app = FastAPI(title=APP_NAME)
 app.add_middleware(RequestTimeoutMiddleware, timeout=get_request_timeout())
+app.add_middleware(_PanelAuthMiddleware)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
@@ -357,6 +438,45 @@ def _stop_background_tasks():
     licensing.set_pro_enabled_provider(None)
     pro_license.clear_cache()
     pro_ops.clear_cache()
+
+
+@app.get("/login", include_in_schema=False, response_class=HTMLResponse)
+async def login_page(request: Request, next: str = "/dashboard", error: str = ""):
+    return templates.TemplateResponse(
+        "login.html", {"request": request, "next": next, "error": error}
+    )
+
+
+@app.post("/login", include_in_schema=False)
+async def login_submit(request: Request):
+    form = await request.form()
+    token_input = str(form.get("token", "")).strip()
+    next_url = str(form.get("next", "/dashboard")).strip() or "/dashboard"
+    if not next_url.startswith("/"):
+        next_url = "/dashboard"
+    if _hmac.compare_digest(token_input.encode(), _PANEL_TOKEN_BYTES):
+        session = _make_session_token()
+        response = RedirectResponse(url=next_url, status_code=303)
+        response.set_cookie(
+            _PANEL_SESSION_COOKIE,
+            session,
+            httponly=True,
+            samesite="strict",
+            max_age=_PANEL_SESSION_TTL,
+            secure=False,  # panel is localhost-only; set True if exposed via TLS proxy
+        )
+        return response
+    from urllib.parse import quote as _quote
+    return RedirectResponse(
+        url=f"/login?next={_quote(next_url, safe='')}&error=1", status_code=303
+    )
+
+
+@app.post("/logout", include_in_schema=False)
+async def logout():
+    response = RedirectResponse(url="/login", status_code=303)
+    response.delete_cookie(_PANEL_SESSION_COOKIE)
+    return response
 
 
 @app.get("/health", tags=["Health"], response_class=PlainTextResponse)

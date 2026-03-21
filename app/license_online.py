@@ -236,11 +236,20 @@ class OnlineLicenseManager:
         try:
             resp = self._client.check(req)
             self._apply_check_result(license_id=license_id, status=resp.status)
-            logger.info(
-                "license_online: check ok license_id=%s status=%s",
-                license_id,
-                resp.status,
-            )
+            if resp.status == "reuse_limit_exceeded":
+                logger.warning(
+                    "license_online: REUSE LIMIT EXCEEDED license_id=%s instance_id=%s — "
+                    "PRO features denied. Another instance may be using this license. "
+                    "Contact support if this is unexpected.",
+                    license_id,
+                    instance_id,
+                )
+            else:
+                logger.info(
+                    "license_online: check ok license_id=%s status=%s",
+                    license_id,
+                    resp.status,
+                )
         except OnlineCheckError as exc:
             self._apply_check_error(license_id=license_id, error=str(exc))
             logger.warning(
