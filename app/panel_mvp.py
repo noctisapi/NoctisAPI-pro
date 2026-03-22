@@ -497,6 +497,12 @@ def internal_ready():
     return JSONResponse(state)
 
 
+@app.get("/dashboard/license", include_in_schema=False)
+def dashboard_license_page():
+    """Redirect to the dashboard overview which contains the license setup modal."""
+    return RedirectResponse(url="/dashboard", status_code=302)
+
+
 @app.get("/admin/license", include_in_schema=False, response_class=JSONResponse)
 def admin_license_status():
     """
@@ -3295,7 +3301,8 @@ def session_detail_legacy(session_id: str, request: Request):
         sess["started_fmt"] = fmt_ts(sess.get("started_at") or "")
         sess["ended_fmt"] = fmt_ts(sess.get("ended_at")) if sess.get("ended_at") else "-"
         cur.execute("SELECT COUNT(*) AS cnt FROM session_steps WHERE session_id=?", (session_id,))
-        steps_total = int((cur.fetchone() or {}).get("cnt") or 0)
+        _cnt_row = cur.fetchone()
+        steps_total = int(_cnt_row["cnt"] if _cnt_row else 0)
         _steps_cap = 10
         is_pro_session = _tier_has_feature(licensing.Feature.REPLAY)
         if is_pro_session:
