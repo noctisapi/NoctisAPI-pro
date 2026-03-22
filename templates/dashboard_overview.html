@@ -175,32 +175,6 @@
   </div>
 </div>
 
-<style>
-  .kpi-card-locked { opacity: 0.55; }
-  .kpi-locked { color: var(--muted) !important; letter-spacing: 0.05em; }
-  .upgrade-nudge {
-    display: flex;
-    flex-direction: column;
-    gap: 5px;
-    padding: 10px 12px;
-    border-radius: 6px;
-    background: rgba(122, 184, 245, 0.05);
-    border: 1px solid rgba(122, 184, 245, 0.15);
-    font-size: 0.8rem;
-    color: var(--muted);
-  }
-  .upgrade-nudge-icon { font-size: 1rem; }
-  .upgrade-nudge-link {
-    color: #7ab8f5;
-    text-decoration: none;
-    font-weight: 600;
-    font-size: 0.78rem;
-  }
-  .upgrade-nudge-link:hover { text-decoration: underline; }
-  .kpi-value-alert { color: #ffa94d !important; }
-  .kpi-card[onclick] { transition: background 0.15s; }
-  .kpi-card[onclick]:hover { background: rgba(255,255,255,.04); }
-</style>
 
 <script>
   const eventsByDay = {{ events_by_day|tojson }};
@@ -432,6 +406,93 @@
     }
   }
 
+  /* ── Retro console chart design tokens ─────────────────────────────── */
+  const R = {
+    green:  '#4a9e6e',
+    cyan:   '#38b8c8',
+    amber:  '#c88020',
+    red:    '#c04040',
+    muted:  '#4a5a6a',
+    stroke: '#1c2333',
+    mono:   '"JetBrains Mono", ui-monospace, monospace',
+  };
+
+  /* ── Plugin: dark chart-area fill (behind gridlines) ────────────────── */
+  const chartBgPlugin = {
+    id: 'chartBg',
+    beforeDraw(chart) {
+      const { ctx, chartArea: ca } = chart;
+      if (!ca) return;
+      ctx.save();
+      ctx.fillStyle = 'rgba(0,0,0,0.18)';
+      ctx.fillRect(ca.left, ca.top, ca.width, ca.height);
+      ctx.restore();
+    }
+  };
+
+  /* ── Plugin: terminal cursor — 4×4 square on last data point ─────────── */
+  const lastMarkerPlugin = {
+    id: 'lastMarker',
+    afterDraw(chart) {
+      const { ctx } = chart;
+      chart.data.datasets.forEach((ds, di) => {
+        const meta = chart.getDatasetMeta(di);
+        if (!meta.visible || meta.type !== 'line') return;
+        const pts = meta.data;
+        if (!pts.length) return;
+        const last = pts[pts.length - 1];
+        ctx.save();
+        ctx.fillStyle = ds.borderColor || R.green;
+        ctx.fillRect(last.x - 2, last.y - 2, 4, 4);
+        ctx.restore();
+      });
+    }
+  };
+
+  const commonOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: { duration: 350, easing: 'linear' },
+    interaction: { mode: 'index', intersect: false },
+    plugins: {
+      legend: {
+        display: true,
+        labels: {
+          color: R.muted,
+          font: { family: R.mono, size: 10 },
+          boxWidth: 8, boxHeight: 2,
+        }
+      },
+      tooltip: {
+        backgroundColor: '#0c0e14',
+        borderColor: R.stroke,
+        borderWidth: 1,
+        titleColor: '#c4d0dc',
+        bodyColor: R.muted,
+        titleFont: { family: R.mono, size: 11 },
+        bodyFont:  { family: R.mono, size: 11 },
+        displayColors: true,
+        padding: 8,
+        cornerRadius: 0,
+        callbacks: {
+          label: (ctx) => `  ${ctx.dataset.label}: ${ctx.parsed.y}`,
+        }
+      }
+    },
+    scales: {
+      x: {
+        grid:   { color: 'rgba(255,255,255,0.04)' },
+        border: { color: R.stroke },
+        ticks:  { color: R.muted, font: { family: R.mono, size: 10 }, maxTicksLimit: 7, maxRotation: 0 },
+      },
+      y: {
+        grid:   { color: 'rgba(255,255,255,0.05)' },
+        border: { color: R.stroke },
+        ticks:  { color: R.muted, font: { family: R.mono, size: 10 } },
+      }
+    }
+  };
+
   const renderCharts = () => {
     const eventsMap = byDay(eventsByDay);
     const days = Object.keys(eventsMap).sort();
@@ -450,69 +511,52 @@
     const stageDays = Object.keys(stageMap).sort();
     const stageVals = stageDays.map(d => stageMap[d] || 0);
 
-    const commonOptions = {
-      responsive: true,
-      maintainAspectRatio: false,
-      interaction: { mode: "index", intersect: false },
-      plugins: {
-        legend: {
-          display: true,
-          labels: { color: "#cfcfcf", boxWidth: 12, boxHeight: 12 }
-        },
-        tooltip: {
-          backgroundColor: "rgba(18,18,18,0.92)",
-          borderColor: "rgba(255,255,255,0.1)",
-          borderWidth: 1,
-          titleColor: "#fff",
-          bodyColor: "#e6e6e6",
-          displayColors: true,
-          padding: 10
-        }
-      },
-      scales: {
-        x: {
-          grid: { color: "rgba(255,255,255,0.06)" },
-          ticks: { color: "#9a9a9a", maxTicksLimit: 7 }
-        },
-        y: {
-          grid: { color: "rgba(255,255,255,0.08)" },
-          ticks: { color: "#9a9a9a" }
-        }
-      }
-    };
-
-    new Chart(document.getElementById("chart-events"), {
-      type: "line",
+    /* Events per day — muted green line, sharp (tension:0) */
+    new Chart(document.getElementById('chart-events'), {
+      type: 'line',
+      plugins: [chartBgPlugin, lastMarkerPlugin],
       data: {
         labels: days,
         datasets: [{
-          label: "Events",
+          label: 'events/day',
           data: events,
-          borderColor: "#7dd3fc",
-          backgroundColor: "rgba(125,211,252,0.15)",
+          borderColor: R.green,
+          backgroundColor: 'rgba(74,158,110,0.07)',
           fill: true,
-          tension: 0.3,
-          pointRadius: 3,
-          pointHoverRadius: 5
+          tension: 0,
+          borderWidth: 1.5,
+          pointRadius: 0,
+          pointHoverRadius: 3,
+          pointHoverBackgroundColor: R.green,
+          pointHoverBorderColor: '#0c0e14',
+          pointHoverBorderWidth: 1,
         }]
       },
       options: commonOptions
     });
 
-    new Chart(document.getElementById("chart-actors"), {
-      type: "bar",
+    /* New vs recurrent actors — stacked bars, sharp corners */
+    new Chart(document.getElementById('chart-actors'), {
+      type: 'bar',
+      plugins: [chartBgPlugin],
       data: {
         labels: actorDays,
         datasets: [
           {
-            label: "New",
+            label: 'new',
             data: newVals,
-            backgroundColor: "rgba(79,209,197,0.8)"
+            backgroundColor: 'rgba(74,158,110,0.65)',
+            borderColor: R.green,
+            borderWidth: 1,
+            borderRadius: 0,
           },
           {
-            label: "Recurrent",
+            label: 'recurrent',
             data: recVals,
-            backgroundColor: "rgba(102,126,234,0.8)"
+            backgroundColor: 'rgba(56,184,200,0.5)',
+            borderColor: R.cyan,
+            borderWidth: 1,
+            borderRadius: 0,
           }
         ]
       },
@@ -521,24 +565,31 @@
         scales: {
           ...commonOptions.scales,
           x: { ...commonOptions.scales.x, stacked: true },
-          y: { ...commonOptions.scales.y, stacked: true }
+          y: { ...commonOptions.scales.y, stacked: true },
         }
       }
     });
 
-    new Chart(document.getElementById("chart-stages"), {
-      type: "line",
+    /* Stage progression — stepped red line (critical signal) */
+    new Chart(document.getElementById('chart-stages'), {
+      type: 'line',
+      plugins: [chartBgPlugin, lastMarkerPlugin],
       data: {
         labels: stageDays,
         datasets: [{
-          label: "Max stage",
+          label: 'max_stage',
           data: stageVals,
-          borderColor: "#fca5a5",
-          backgroundColor: "rgba(252,165,165,0.12)",
+          borderColor: R.red,
+          backgroundColor: 'rgba(192,64,64,0.06)',
           fill: true,
           stepped: true,
-          pointRadius: 3,
-          pointHoverRadius: 5
+          tension: 0,
+          borderWidth: 1.5,
+          pointRadius: 0,
+          pointHoverRadius: 3,
+          pointHoverBackgroundColor: R.red,
+          pointHoverBorderColor: '#0c0e14',
+          pointHoverBorderWidth: 1,
         }]
       },
       options: commonOptions

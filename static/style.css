@@ -382,8 +382,39 @@ input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(.6) opaci
   border-radius: 2px;
   background: rgba(0,0,0,.2);
   padding: 10px;
+  position: relative;
+  overflow: hidden;
 }
-.chart-canvas { display: block; height: 140px; width: 100%; overflow: hidden; }
+/* Subtle scanline overlay — terminal CRT feel */
+.chart-frame::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    to bottom,
+    transparent 0px,
+    transparent 3px,
+    rgba(0,0,0,0.055) 3px,
+    rgba(0,0,0,0.055) 4px
+  );
+  pointer-events: none;
+  z-index: 1;
+}
+.chart-canvas { display: block; height: 140px; width: 100%; position: relative; z-index: 0; }
+
+/* Live pulse indicator on chart-block title */
+.chart-title::before {
+  content: '▶';
+  font-size: 7px;
+  margin-right: 6px;
+  color: var(--accent);
+  opacity: 0.5;
+  animation: chart-live-pulse 2.4s ease-in-out infinite;
+}
+@keyframes chart-live-pulse {
+  0%, 100% { opacity: 0.2; }
+  50%       { opacity: 0.8; }
+}
 
 .bars { display: flex; align-items: flex-end; gap: 4px; height: 64px; width: 100%; }
 .bar  { display: flex; flex-direction: column; justify-content: flex-end; width: 10px; gap: 2px; }
