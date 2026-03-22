@@ -35,6 +35,7 @@ class LicenseCheckRequest:
     product: str
     version: str
     instance_fingerprint: Optional[str] = None
+    client_tier: Optional[str] = None  # "pro" | "core" — reported by client for server-side visibility
 
 
 @dataclass(frozen=True)
@@ -109,6 +110,8 @@ class OnlineLicenseClient:
         }
         if req.instance_fingerprint:
             payload["instance_fingerprint"] = req.instance_fingerprint
+        if req.client_tier:
+            payload["client_tier"] = req.client_tier
         headers = {
             "X-License-Check-Token": self._shared_secret,
             "Content-Type": "application/json",

@@ -100,6 +100,7 @@ class OnlineLicenseManager:
         get_license_id_fn: Callable[[], Optional[str]],
         get_instance_id_fn: Callable[[], str],
         get_instance_fingerprint_fn: Optional[Callable[[], Optional[str]]] = None,
+        get_client_tier_fn: Optional[Callable[[], Optional[str]]] = None,
     ) -> None:
         self._client = client
         self._state_path = state_path
@@ -110,6 +111,7 @@ class OnlineLicenseManager:
         self._get_license_id = get_license_id_fn
         self._get_instance_id = get_instance_id_fn
         self._get_instance_fingerprint = get_instance_fingerprint_fn
+        self._get_client_tier = get_client_tier_fn
 
         self._lock = threading.Lock()
         self._state: Dict[str, Any] = self._load_state()
@@ -225,12 +227,21 @@ class OnlineLicenseManager:
                 instance_fingerprint = self._get_instance_fingerprint()
             except Exception:
                 pass
+
+        client_tier: Optional[str] = None
+        if self._get_client_tier is not None:
+            try:
+                client_tier = self._get_client_tier()
+            except Exception:
+                pass
+
         req = LicenseCheckRequest(
             license_id=license_id,
             instance_id=instance_id,
             product=self._product,
             version=self._app_version,
             instance_fingerprint=instance_fingerprint,
+            client_tier=client_tier,
         )
 
         try:
@@ -363,6 +374,7 @@ class OnlineLicenseManager:
         get_license_id_fn: Callable[[], Optional[str]],
         get_instance_id_fn: Callable[[], str],
         get_instance_fingerprint_fn: Optional[Callable[[], Optional[str]]] = None,
+        get_client_tier_fn: Optional[Callable[[], Optional[str]]] = None,
     ) -> Optional["OnlineLicenseManager"]:
         """Build from environment variables. Returns None if online checks are not configured."""
         client = OnlineLicenseClient.from_env()
@@ -387,6 +399,7 @@ class OnlineLicenseManager:
             get_license_id_fn=get_license_id_fn,
             get_instance_id_fn=get_instance_id_fn,
             get_instance_fingerprint_fn=get_instance_fingerprint_fn,
+            get_client_tier_fn=get_client_tier_fn,
         )
 
 
@@ -403,6 +416,7 @@ def init_manager(
     get_license_id_fn: Callable[[], Optional[str]],
     get_instance_id_fn: Callable[[], str],
     get_instance_fingerprint_fn: Optional[Callable[[], Optional[str]]] = None,
+    get_client_tier_fn: Optional[Callable[[], Optional[str]]] = None,
 ) -> Optional[OnlineLicenseManager]:
     """Initialize the module singleton from env vars. Returns None if not configured.
 
@@ -416,6 +430,7 @@ def init_manager(
             get_license_id_fn=get_license_id_fn,
             get_instance_id_fn=get_instance_id_fn,
             get_instance_fingerprint_fn=get_instance_fingerprint_fn,
+            get_client_tier_fn=get_client_tier_fn,
         )
         _MANAGER = mgr
         if mgr is None:
