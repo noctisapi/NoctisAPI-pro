@@ -1797,6 +1797,29 @@ def dashboard_overview(request: Request):
         active_7d = int(cur.fetchone()["cnt"] or 0)
         cur.execute("SELECT COUNT(*) AS cnt FROM events")
         events_total = int(cur.fetchone()["cnt"] or 0)
+        _is_pro_overview = _tier_has_feature(licensing.Feature.ANALYTICS)
+        if _is_pro_overview:
+            cur.execute(
+                """
+                SELECT COUNT(*) AS cnt FROM events
+                WHERE kind IN (
+                  'root_console','cloud_metadata','infra_vault','admin_secrets',
+                  'backup_download','backup_list','internal_config','root_shell',
+                  'admin_login_attempt','export_users','export_audit','upload_trap',
+                  'console_upload','console_exec','devops_webhook','devops_build',
+                  'admin_home','admin_users','admin_audit','keys_issued'
+                ) AND ts >= datetime('now','-24 hours')
+                """
+            )
+        else:
+            cur.execute(
+                """
+                SELECT COUNT(*) AS cnt FROM events
+                WHERE kind IN ('root_console','cloud_metadata','infra_vault')
+                  AND ts >= datetime('now','-24 hours')
+                """
+            )
+        alerts_24h = int(cur.fetchone()["cnt"] or 0)
         cur.execute("SELECT COUNT(*) AS cnt FROM cases WHERE status='open'")
         cases_open = int(cur.fetchone()["cnt"] or 0)
         campaigns_active = 0
@@ -1893,6 +1916,7 @@ def dashboard_overview(request: Request):
                     "active_24h": active_24h,
                     "active_7d": active_7d,
                     "events_total": events_total,
+                    "alerts_24h": alerts_24h,
                     "cases_open": cases_open,
                     "campaigns_active": campaigns_active,
                     "stage_max": stage_max,
@@ -3252,7 +3276,10 @@ def actor_sessions(actor_id: str, request: Request):
 
 @app.get("/dashboard/sessions/{session_id}", response_class=HTMLResponse)
 def session_detail(session_id: str, request: Request):
-    return RedirectResponse(url=f"/dashboard/replay/{session_id}", status_code=301)
+    # Pro users → interactive replay; Core users → step-by-step legacy view
+    if _tier_has_feature(licensing.Feature.REPLAY):
+        return RedirectResponse(url=f"/dashboard/replay/{session_id}", status_code=302)
+    return RedirectResponse(url=f"/dashboard/sessions/{session_id}/_legacy", status_code=302)
 
 
 @app.get("/dashboard/sessions/{session_id}/_legacy", response_class=HTMLResponse)
@@ -3267,7 +3294,14 @@ def session_detail_legacy(session_id: str, request: Request):
         sess = dict(s)
         sess["started_fmt"] = fmt_ts(sess.get("started_at") or "")
         sess["ended_fmt"] = fmt_ts(sess.get("ended_at")) if sess.get("ended_at") else "-"
-        cur.execute("SELECT * FROM session_steps WHERE session_id=? ORDER BY seq ASC", (session_id,))
+        cur.execute("SELECT COUNT(*) AS cnt FROM session_steps WHERE session_id=?", (session_id,))
+        steps_total = int((cur.fetchone() or {}).get("cnt") or 0)
+        _steps_cap = 10
+        is_pro_session = _tier_has_feature(licensing.Feature.REPLAY)
+        if is_pro_session:
+            cur.execute("SELECT * FROM session_steps WHERE session_id=? ORDER BY seq ASC", (session_id,))
+        else:
+            cur.execute("SELECT * FROM session_steps WHERE session_id=? ORDER BY seq ASC LIMIT ?", (session_id, _steps_cap))
         steps = [dict(r) for r in cur.fetchall()]
         sess["duration_seconds"] = None
         sess["duration_ms"] = None
@@ -3321,6 +3355,7 @@ def session_detail_legacy(session_id: str, request: Request):
             "session_detail.html",
             {"request": request, "session": sess, "steps": steps, "cases": open_cases,
              "evidence_by_step": evidence_by_step, "session_in_cases": session_in_cases,
+             "steps_total": steps_total, "steps_cap": _steps_cap,
              **_license_context()},
         )
     finally:
@@ -3472,6 +3507,90 @@ def list_campaigns(request: Request):
                 "campaigns_pro_state": verification,
                 "campaigns_recompute_enabled": True,
                 "job_history": job_history,
+                **_license_context(),
+            },
+        )
+    finally:
+        conn.close()
+
+
+@app.get("/dashboard/alerts", response_class=HTMLResponse)
+def dashboard_alerts(request: Request, limit: int = 200):
+    """High-signal events feed — the value loop output."""
+    is_pro = _tier_has_feature(licensing.Feature.ANALYTICS)
+
+    if is_pro:
+        _ALERT_KINDS = (
+            "root_console", "cloud_metadata", "infra_vault", "admin_secrets",
+            "backup_download", "backup_list", "internal_config", "root_shell",
+            "admin_login_attempt", "export_users", "export_audit", "upload_trap",
+            "console_upload", "console_exec", "devops_webhook", "devops_build",
+            "admin_home", "admin_users", "admin_audit", "admin_rotate",
+            "internal_access", "internal_reload", "internal_migrate",
+            "files_upload", "keys_issued",
+        )
+        _event_limit = min(int(limit), 500)
+        _time_filter = ""
+    else:
+        # Core: critical-only, 48h window, max 50
+        _ALERT_KINDS = ("root_console", "cloud_metadata", "infra_vault")
+        _event_limit = 50
+        _time_filter = "AND e.ts >= datetime('now', '-48 hours')"
+
+    placeholders = ",".join("?" * len(_ALERT_KINDS))
+    conn = db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            f"""
+            SELECT e.id, e.ts, e.actor_id, e.kind, e.path, e.method,
+                   e.ip, e.ua, e.status, e.extra_json,
+                   COALESCE(a.score, 0) AS actor_score
+            FROM events e
+            LEFT JOIN actors a ON a.actor_id = e.actor_id
+            WHERE e.kind IN ({placeholders})
+            {_time_filter}
+            ORDER BY e.ts DESC
+            LIMIT ?
+            """,
+            (*_ALERT_KINDS, _event_limit),
+        )
+        rows = [dict(r) for r in cur.fetchall()]
+
+        # Enrich rows
+        for r in rows:
+            try:
+                ex = json.loads(r.get("extra_json") or "{}")
+            except Exception:
+                ex = {}
+            r["points_delta"] = ex.get("points_delta", "—")
+            r["trap_flags"] = ", ".join(ex.get("trap_flags") or []) or "—"
+            r["stage_after"] = ex.get("stage_after", "—")
+            r["scanner"] = ex.get("scanner", False)
+
+        # Summary stats (24h window regardless of tier)
+        cur.execute(
+            f"""
+            SELECT COUNT(*) AS cnt,
+                   COUNT(DISTINCT e.actor_id) AS unique_actors,
+                   MAX(e.ts) AS last_seen
+            FROM events e
+            WHERE e.kind IN ({placeholders})
+              AND e.ts >= datetime('now', '-24 hours')
+            """,
+            _ALERT_KINDS,
+        )
+        stats_row = cur.fetchone()
+        stats = dict(stats_row) if stats_row else {"cnt": 0, "unique_actors": 0, "last_seen": None}
+
+        return templates.TemplateResponse(
+            "alerts.html",
+            {
+                "request": request,
+                "events": rows,
+                "stats": stats,
+                "limit": limit,
+                "is_pro": is_pro,
                 **_license_context(),
             },
         )

@@ -17,6 +17,7 @@ class Feature(str, Enum):
     FILE_PIPELINE = "file_pipeline"
     API_MUTATION = "api_mutation"
     ANALYTICS = "analytics"
+    WEBHOOKS = "webhooks"
 
 
 _CORE_FEATURES: Set[str] = set()
@@ -28,6 +29,7 @@ _PRO_FEATURES: Set[str] = {
     Feature.FILE_PIPELINE.value,
     Feature.API_MUTATION.value,
     Feature.ANALYTICS.value,
+    Feature.WEBHOOKS.value,
 }
 
 _PRO_ENABLED_PROVIDER: Optional[Callable[[], bool]] = None

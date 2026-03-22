@@ -27,13 +27,27 @@
     <div class="kpi-label">Total events</div>
     <div class="kpi-value">{{ kpi.events_total }}</div>
   </div>
-  <div class="kpi-card">
-    <div class="kpi-label">Open cases</div>
-    <div class="kpi-value">{{ kpi.cases_open }}</div>
+  <div class="kpi-card" style="cursor:pointer;" onclick="location.href='/dashboard/alerts'">
+    <div class="kpi-label">{% if pro_enabled %}High-signal (24h){% else %}Critical (24h){% endif %}</div>
+    <div class="kpi-value{% if kpi.alerts_24h > 0 %} kpi-value-alert{% endif %}">
+      {{ kpi.alerts_24h }}
+    </div>
   </div>
-  <div class="kpi-card">
+  <div class="kpi-card{% if 'cases' not in license_features %} kpi-card-locked{% endif %}">
+    <div class="kpi-label">Open cases</div>
+    {% if "cases" in license_features %}
+      <div class="kpi-value">{{ kpi.cases_open }}</div>
+    {% else %}
+      <div class="kpi-value kpi-locked" title="Available on Pro">—</div>
+    {% endif %}
+  </div>
+  <div class="kpi-card{% if 'campaigns' not in license_features %} kpi-card-locked{% endif %}">
     <div class="kpi-label">Active campaigns</div>
-    <div class="kpi-value">{{ kpi.campaigns_active }}</div>
+    {% if "campaigns" in license_features %}
+      <div class="kpi-value">{{ kpi.campaigns_active }}</div>
+    {% else %}
+      <div class="kpi-value kpi-locked" title="Available on Pro">—</div>
+    {% endif %}
   </div>
   <div class="kpi-card">
     <div class="kpi-label">Max stage reached</div>
@@ -71,7 +85,13 @@
     <div class="card-body">
       <div class="activity-block">
         <div class="activity-title">Latest cases</div>
-        {% if cases_recent %}
+        {% if "cases" not in license_features %}
+          <div class="upgrade-nudge">
+            <span class="upgrade-nudge-icon">🔒</span>
+            <span>Group and track attacks as investigations.</span>
+            <a class="upgrade-nudge-link" href="/dashboard/license">Upgrade to Pro →</a>
+          </div>
+        {% elif cases_recent %}
           <ul class="activity-list">
             {% for c in cases_recent %}
               <li>
@@ -87,7 +107,13 @@
       </div>
       <div class="activity-block">
         <div class="activity-title">Reactivated campaigns (24h)</div>
-        {% if campaigns_reactivated %}
+        {% if "campaigns" not in license_features %}
+          <div class="upgrade-nudge">
+            <span class="upgrade-nudge-icon">🔒</span>
+            <span>Correlate actors into coordinated attack campaigns.</span>
+            <a class="upgrade-nudge-link" href="/dashboard/license">Upgrade to Pro →</a>
+          </div>
+        {% elif campaigns_reactivated %}
           <ul class="activity-list">
             {% for c in campaigns_reactivated %}
               <li>
@@ -148,6 +174,33 @@
     </div>
   </div>
 </div>
+
+<style>
+  .kpi-card-locked { opacity: 0.55; }
+  .kpi-locked { color: var(--muted) !important; letter-spacing: 0.05em; }
+  .upgrade-nudge {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding: 10px 12px;
+    border-radius: 6px;
+    background: rgba(122, 184, 245, 0.05);
+    border: 1px solid rgba(122, 184, 245, 0.15);
+    font-size: 0.8rem;
+    color: var(--muted);
+  }
+  .upgrade-nudge-icon { font-size: 1rem; }
+  .upgrade-nudge-link {
+    color: #7ab8f5;
+    text-decoration: none;
+    font-weight: 600;
+    font-size: 0.78rem;
+  }
+  .upgrade-nudge-link:hover { text-decoration: underline; }
+  .kpi-value-alert { color: #ffa94d !important; }
+  .kpi-card[onclick] { transition: background 0.15s; }
+  .kpi-card[onclick]:hover { background: rgba(255,255,255,.04); }
+</style>
 
 <script>
   const eventsByDay = {{ events_by_day|tojson }};

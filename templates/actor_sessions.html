@@ -50,7 +50,13 @@
             </td>
             <td class="mono">{{ s.step_count|default(0) }}</td>
             <td class="muted" style="font-size:0.83rem;">{{ s.summary or '—' }}</td>
-            <td><a class="btn btn-primary btn-small" href="/dashboard/replay/{{ s.session_id }}">▶ Replay</a></td>
+            <td>
+              {% if "replay" in license_features %}
+                <a class="btn btn-primary btn-small" href="/dashboard/replay/{{ s.session_id }}">▶ Replay</a>
+              {% else %}
+                <a class="btn btn-small" href="/dashboard/sessions/{{ s.session_id }}/_legacy">View steps</a>
+              {% endif %}
+            </td>
           </tr>
           {% endfor %}
         </tbody>

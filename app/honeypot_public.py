@@ -38,6 +38,7 @@ from app import health as _health
 from app.server_config import RequestTimeoutMiddleware, get_request_timeout
 from app.structured_logging import get_request_id, set_request_id
 from app import siem_logger
+from app import alert_dispatcher
 from app.no_cache import NoCacheMiddleware
 
 APP_TITLE = os.getenv("HP_API_TITLE", "Account Service API")
@@ -1853,6 +1854,21 @@ async def log_all_requests(request: Request, call_next):
                     interaction_id=_siem_interaction_id,
                     actor_id=actor_id,
                 )
+
+                # Webhook alert for high-signal events — Pro only (non-blocking, never raises)
+                if licensing.has_feature(licensing.Feature.WEBHOOKS):
+                    _event_score_delta = int((hp_event.get("points") if hp_event else None) or _score_for(kind))
+                    _current_actor_score = _actor_score(conn, actor_id)
+                    alert_dispatcher.fire_if_high_signal(
+                        kind=kind,
+                        actor_id=actor_id,
+                        ip=_client_ip(request),
+                        ua=_user_agent(request),
+                        path=request.url.path,
+                        score_delta=_event_score_delta,
+                        trap_flags=(hp_event.get("trap_flags") if hp_event else None) or [],
+                        current_score=_current_actor_score,
+                    )
             finally:
                 conn.close()
 

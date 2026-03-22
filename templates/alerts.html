@@ -1,0 +1,282 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .severity-critical { color: #ff6b6b; font-weight: 700; }
+  .severity-high     { color: #ffa94d; font-weight: 700; }
+  .severity-medium   { color: #ffd43b; font-weight: 600; }
+
+  .kind-pill {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.72rem;
+    font-family: monospace;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+  }
+  .kind-critical { background: rgba(255,107,107,.15); color: #ff6b6b; border: 1px solid rgba(255,107,107,.3); }
+  .kind-high     { background: rgba(255,169,77,.15);  color: #ffa94d; border: 1px solid rgba(255,169,77,.3); }
+  .kind-medium   { background: rgba(255,212,59,.12);  color: #ffd43b; border: 1px solid rgba(255,212,59,.3); }
+  .kind-default  { background: rgba(255,255,255,.05); color: var(--muted); border: 1px solid rgba(255,255,255,.1); }
+
+  .stat-card {
+    background: var(--card-bg, #1a1a2e);
+    border: 1px solid var(--border, rgba(255,255,255,.1));
+    border-radius: 8px;
+    padding: 16px 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 140px;
+  }
+  .stat-card .stat-value { font-size: 2rem; font-weight: 700; color: var(--accent, #7ab8f5); }
+  .stat-card .stat-label { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+
+  .core-limit-banner {
+    background: rgba(122,184,245,.06);
+    border: 1px solid rgba(122,184,245,.2);
+    border-radius: 8px;
+    padding: 14px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 20px;
+    font-size: 0.82rem;
+    color: var(--muted);
+  }
+  .core-limit-banner strong { color: var(--text); }
+  .core-limit-banner a { color: #7ab8f5; font-weight: 600; text-decoration: none; }
+  .core-limit-banner a:hover { text-decoration: underline; }
+
+  .scanner-badge {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 0.68rem;
+    font-weight: 700;
+    background: rgba(189,86,255,.18);
+    color: #bd56ff;
+    border: 1px solid rgba(189,86,255,.3);
+    margin-left: 4px;
+  }
+
+  .refresh-controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 0.78rem;
+    color: var(--muted);
+  }
+</style>
+
+<div style="padding: 24px 0 0 0;">
+  <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:20px; flex-wrap:wrap; gap:12px;">
+    <div>
+      {% if is_pro %}
+      <h1 style="margin:0; font-size:1.4rem;">High-Signal Events</h1>
+      <p class="muted" style="margin:4px 0 0 0; font-size:0.82rem;">
+        Attacks, exploit attempts, and targeted probing — last {{ events|length }} events
+      </p>
+      {% else %}
+      <h1 style="margin:0; font-size:1.4rem;">Critical Alerts</h1>
+      <p class="muted" style="margin:4px 0 0 0; font-size:0.82rem;">
+        Root access, cloud metadata, and vault credential attempts — last 48h
+      </p>
+      {% endif %}
+    </div>
+    <div class="refresh-controls">
+      <span id="last-refresh">—</span>
+      <button class="btn" onclick="location.reload()" style="font-size:0.78rem; padding:4px 12px;">Refresh</button>
+      {% if is_pro %}
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+        <input type="checkbox" id="autoRefresh" style="cursor:pointer;" />
+        Auto (30s)
+      </label>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if not is_pro %}
+  <!-- Core limitation banner -->
+  <div class="core-limit-banner">
+    <div>
+      <strong>Core edition</strong> — showing critical-tier events only (root_console, cloud_metadata, infra_vault), last 48h, max 50.
+      Pro unlocks all high-signal kinds, full history, actor deep-links, score deltas, and configurable webhook alerts.
+    </div>
+    <a href="/dashboard/license">Upgrade to Pro →</a>
+  </div>
+  {% endif %}
+
+  <!-- Stats bar -->
+  <div style="display:flex; gap:16px; flex-wrap:wrap; margin-bottom:20px;">
+    <div class="stat-card">
+      <span class="stat-value">{{ stats.cnt }}</span>
+      <span class="stat-label">{% if is_pro %}High-signal{% else %}Critical{% endif %} (24h)</span>
+    </div>
+    {% if is_pro %}
+    <div class="stat-card">
+      <span class="stat-value">{{ stats.unique_actors }}</span>
+      <span class="stat-label">Distinct actors (24h)</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-value">{{ events|length }}</span>
+      <span class="stat-label">Shown (total)</span>
+    </div>
+    {% if stats.last_seen %}
+    <div class="stat-card">
+      <span class="stat-value" style="font-size:1rem; padding-top:6px;">{{ stats.last_seen[:16] }}</span>
+      <span class="stat-label">Last event (24h)</span>
+    </div>
+    {% endif %}
+    {% else %}
+    <div class="stat-card">
+      <span class="stat-value">{{ stats.unique_actors }}</span>
+      <span class="stat-label">Distinct IPs</span>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- Events table -->
+  {% if events %}
+  <div class="table-wrap" style="overflow-x:auto;">
+    {% if is_pro %}
+    <table class="data-table" style="min-width:900px;">
+      <thead>
+        <tr>
+          <th style="width:140px;">Time (UTC)</th>
+          <th style="width:110px;">Actor</th>
+          <th style="width:100px;">IP</th>
+          <th style="width:160px;">Kind</th>
+          <th>Path</th>
+          <th style="width:70px;">+Score</th>
+          <th style="width:60px;">Stage</th>
+          <th style="width:120px;">Flags</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for e in events %}
+        <tr>
+          <td class="muted" style="font-size:0.8rem; white-space:nowrap;">{{ e.ts[:19] if e.ts else "—" }}</td>
+          <td>
+            <a href="/dashboard/actors/{{ e.actor_id }}/sessions" class="mono" style="font-size:0.78rem;">
+              {{ e.actor_id[:12] if e.actor_id else "—" }}
+            </a>
+            {% if e.scanner %}<span class="scanner-badge">SCANNER</span>{% endif %}
+          </td>
+          <td class="mono" style="font-size:0.78rem;">{{ e.ip or "—" }}</td>
+          <td>
+            <span class="kind-pill
+              {% if e.kind in ('root_console','cloud_metadata','infra_vault','admin_secrets') %}kind-critical
+              {% elif e.kind in ('backup_download','backup_list','internal_config','root_shell','admin_login_attempt','export_users','export_audit','upload_trap') %}kind-high
+              {% elif e.kind in ('console_upload','devops_webhook','devops_build','admin_home','admin_users','admin_audit','admin_rotate') %}kind-medium
+              {% else %}kind-default{% endif %}
+            ">{{ e.kind }}</span>
+          </td>
+          <td class="mono" style="font-size:0.78rem; max-width:260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="{{ e.path }}">
+            {{ e.path or "—" }}
+          </td>
+          <td style="text-align:right; font-weight:700;">
+            <span class="
+              {% if e.points_delta != '—' and e.points_delta|int > 40 %}severity-critical
+              {% elif e.points_delta != '—' and e.points_delta|int > 20 %}severity-high
+              {% elif e.points_delta != '—' and e.points_delta|int > 10 %}severity-medium
+              {% else %}muted{% endif %}
+            ">
+              {% if e.points_delta != '—' %}+{{ e.points_delta }}{% else %}—{% endif %}
+            </span>
+          </td>
+          <td style="text-align:center;" class="muted">{{ e.stage_after }}</td>
+          <td style="font-size:0.75rem;" class="muted">{{ e.trap_flags }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <!-- Core: limited table — no actor links, no score/stage/flags -->
+    <table class="data-table" style="min-width:600px;">
+      <thead>
+        <tr>
+          <th style="width:140px;">Time (UTC)</th>
+          <th style="width:110px;">Source IP</th>
+          <th style="width:160px;">Kind</th>
+          <th>Path</th>
+          <th style="width:70px;">Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for e in events %}
+        <tr>
+          <td class="muted" style="font-size:0.8rem; white-space:nowrap;">{{ e.ts[:19] if e.ts else "—" }}</td>
+          <td class="mono" style="font-size:0.8rem;">{{ e.ip or "—" }}</td>
+          <td>
+            <span class="kind-pill kind-critical">{{ e.kind }}</span>
+            {% if e.scanner %}<span class="scanner-badge">SCANNER</span>{% endif %}
+          </td>
+          <td class="mono" style="font-size:0.78rem; max-width:260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="{{ e.path }}">{{ e.path or "—" }}</td>
+          <td class="muted" style="text-align:center;">{{ e.status or "—" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  </div>
+
+  {% if not is_pro %}
+  <p class="muted" style="font-size:0.75rem; margin-top:12px; text-align:right;">
+    Showing up to 50 events from the last 48h.
+    <a href="/dashboard/license" style="color:#7ab8f5;">Pro shows all →</a>
+  </p>
+  {% endif %}
+
+  {% else %}
+  <div style="text-align:center; padding:60px 0; color:var(--muted);">
+    {% if is_pro %}
+    <div style="font-size:2.5rem; margin-bottom:12px;">🤫</div>
+    <p>No high-signal events yet.</p>
+    <p style="font-size:0.82rem;">When an attacker probes your admin, vault, or shell endpoints, they'll appear here.</p>
+    {% else %}
+    <div style="font-size:2.5rem; margin-bottom:12px;">🛡️</div>
+    <p>No critical events in the last 48h.</p>
+    <p style="font-size:0.82rem;">Root console, cloud metadata, and vault attempts will appear here.</p>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {% if is_pro %}
+  <!-- Pro: webhook config status hint -->
+  <div style="margin-top:32px; padding:16px 20px; background:rgba(255,255,255,.03); border:1px solid rgba(255,255,255,.08); border-radius:8px; font-size:0.8rem; color:var(--muted);">
+    <strong style="color:var(--text);">Get alerted instantly</strong> — set <code>HP_ALERT_WEBHOOK_URL</code> to a Slack or Discord webhook in
+    <a href="/dashboard/environment">Environment Settings</a>.
+    High-signal events (score ≥ 20 or critical kind) fire a POST to your webhook within seconds.
+    Supports Slack, Discord (<code>HP_ALERT_WEBHOOK_FORMAT=discord</code>), or generic JSON (<code>HP_ALERT_WEBHOOK_FORMAT=json</code>).
+  </div>
+  {% else %}
+  <!-- Core: webhook upgrade nudge -->
+  <div style="margin-top:32px; padding:14px 18px; background:rgba(255,255,255,.03); border:1px solid rgba(255,255,255,.07); border-radius:8px; font-size:0.8rem; color:var(--muted);">
+    <strong style="color:var(--text);">Instant alerts are a Pro feature</strong> —
+    upgrade to receive webhook notifications to Slack or Discord when a critical event fires.
+    <a href="/dashboard/license" style="color:#7ab8f5; font-weight:600; margin-left:6px;">Upgrade to Pro →</a>
+  </div>
+  {% endif %}
+</div>
+
+<script>
+  document.getElementById('last-refresh').textContent = 'Updated ' + new Date().toLocaleTimeString();
+
+  {% if is_pro %}
+  let _refreshTimer = null;
+  const autoRefreshBox = document.getElementById('autoRefresh');
+  if(autoRefreshBox){
+    autoRefreshBox.addEventListener('change', function() {
+      if (this.checked) {
+        _refreshTimer = setInterval(() => location.reload(), 30000);
+      } else {
+        clearInterval(_refreshTimer);
+      }
+    });
+  }
+  {% endif %}
+</script>
+{% endblock %}
