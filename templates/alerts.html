@@ -165,7 +165,7 @@
             </a>
             {% if e.scanner %}<span class="scanner-badge">SCANNER</span>{% endif %}
           </td>
-          <td class="mono" style="font-size:0.78rem;">{{ e.ip or "—" }}</td>
+          <td class="mono" style="font-size:0.78rem;white-space:nowrap;">{{ e.ip or "—" }}</td>
           <td>
             <span class="kind-pill
               {% if e.kind in ('root_console','cloud_metadata','infra_vault','admin_secrets') %}kind-critical
@@ -209,7 +209,7 @@
         {% for e in events %}
         <tr>
           <td class="muted" style="font-size:0.8rem; white-space:nowrap;">{{ e.ts[:19] if e.ts else "—" }}</td>
-          <td class="mono" style="font-size:0.8rem;">{{ e.ip or "—" }}</td>
+          <td class="mono" style="font-size:0.8rem;white-space:nowrap;">{{ e.ip or "—" }}</td>
           <td>
             <span class="kind-pill kind-critical">{{ e.kind }}</span>
             {% if e.scanner %}<span class="scanner-badge">SCANNER</span>{% endif %}
