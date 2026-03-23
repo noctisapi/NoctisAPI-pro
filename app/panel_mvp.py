@@ -435,6 +435,8 @@ def _start_background_tasks():
     from app.diagnostics import run_diagnostics
     run_diagnostics()
     honeypot_monitor.start()
+    from app import license_online as _lo
+    pro_license.set_online_gate(_lo.is_online_allowed)
     licensing.set_pro_enabled_provider(pro_license.is_pro_enabled)
     pro_license.get_backend_license_snapshot(force_refresh=True)
     pro_ops.clear_cache()
@@ -448,6 +450,7 @@ def _start_background_tasks():
 def _stop_background_tasks():
     honeypot_monitor.stop()
     licensing.set_pro_enabled_provider(None)
+    pro_license.set_online_gate(None)
     pro_license.clear_cache()
     pro_ops.clear_cache()
 
