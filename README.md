@@ -1,117 +1,151 @@
-# NoctisAPI Pro
+# NoctisAPI
 
-> A professional-grade deception platform with a realistic honeypot API, behavioral actor profiling, and a full PRO feature set — built for security teams that need more than just logging.
+**A honeypot API that looks real — and makes attackers believe it.**
 
-NoctisAPI Pro extends the open-source Core with cases workflow, campaign intelligence, file pipeline simulation, and advanced analytics. Every component is designed for safe, non-executing attacker interaction while capturing rich telemetry for threat analysis.
+Deploy a fake-but-convincing REST API surface. Every scanner, credential stuffer, and targeted attacker that hits it gets profiled, staged, and tracked. No agent. No code changes to your real infrastructure.
 
----
+- One-command deploy with automatic TLS
+- Actor profiling, session tracking, and behavioral scoring out of the box
+- Open source Core — PRO unlocks investigations, campaigns, and smart deception
 
-## Key Features
-
-### Core (always available)
-- **Realistic API surface** — synthetic public API with staged responses and consistent fake data to fool scanners and persistent attackers
-- **Actor profiling** — every IP is tracked, scored, and progressed through behavioral stages
-- **Session tracking** — multi-step interactions grouped into sessions with stage progression
-- **API Modular** — configure per-endpoint behavior (enabled, response mode, richness level, fixed status)
-- **Endpoint analytics** — hit patterns, interest scoring, and actor fingerprinting
-- **API availability monitoring** — continuous health checks from the admin panel
-- **GeoIP enrichment** — country flags and ISO codes via MaxMind GeoLite2 (optional)
-- **Bulk actor management** — archive, soft-delete, restore, or purge actors in bulk
-- **Docker + Traefik** — production-ready compose stack with automatic TLS via ACME
-
-### PRO (license required)
-- **Cases workflow** — triage and track attacker activity as structured investigation cases
-- **Campaigns explorer** — group actors into campaigns, visualize behavioral clusters, trigger recompute
-- **Replay / evidence linkage** — attach session replay and event evidence to cases
-- **Advanced scoring** — extended behavioral scoring with PRO heuristics
-- **File upload simulation pipeline** — simulate file upload endpoints and capture attacker-supplied payloads safely
-- **API Mutation** — vary responses over time (daily/weekly rotation) to confuse automated scanners
-- **Smart Rules** — conditional per-endpoint overrides by path pattern, method, or user agent
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+&nbsp;
+**[Quick Start](#quick-start)** · **[Core vs PRO](#core-vs-pro)** · **[Get PRO](https://noctisapi.com)**
 
 ---
 
-## Screenshots
+## Preview
 
-### Dashboard
-![Dashboard](Readme_images/screenshot-dashboard.png)
+| Dashboard | Actors |
+|---|---|
+| ![Dashboard](Readme_images/screenshot-dashboard.png) | ![Actors](Readme_images/screenshot-actors.png) |
 
-### Actors
-![Actors](Readme_images/screenshot-actors.png)
-
-### Campaigns (PRO)
-![Campaigns](Readme_images/screenshot-campaigns.png)
-
-### API Modular Config
-![Config](Readme_images/screenshot-config.png)
+| Campaigns (PRO) | API Config |
+|---|---|
+| ![Campaigns](Readme_images/screenshot-campaigns.png) | ![Config](Readme_images/screenshot-config.png) |
 
 ---
 
-## Architecture
+## What is this?
 
-NoctisAPI Pro runs as two services sharing a single SQLite database via a Docker volume:
+Most honeypots are either too simple (attackers ignore them) or too complex to deploy. NoctisAPI is a production-grade deception layer built as a realistic REST API — it mimics the shape of real services so automated tools and human attackers engage with it.
 
-```
-┌─────────────────────────────────────────────────────┐
-│                   Docker Network                    │
-│                                                     │
-│  ┌─────────────────────┐   ┌───────────────────┐   │
-│  │   Public API (app)  │   │  Admin Panel      │   │
-│  │   FastAPI · :8000   │   │  FastAPI · :9001  │   │
-│  │   Internet-facing   │   │  Internal only    │   │
-│  └────────┬────────────┘   └────────┬──────────┘   │
-│           │                         │               │
-│           └──────────┬──────────────┘               │
-│                      │                              │
-│              ┌───────▼────────┐                     │
-│              │  SQLite (WAL)  │                     │
-│              │  /data/*.db    │                     │
-│              └────────────────┘                     │
-└─────────────────────────────────────────────────────┘
-         ▲
-  Traefik (TLS termination, port 443)
-```
+What you get:
 
-- **Public API** (`app/honeypot_public.py`) — attacker-facing endpoints, port 8000
-- **Admin Panel** (`app/panel_mvp.py`) — internal dashboard, port 9001, SSH-tunnel only
-- **SQLite WAL** — `busy_timeout=5000` + retry logic for concurrent access safety
+- A **convincing fake API** with staged responses, consistent fake data, and realistic error behavior
+- An **admin panel** that tracks every actor, session, and interaction in real time
+- **Behavioral profiling** that scores and stages attackers as they progress through your surface
+- A **Docker-first deploy** — domain + email is all you need
+
+You don't touch your real services. The honeypot sits alongside them.
 
 ---
 
-## Repository Structure
+## Core vs PRO
 
-```
-app/               Core services (public API, admin panel, monitor, health)
-templates/         Jinja2 HTML templates for the admin panel
-static/            CSS and JS assets
-migrations/        Alembic database schema migrations
-compose/           Docker Compose files (dev + prod)
-ops/               Deployment scripts, crons, systemd unit
-documentation/     Detailed docs and runbooks
-scripts/           Utility and maintenance scripts
-Readme_images/     Screenshots for this README
-```
+### Core — open source, always free
+
+| Feature | |
+|---|---|
+| Realistic honeypot API surface | ✓ |
+| Actor profiling + behavioral scoring | ✓ |
+| Session tracking with stage progression | ✓ |
+| Per-endpoint configuration (enabled, response mode, richness, status) | ✓ |
+| Endpoint analytics + interest scoring | ✓ |
+| API availability monitoring | ✓ |
+| GeoIP enrichment via MaxMind GeoLite2 (optional) | ✓ |
+| Bulk actor management (archive, delete, restore) | ✓ |
+| Docker + Traefik with automatic TLS | ✓ |
+| Webhook alerts | ✓ |
+
+### PRO — paid license, offline verification
+
+| Feature | |
+|---|---|
+| **Cases workflow** — triage attacker activity into structured investigations | ✓ |
+| **Campaigns explorer** — cluster actors by behavior, visualize attacker campaigns | ✓ |
+| **Replay & evidence** — link session replays and events to cases | ✓ |
+| **Advanced scoring** — extended behavioral heuristics | ✓ |
+| **File upload simulation** — capture attacker-supplied payloads safely | ✓ |
+| **API Mutation** — rotate responses over time to confuse automated scanners | ✓ |
+| **Smart Rules** — conditional per-endpoint overrides by path, method, or user-agent | ✓ |
+
+> PRO features are verified by an offline license — no outbound calls to a backend. The instance falls back to Core mode if no valid license is present.
 
 ---
 
-## Production Deployment
+## Quick Start
 
-Requires only Docker. No source code needed.
+### Core (open source)
 
 ```bash
-curl -fsSL https://get.noctisapi.com/setup | bash
+bash setup.sh --domain api.example.com --email ops@example.com --yes
 ```
 
-Prompts for your domain and Let's Encrypt email — everything else is automatic. Re-running is safe: existing `.env` is never overwritten.
+That's it. The script writes `.env.prod`, starts the stack, and issues a TLS certificate via Let's Encrypt.
+
+### PRO
+
+```bash
+bash install.sh \
+  --license /path/to/license.json \
+  --domain  api.example.com \
+  --email   ops@example.com \
+  --yes
+```
+
+This also validates your license, downloads the Docker image, and installs everything in one pass.
+
+**Requirements:** Docker 20.10+ with Compose plugin · `curl` · ports 80 and 443 open
 
 ---
 
-## Accessing the Admin Panel
+## Manual Setup
 
-The admin panel is **not publicly exposed**. Access it via SSH tunnel:
+If you prefer to configure things yourself:
 
 ```bash
-# On your local machine:
-ssh -L 9001:127.0.0.1:9001 user@your-server-ip
+cp .env.prod.example .env.prod
+# Edit .env.prod — only 3 values are required:
+#   HP_PUBLIC_HOST   your domain
+#   ACME_EMAIL       Let's Encrypt email
+#   HP_SEED          run: python -c "import secrets; print(secrets.token_hex(32))"
+
+docker compose --env-file .env.prod -f compose/docker-compose.prod.yml up -d
+```
+
+---
+
+## How It Works
+
+NoctisAPI runs as two services sharing a single SQLite database:
+
+```
+Internet
+    │
+    ▼
+Traefik :443  (TLS termination)
+    │
+    ├─▶  Public API    :8000  ← attacker-facing, mimics a real REST API
+    │    (honeypot_public.py)
+    │
+    └─▶  Admin Panel   :9001  ← internal only, SSH tunnel
+         (panel_mvp.py)
+              │
+              └─▶  SQLite (WAL)  /data/honeypot.db
+```
+
+The public API surface is fully synthetic. It returns consistent fake data, progresses attackers through stages (recon → credential stuffing → exploitation), and captures rich telemetry without ever executing anything.
+
+The admin panel is never exposed to the internet — access it via SSH tunnel from your local machine.
+
+---
+
+## Admin Panel Access
+
+```bash
+# From your local machine:
+ssh -L 9001:127.0.0.1:9001 user@your-server
 
 # Then open:
 http://localhost:9001
@@ -119,72 +153,181 @@ http://localhost:9001
 
 ---
 
-## Environment Variables
+## Upgrade to PRO
 
-See `.env.prod.example` for the full annotated reference.
+PRO unlocks the full investigation and deception toolkit: Cases, Campaigns, Replay, Smart Rules, API Mutation, and the file upload pipeline.
 
-| Marker | Meaning |
-|---|---|
-| `✔ FIXED` | Pre-configured for the Docker Compose network — do not change |
-| `← YOU MUST CHANGE THIS` | Must be set to your own values before deploying |
+**Get a license** at [noctisapi.com](https://noctisapi.com).
 
-**Key variables to set:**
+**Activate on an existing Core install:**
+
+```bash
+# Option A — admin panel UI: Settings → License → Upload license.json
+
+# Option B — place the file directly:
+docker cp license.json <container>:/var/lib/myapp/license.json
+docker compose restart app admin
+```
+
+**Check license status:**
+
+```bash
+# In the admin panel:
+# Settings → License
+
+# Or via CLI:
+docker exec <app-container> python scripts/print_licensing_identity.py
+```
+
+PRO runs entirely offline. No license server calls after activation.
+
+---
+
+## Configuration
+
+Most settings have sensible defaults. The minimum required to deploy:
+
+| Variable | Required | Description |
+|---|---|---|
+| `HP_PUBLIC_HOST` | Yes | Your public domain (e.g. `api.example.com`) |
+| `ACME_EMAIL` | Yes | Email for Let's Encrypt TLS |
+| `HP_SEED` | Yes | Stable random secret — auto-generated by installer |
+| `DATABASE_URL` | Yes | SQLite path for Alembic migrations (default in example) |
+| `HP_ENFORCE_LICENSE` | PRO only | Set to `1` to enforce PRO mode |
+
+> **`HP_SEED` must never change after first run.** It derives all actor IDs — changing it invalidates your entire history.
+
+Common optional settings:
 
 | Variable | Description |
 |---|---|
-| `HP_PUBLIC_HOST` | Your public domain (e.g. `api.example.com`) |
-| `HP_PUBLIC_BASE_URL` | Full public URL of the honeypot API |
-| `ACME_EMAIL` | Email used for Let's Encrypt TLS certificate |
-| `HP_SEED` | Long, stable random secret — used to derive actor IDs |
+| `HP_DEPLOYMENT_ID` | Label for this instance (useful with multiple deploys) |
+| `MAXMIND_ACCOUNT_ID` + `MAXMIND_LICENSE_KEY` | Enable GeoIP enrichment (free MaxMind account) |
+| `HP_ALERT_WEBHOOK_URL` | Slack/Discord webhook for high-signal alerts |
+| `HP_ACTOR_UA_MODE` | Actor identity mode: `ip` (default) · `family` · `full` |
+| `LOG_LEVEL` | `debug` · `info` (default) · `warning` |
 
-> **Important:** `HP_SEED` must never change after first run. Changing it invalidates all existing actor IDs.
+See [`.env.prod.example`](.env.prod.example) for all options with descriptions.
 
 ---
 
-## PRO Licensing
+## Usage
 
-PRO features use offline license verification — no outbound call to a backend is required. Without a valid license the instance runs in Core mode with all PRO features disabled.
+Once deployed, the honeypot serves on your domain. Point attackers at it by registering the domain, including it in public DNS, or letting search engine crawlers find it.
 
-Upload your `license.json` from the admin panel UI after first start, or place it at the path set by `HP_OFFLINE_LICENSE_PATH` (default: `/var/lib/myapp/license.json`).
+The admin panel shows activity as it happens:
 
-**Debugging license state:**
+- **Dashboard** — live hit counts, active actors, top endpoints
+- **Actors** — per-actor profiles with stage, score, sessions, and IP/geo
+- **Sessions** — multi-step interactions with full event timeline
+- **Endpoints** — interest scores and hit patterns per API path
+- **Campaigns** (PRO) — behavioral clusters across actors
+- **Cases** (PRO) — triage queue for investigation
+
+**Export data:**
+
 ```bash
-# Via admin API:
-GET /admin/license
+# Full actor export (CSV):
+GET /admin/actors/export
 
-# Via container shell:
-python /app/scripts/print_licensing_identity.py
+# Sessions export:
+GET /admin/sessions/export
 ```
 
-**Stable host fingerprint across container rebuilds:**
-```bash
-# Option A — set directly:
-INSTANCE_FINGERPRINT_SHA256=<64-char hex>
+**Bulk operations** are available in the Actors view — select actors and archive, delete, or merge in bulk.
 
-# Option B — mount host machine-id (already in the prod compose):
-HP_HOST_MACHINE_ID_PATH=/etc/host-machine-id
+---
+
+## Local Development
+
+```bash
+# Start with hot reload:
+docker compose -f compose/docker-compose.dev.yml up -d
+
+# API:   http://localhost:8000
+# Admin: http://localhost:9001
+
+# Logs:
+docker compose -f compose/docker-compose.dev.yml logs -f
+
+# Migrations:
+make db-upgrade
+
+# Stop:
+docker compose -f compose/docker-compose.dev.yml down
 ```
 
 ---
 
+## Maintenance
 
-## Use Cases
+**Backups:**
 
-- **Threat intelligence** — profile automated scanners, credential stuffers, and targeted attackers
-- **Deception in depth** — deploy alongside real services to detect lateral movement and recon
-- **Campaign tracking** — group attacker clusters and visualize campaign evolution over time
-- **Incident response** — link attacker sessions to cases and export evidence
-- **Research** — study attacker tooling, timing, and TTPs in a safe, isolated environment
+```bash
+# One-off backup (writes to ./backups/):
+bash backup_sqlite.sh
+
+# Enable daily automated backups:
+cp ops/cron/yourapp-backup /etc/cron.d/yourapp-backup
+# Edit the file to set your paths
+```
+
+**Data retention** (prune old rows, runs automatically via cron):
+
+```bash
+# Dry run:
+docker exec <app-container> python scripts/prune_retention.py --db /data/honeypot.db --dry-run
+
+# Apply:
+docker exec <app-container> python scripts/prune_retention.py --db /data/honeypot.db
+```
+
+Defaults: events 30d · sessions 30d · tokens 90d · jobs 30d. Override via env vars (e.g. `HP_RETENTION_EVENTS_DAYS=60`).
+
+**Updates:**
+
+```bash
+# Pull latest image and restart:
+docker compose --env-file .env.prod -f compose/docker-compose.prod.yml pull
+docker compose --env-file .env.prod -f compose/docker-compose.prod.yml up -d
+```
 
 ---
 
-## Open Source Core
+## FAQ
 
-The open-source Core version (without PRO features) is available as a public Docker image and at:
-[github.com/noctisapi/noctisapi-core](https://github.com/noctisapi/noctisapi-core)
+**Does it call home? Does the PRO license require internet access?**
+No. PRO license verification is entirely offline using a signed document and a bundled public key. No outbound calls are made for licensing.
+
+**What happens if my PRO license expires?**
+The instance automatically falls back to Core mode. No data is lost. PRO features are disabled until the license is renewed.
+
+**Can I run multiple instances with one license?**
+Depends on your license. Each instance has a unique fingerprint derived from the host machine ID. Check your license terms.
+
+**How do I keep the host fingerprint stable across container rebuilds?**
+The prod compose mounts `/etc/machine-id` from the host into the container. This is the default behavior — no action needed.
+
+**Will attackers know it's a honeypot?**
+The public API mimics real service behavior with staged responses, consistent fake data, and realistic error codes. There is no indication it is a honeypot in any response. What it returns depends on how you configure it.
+
+**Can I use it without Traefik / without a public domain?**
+Yes — for internal use or testing, run the dev compose which doesn't require Traefik or TLS. For production, Traefik is recommended for automatic certificate management.
+
+**The Core is Apache-2.0 — can I self-host and modify it?**
+Yes. The Core source is at [github.com/noctisapi/noctisapi-core](https://github.com/noctisapi/noctisapi-core) under Apache-2.0.
+
+---
+
+## Contributing
+
+Bug reports and pull requests for the Core are welcome at [github.com/noctisapi/noctisapi-core](https://github.com/noctisapi/noctisapi-core).
+
+For issues specific to a PRO deployment, open a ticket via [noctisapi.com](https://noctisapi.com).
 
 ---
 
 ## License
 
-[Apache-2.0](LICENSE)
+[Apache-2.0](LICENSE) — Core
+PRO features require a separate paid license. See [noctisapi.com](https://noctisapi.com).

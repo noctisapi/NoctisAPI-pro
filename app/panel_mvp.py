@@ -39,7 +39,10 @@ from app.server_config import RequestTimeoutMiddleware, get_request_timeout
 APP_NAME = "noctisapi-panel"
 DB_PATH = os.getenv("HP_DB_PATH", "/data/honeypot.db")
 HP_GEOIP_DB = os.getenv("HP_GEOIP_DB", "/data/GeoLite2-Country.mmdb")
-HP_PUBLIC_BASE_URL = (os.getenv("HP_PUBLIC_BASE_URL") or "").strip().rstrip("/")
+_hp_host = os.getenv("HP_PUBLIC_HOST", "").strip().rstrip("/")
+HP_PUBLIC_BASE_URL = (
+    os.getenv("HP_PUBLIC_BASE_URL") or ("https://" + _hp_host if _hp_host else "")
+).strip().rstrip("/")
 API_CATALOG_LOCK = threading.Lock()
 API_CATALOG_CACHE: dict[str, object] = {"ts": 0, "catalog": [], "source": "none", "error": ""}
 

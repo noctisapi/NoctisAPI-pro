@@ -140,7 +140,8 @@ else
   echo "  Step 2/3 — Configuration"
   echo "  ─────────────────────────"
   HP_PUBLIC_HOST=$(_ask "Public API domain" "")
-  ACME_EMAIL=$(_ask   "Let's Encrypt email" "")
+  HP_ADMIN_HOST=$(_ask  "Admin panel domain" "admin.${HP_PUBLIC_HOST}")
+  ACME_EMAIL=$(_ask     "Let's Encrypt email" "")
   HP_DEPLOYMENT_ID=$(_ask "Deployment label" "prod-001")
 
   HP_SEED="$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null \
@@ -164,65 +165,16 @@ else
 APP_ENV=prod
 APP_VERSION=${APP_VERSION}
 HP_IMAGE=${HP_IMAGE}
-
-# Database (fixed — container paths)
-HP_DB_PATH=/data/honeypot.db
 DATABASE_URL=sqlite+pysqlite:////data/honeypot.db
-
-# GeoIP (auto-downloaded on first start if MaxMind credentials are set)
 MAXMIND_ACCOUNT_ID=${MAXMIND_ACCOUNT_ID}
 MAXMIND_LICENSE_KEY=${MAXMIND_LICENSE_KEY}
-HP_GEOIP_DB=/data/GeoLite2-Country.mmdb
-
-# Public domain / TLS
 HP_PUBLIC_HOST=${HP_PUBLIC_HOST}
-HP_PUBLIC_BASE_URL=https://${HP_PUBLIC_HOST}
-HONEYPOT_PUBLIC_BASE_URL=https://${HP_PUBLIC_HOST}
+HP_ADMIN_HOST=${HP_ADMIN_HOST}
 ACME_EMAIL=${ACME_EMAIL}
-
-# Internal network (fixed)
-HONEYPOT_MONITOR_BASE_URL=http://app:8000
-HONEYPOT_MONITOR_UA=HealthCheck/1.0,curl/
-
-# Core secret
 HP_SEED=${HP_SEED}
-
-# Licensing (offline)
-HP_LICENSE_MODE=offline
 HP_ENFORCE_LICENSE=1
-HP_LICENSE_STATUS_REFRESH_SECONDS=30
-HP_LICENSE_STATUS_MAX_REFRESH_SECONDS=300
 HP_DEPLOYMENT_ID=${HP_DEPLOYMENT_ID}
-INSTANCE_ID_PATH=/var/lib/myapp/instance_id
-HP_OFFLINE_LICENSE_PATH=/var/lib/myapp/license.json
-HP_OFFLINE_LICENSE_STATE_PATH=/var/lib/myapp/license_state.json
-HP_OFFLINE_PUBLIC_KEYS_BUNDLE_PATH=/app/app/offline_public_keys.json
-
-# Campaign defaults
-HP_CAMPAIGN_MIN_FEATURES=4
-HP_CAMPAIGN_MIN_INTERSECTION=3
-HP_CAMPAIGN_MIN_JACCARD=0.4
-HP_CAMPAIGN_MAX_SESSIONS=5
-HP_CAMPAIGN_PATH_NGRAM_TOP_K=12
-HP_CAMPAIGN_PATH_TOP_K=10
-HP_CAMPAIGN_ACTOR_LIMIT=200
-HP_CAMPAIGN_AUTO_RECOMPUTE_THRESHOLD=0
-HP_CAMPAIGN_AUTO_RECOMPUTE_INTERVAL=3600
-
-# Data retention
-HP_RETENTION_EVENTS_DAYS=30
-HP_RETENTION_SESSIONS_DAYS=30
-HP_RETENTION_STEPS_DAYS=30
-HP_RETENTION_CHECKS_DAYS=14
-HP_RETENTION_TOKENS_DAYS=90
-HP_RETENTION_JOBS_DAYS=30
-HP_RETENTION_ENABLE=1
-
-# Logging
 LOG_LEVEL=info
-
-# Host fingerprint
-HP_HOST_MACHINE_ID_PATH=/etc/host-machine-id
 ENVEOF
 
   chmod 600 "${ENV_FILE}"
