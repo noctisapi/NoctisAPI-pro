@@ -150,6 +150,15 @@ def _require_feature(feature: licensing.Feature, *, action: str = "panel_access"
         raise HTTPException(status_code=403, detail="feature not available")
 
 
+def _upgrade_page(request: Request, feature_name: str) -> HTMLResponse:
+    """Return a styled HTML upgrade page for Pro-gated routes accessed in Core mode."""
+    return templates.TemplateResponse(
+        "upgrade_required.html",
+        {"request": request, "feature_name": feature_name, **_license_context()},
+        status_code=403,
+    )
+
+
 def _has_modular_pro() -> bool:
     return _has_feature(licensing.Feature.API_MUTATION, action="panel_api_modular")
 
@@ -2401,7 +2410,8 @@ def dashboard(request: Request):
 # -------- Dashboard management endpoints: Cases / Sessions / Campaigns --------
 @app.get("/dashboard/cases", response_class=HTMLResponse)
 def dashboard_cases(request: Request):
-    _require_feature(licensing.Feature.CASES)
+    if not _has_feature(licensing.Feature.CASES):
+        return _upgrade_page(request, "Cases")
     q = (request.query_params.get("q") or "").strip()
     status_filter = (request.query_params.get("status") or "").strip()
     severity_filter = (request.query_params.get("severity") or "").strip()
@@ -2484,7 +2494,8 @@ def dashboard_cases(request: Request):
 
 @app.get("/dashboard/cases/{case_id}", response_class=HTMLResponse)
 def dashboard_case_detail(case_id: int, request: Request):
-    _require_feature(licensing.Feature.CASES)
+    if not _has_feature(licensing.Feature.CASES):
+        return _upgrade_page(request, "Cases")
     conn = db()
     try:
         cur = conn.cursor()
@@ -3467,7 +3478,8 @@ def recompute_campaigns_status():
 
 @app.get("/dashboard/campaigns", response_class=HTMLResponse)
 def list_campaigns(request: Request):
-    _require_feature(licensing.Feature.CAMPAIGNS)
+    if not _has_feature(licensing.Feature.CAMPAIGNS):
+        return _upgrade_page(request, "Campaigns")
     backend_enabled = False
     conn = db()
     try:
@@ -3649,7 +3661,8 @@ def debug_db():
 
 @app.get("/dashboard/campaigns/{campaign_id}", response_class=HTMLResponse)
 def campaign_detail(campaign_id: str, request: Request):
-    _require_feature(licensing.Feature.CAMPAIGNS)
+    if not _has_feature(licensing.Feature.CAMPAIGNS):
+        return _upgrade_page(request, "Campaigns")
     conn = db()
     try:
         if not campaigns_pro.can_render_verified_campaigns(conn, backend_enabled=False):
@@ -4380,7 +4393,8 @@ def _load_replay_data(conn: sqlite3.Connection, session_id: str) -> dict:
 
 @app.get("/dashboard/replay", response_class=HTMLResponse)
 def replay_list(request: Request):
-    _require_feature(licensing.Feature.REPLAY)
+    if not _has_feature(licensing.Feature.REPLAY):
+        return _upgrade_page(request, "Session Replay")
 
     try:
         page = max(1, int(request.query_params.get("page") or 1))
@@ -4502,7 +4516,8 @@ def replay_list(request: Request):
 
 @app.get("/dashboard/replay/{session_id}", response_class=HTMLResponse)
 def replay_detail(session_id: str, request: Request):
-    _require_feature(licensing.Feature.REPLAY)
+    if not _has_feature(licensing.Feature.REPLAY):
+        return _upgrade_page(request, "Session Replay")
     conn = db()
     try:
         ensure_schema(conn)
