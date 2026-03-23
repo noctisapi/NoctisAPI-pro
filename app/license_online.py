@@ -34,6 +34,7 @@ from typing import Any, Callable, Dict, Optional
 
 from honey_licensing.online_client import (
     LicenseCheckRequest,
+    LicenseEventRequest,
     LicenseSyncRequest,
     OnlineCheckError,
     OnlineLicenseClient,
@@ -110,6 +111,7 @@ class OnlineLicenseManager:
         license_path: Optional[str] = None,
         get_local_generation_fn: Optional[Callable[[], int]] = None,
         on_new_license_fn: Optional[Callable[[], None]] = None,
+        get_offline_snapshot_fn: Optional[Callable[[], Dict[str, Any]]] = None,
     ) -> None:
         self._client = client
         self._state_path = state_path
@@ -124,11 +126,13 @@ class OnlineLicenseManager:
         self._license_path = license_path
         self._get_local_generation = get_local_generation_fn
         self._on_new_license = on_new_license_fn
+        self._get_offline_snapshot = get_offline_snapshot_fn
 
         self._lock = threading.Lock()
         self._state: Dict[str, Any] = self._load_state()
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
+        self._last_rollback_reported_gen: Optional[int] = None
 
     # -------------------------------------------------------------------------
     # Public interface
@@ -148,6 +152,14 @@ class OnlineLicenseManager:
         with self._lock:
             self._thread = t
         t.start()
+
+        # Fire startup event in a daemon thread — best-effort, must not delay startup
+        threading.Thread(
+            target=self._send_telemetry_event,
+            args=("startup", {}),
+            name="license-event-startup",
+            daemon=True,
+        ).start()
 
         logger.info(
             "license_online: manager started interval=%ds grace=%ds state_path=%s",
@@ -222,11 +234,36 @@ class OnlineLicenseManager:
 
     def _run_loop(self) -> None:
         while not self._stop.is_set():
-            if self._stop.wait(timeout=float(self._check_interval)):
+            interval = float(self._effective_check_interval())
+            if self._stop.wait(timeout=interval):
                 return
             self._run_check()
 
+    def _effective_check_interval(self) -> int:
+        """Return the check interval to use for the next sleep.
+
+        Policy:
+          - network_error → shorter interval (max(900, check_interval // 16), min 15 min)
+            so the manager detects server recovery faster without busy-looping.
+          - all other states (active, revoked, expired, suspended, unknown,
+            reuse_limit_exceeded) → full configured interval.
+            Terminal hard-deny states do NOT get an optimistic fast-retry because
+            they require an explicit admin action to resolve, not connectivity.
+        """
+        with self._lock:
+            status = str(self._state.get("online_status") or _STATUS_UNKNOWN).strip()
+        if status == _STATUS_NETWORK_ERROR:
+            return max(900, self._check_interval // 16)
+        return self._check_interval
+
     def _run_check(self) -> None:
+        # Best-effort rollback report before the network check so the server
+        # gets the signal even if the check itself fails.
+        try:
+            self._check_and_report_rollback()
+        except Exception:
+            pass
+
         license_id = self._get_license_id()
         if not license_id:
             logger.debug("license_online: no license_id available; skipping check")
@@ -297,7 +334,24 @@ class OnlineLicenseManager:
             )
 
     def _apply_check_result(self, *, license_id: str, status: str) -> None:
+        now_dt = datetime.now(timezone.utc)
         now = _utc_now_iso()
+
+        # Detect grace-expired recovery: we had an active grace deadline that already passed
+        # and we're now receiving a valid server response. Emit an event so the server has
+        # an audit trail of how long this instance operated without confirmation.
+        grace_expired_event: Optional[Dict[str, Any]] = None
+        with self._lock:
+            old_grace = self._state.get("grace_deadline")
+            old_status = str(self._state.get("online_status") or "").strip()
+        if old_grace and old_status in (_STATUS_NETWORK_ERROR, _STATUS_UNKNOWN):
+            deadline_dt = _parse_iso(old_grace)
+            if deadline_dt is not None and now_dt >= deadline_dt:
+                grace_expired_event = {
+                    "grace_expired_at": old_grace,
+                    "last_known_online_status": old_status,
+                }
+
         with self._lock:
             new_state: Dict[str, Any] = {
                 "license_id": license_id,
@@ -309,9 +363,16 @@ class OnlineLicenseManager:
                 "reason": None if status == _STATUS_ACTIVE else f"server_returned_{status}",
             }
             self._state = new_state
-        # reuse_limit_exceeded is transient — don't persist it so a restart doesn't stay blocked
-        if status != "reuse_limit_exceeded":
-            self._save_state(new_state)
+        # Persist all statuses including reuse_limit_exceeded so restarts don't clear the block
+        self._save_state(new_state)
+
+        if grace_expired_event:
+            threading.Thread(
+                target=self._send_telemetry_event,
+                args=("grace_expired", grace_expired_event),
+                name="license-event-grace-expired",
+                daemon=True,
+            ).start()
 
     def _apply_check_error(self, *, license_id: str, error: str) -> None:
         now = _utc_now_iso()
@@ -343,6 +404,83 @@ class OnlineLicenseManager:
             }
             self._state = new_state
         self._save_state(new_state)
+
+    def _send_telemetry_event(self, event: str, extra: Dict[str, Any]) -> bool:
+        """Send a best-effort telemetry event to the licensing server.
+
+        Must not raise. Returns True on success. Called from daemon threads.
+        """
+        license_id = self._get_license_id()
+        if not license_id:
+            return False
+
+        instance_id = self._get_instance_id()
+        instance_fingerprint: Optional[str] = None
+        if self._get_instance_fingerprint is not None:
+            try:
+                instance_fingerprint = self._get_instance_fingerprint()
+            except Exception:
+                pass
+
+        client_tier: Optional[str] = None
+        if self._get_client_tier is not None:
+            try:
+                client_tier = self._get_client_tier()
+            except Exception:
+                pass
+
+        req = LicenseEventRequest(
+            license_id=license_id,
+            instance_id=instance_id,
+            event=event,
+            product=self._product,
+            version=self._app_version,
+            instance_fingerprint=instance_fingerprint,
+            client_tier=client_tier,
+            extra=extra or None,
+        )
+        try:
+            ok = self._client.send_event(req)
+        except Exception as exc:
+            logger.debug("license_online: telemetry event=%s raised unexpectedly: %s", event, exc)
+            return False
+        if ok:
+            logger.debug("license_online: telemetry event=%s sent ok", event)
+        else:
+            logger.debug("license_online: telemetry event=%s failed (best-effort)", event)
+        return ok
+
+    def _check_and_report_rollback(self) -> None:
+        """Check the offline snapshot for a rollback and emit a best-effort event if found.
+
+        Tracks the last reported attempted_generation so we don't re-send the same
+        rollback event on every check cycle while the instance is stuck in that state.
+        """
+        if self._get_offline_snapshot is None:
+            return
+        try:
+            snapshot = self._get_offline_snapshot()
+        except Exception:
+            return
+        if snapshot.get("reason_code") != "ROLLBACK_DETECTED":
+            return
+        attempted_gen = int(snapshot.get("license_generation") or 0)
+        with self._lock:
+            last_reported = self._last_rollback_reported_gen
+        if last_reported == attempted_gen:
+            return  # already reported this generation
+        extra: Dict[str, Any] = {"attempted_version": attempted_gen}
+        license_id = str(snapshot.get("license_id") or "").strip()
+        if not license_id:
+            return
+        logger.warning(
+            "license_online: rollback_detected for license_id=%s attempted_gen=%d — reporting to server",
+            license_id, attempted_gen,
+        )
+        sent = self._send_telemetry_event("rollback_detected", extra)
+        if sent:
+            with self._lock:
+                self._last_rollback_reported_gen = attempted_gen
 
     def _run_sync(self, *, license_id: str, instance_id: str) -> None:
         """Pull a fresh signed license doc from the server and write it atomically.
@@ -510,6 +648,7 @@ class OnlineLicenseManager:
         license_path: Optional[str] = None,
         get_local_generation_fn: Optional[Callable[[], int]] = None,
         on_new_license_fn: Optional[Callable[[], None]] = None,
+        get_offline_snapshot_fn: Optional[Callable[[], Dict[str, Any]]] = None,
     ) -> Optional["OnlineLicenseManager"]:
         """Build from environment variables. Returns None if online checks are not configured."""
         client = OnlineLicenseClient.from_env()
@@ -538,6 +677,7 @@ class OnlineLicenseManager:
             license_path=license_path,
             get_local_generation_fn=get_local_generation_fn,
             on_new_license_fn=on_new_license_fn,
+            get_offline_snapshot_fn=get_offline_snapshot_fn,
         )
 
 
@@ -558,6 +698,7 @@ def init_manager(
     license_path: Optional[str] = None,
     get_local_generation_fn: Optional[Callable[[], int]] = None,
     on_new_license_fn: Optional[Callable[[], None]] = None,
+    get_offline_snapshot_fn: Optional[Callable[[], Dict[str, Any]]] = None,
 ) -> Optional[OnlineLicenseManager]:
     """Initialize the module singleton from env vars. Returns None if not configured.
 
@@ -575,6 +716,7 @@ def init_manager(
             license_path=license_path,
             get_local_generation_fn=get_local_generation_fn,
             on_new_license_fn=on_new_license_fn,
+            get_offline_snapshot_fn=get_offline_snapshot_fn,
         )
         _MANAGER = mgr
         if mgr is None:

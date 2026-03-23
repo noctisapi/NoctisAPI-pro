@@ -66,6 +66,24 @@ class LicenseSyncResponse:
     reason: Optional[str] = None
 
 
+@dataclass(frozen=True)
+class LicenseEventRequest:
+    """Best-effort telemetry event sent to the licensing server.
+
+    event must be one of: startup, rollback_detected, grace_expired.
+    extra is a dict of event-specific fields (e.g. attempted_version, grace_expired_at).
+    """
+    license_id: str
+    instance_id: str
+    event: str  # "startup" | "rollback_detected" | "grace_expired"
+    product: str
+    version: str
+    instance_fingerprint: Optional[str] = None
+    client_tier: Optional[str] = None
+    timestamp: Optional[str] = None   # ISO UTC; defaults to now if None
+    extra: Optional[dict] = None
+
+
 # ---------------------------------------------------------------------------
 # Error type
 # ---------------------------------------------------------------------------
@@ -298,6 +316,52 @@ class OnlineLicenseClient:
                 last_error = OnlineCheckError(f"sync: network: {exc}")
 
         raise last_error or OnlineCheckError("sync: unknown error after retries")
+
+    def send_event(self, req: "LicenseEventRequest") -> bool:
+        """Send a best-effort telemetry event to the licensing server.
+
+        Returns True on success (HTTP 200), False on any error.
+        Never raises. Uses a short fixed timeout (5s) — no retries.
+        A failure here does NOT affect any enforcement decision.
+        """
+        import time as _time
+        url = f"{self._base_url}/v1/licenses/event"
+        now_ts = (
+            req.timestamp
+            or _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime())
+        )
+        payload: dict = {
+            "license_id": req.license_id,
+            "instance_id": req.instance_id,
+            "event": req.event,
+            "product": req.product,
+            "version": req.version,
+            "timestamp": now_ts,
+        }
+        if req.instance_fingerprint:
+            payload["instance_fingerprint"] = req.instance_fingerprint
+        if req.client_tier:
+            payload["client_tier"] = req.client_tier
+        if req.extra:
+            payload.update(req.extra)
+        headers = {
+            "X-License-Check-Token": self._shared_secret,
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+        try:
+            with httpx.Client(timeout=5.0) as client:
+                resp = client.post(url, json=payload, headers=headers)
+            if resp.status_code == 200:
+                return True
+            logger.debug(
+                "license_online_client: event %s returned http_%d",
+                req.event, resp.status_code,
+            )
+            return False
+        except Exception as exc:
+            logger.debug("license_online_client: event %s failed: %s", req.event, exc)
+            return False
 
     # ---------------------------------------------------------------------------
     # Factory

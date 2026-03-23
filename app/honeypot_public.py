@@ -273,6 +273,9 @@ def _start_online_license_manager() -> None:
         pro_license.get_backend_license_snapshot(force_refresh=True)
         _logger.info("startup: license refreshed after sync")
 
+    def _get_offline_snapshot() -> dict:
+        return pro_license.get_backend_license_snapshot(force_refresh=False)
+
     mgr = _lo.init_manager(
         get_license_id_fn=_get_license_id,
         get_instance_id_fn=_get_instance_id,
@@ -281,6 +284,7 @@ def _start_online_license_manager() -> None:
         license_path=_hp_license_path,
         get_local_generation_fn=_get_local_generation,
         on_new_license_fn=_on_new_license,
+        get_offline_snapshot_fn=_get_offline_snapshot,
     )
     if mgr is not None:
         pro_license.set_online_gate(_lo.is_online_allowed)
