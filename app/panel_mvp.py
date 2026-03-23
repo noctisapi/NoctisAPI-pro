@@ -767,6 +767,14 @@ def fmt_ts(iso: str) -> str:
         return iso
 
 
+def fmt_ts_compact(iso: str) -> str:
+    try:
+        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+        return dt.strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        return iso
+
+
 def _flag_emoji_from_iso2(iso2: str) -> str:
     """Convierte un cÃ³digo ISO2 de paÃ­s a emoji bandera"""
     if not iso2 or len(iso2) != 2:
@@ -2347,6 +2355,7 @@ def dashboard(request: Request):
             a["short"] = short_id(a["actor_id"])
             a["stage"] = stage_from_score(int(a.get("score") or 0))
             a["last_seen_fmt"] = fmt_ts(a["last_seen"])
+            a["last_seen_compact"] = fmt_ts_compact(a["last_seen"])
 
             geo = parse_geo_from_extra(a.get("last_extra_json") or "")
             if not geo.get("geo_iso2"):

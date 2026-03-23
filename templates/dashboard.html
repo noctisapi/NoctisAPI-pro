@@ -40,6 +40,11 @@
   #refreshDot.live { background: #7ee2b8; box-shadow: 0 0 5px #7ee2b8; animation: pulse 2s infinite; }
   #refreshDot.paused { background: #ffc940; }
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+  .actors-last-seen {
+    white-space: nowrap;
+    word-break: normal;
+    overflow-wrap: normal;
+  }
 </style>
 
 <div class="page-head">
@@ -136,7 +141,7 @@
             {% if a.geo_flag %}<span class="flag" title="{{ a.geo_name }} ({{ a.geo_iso2 }})">{{ a.geo_flag }}</span> {% endif %}{{ a.last_ip }}
           </td>
           <td class="mono clip" style="font-size:0.78rem;color:var(--muted);">{{ a.last_ua }}</td>
-          <td class="mono" style="font-size:0.8rem;color:var(--muted);">{{ a.last_seen_fmt }}</td>
+          <td class="mono actors-last-seen" style="font-size:0.8rem;color:var(--muted);" title="{{ a.last_seen_fmt }}">{{ a.last_seen_compact }}</td>
           <td>
             <button class="btn btn-danger btn-small" type="button" onclick="trashActor('{{ a.actor_id }}', this)">Delete</button>
           </td>
