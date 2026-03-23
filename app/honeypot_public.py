@@ -290,8 +290,8 @@ def _start_online_license_manager() -> None:
         on_new_license_fn=_on_new_license,
         get_offline_snapshot_fn=_get_offline_snapshot,
     )
+    pro_license.set_online_gate(_lo.is_online_allowed)
     if mgr is not None:
-        pro_license.set_online_gate(_lo.is_online_allowed)
         mgr.start()
         _logger.info("startup: online license manager started")
 
