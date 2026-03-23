@@ -44,6 +44,26 @@ class LicenseCheckResponse:
     expires_at: Optional[str] = None
     grace_period_seconds: Optional[int] = None
     reason: Optional[str] = None
+    license_generation: Optional[int] = None  # server's current generation for this license
+
+
+@dataclass(frozen=True)
+class LicenseSyncRequest:
+    license_id: str
+    instance_id: str
+    product: str
+    version: str
+    local_generation: int = 0           # client's current generation so server can skip if unchanged
+    instance_fingerprint: Optional[str] = None
+    client_tier: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class LicenseSyncResponse:
+    status: str   # "active" | "unchanged" | "revoked" | "expired" | "suspended"
+    license_generation: Optional[int] = None
+    license_doc: Optional[dict] = None  # parsed JSON of the signed license document
+    reason: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -185,12 +205,99 @@ class OnlineLicenseClient:
             except (TypeError, ValueError):
                 pass
 
+        raw_gen = data.get("license_generation")
+        gen: Optional[int] = None
+        if raw_gen is not None:
+            try:
+                gen = int(raw_gen)
+            except (TypeError, ValueError):
+                pass
+
         return LicenseCheckResponse(
             status=status,  # type: ignore[arg-type]
             expires_at=data.get("expires_at") or None,
             grace_period_seconds=grace,
             reason=data.get("reason") or None,
+            license_generation=gen,
         )
+
+    def sync(self, req: LicenseSyncRequest) -> LicenseSyncResponse:
+        """Pull a fresh signed license document from the server.
+
+        Returns LicenseSyncResponse with status="unchanged" when the client
+        already has the latest generation. Raises OnlineCheckError on transport
+        failures (caller should treat as non-fatal).
+        """
+        url = f"{self._base_url}/v1/licenses/sync"
+        payload: dict = {
+            "license_id": req.license_id,
+            "instance_id": req.instance_id,
+            "product": req.product,
+            "version": req.version,
+            "local_generation": req.local_generation,
+        }
+        if req.instance_fingerprint:
+            payload["instance_fingerprint"] = req.instance_fingerprint
+        if req.client_tier:
+            payload["client_tier"] = req.client_tier
+        headers = {
+            "X-License-Check-Token": self._shared_secret,
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+
+        last_error: Optional[OnlineCheckError] = None
+        _valid_sync_statuses = frozenset(("active", "unchanged", "revoked", "expired", "suspended"))
+
+        for attempt in range(self._max_retries + 1):
+            if attempt > 0:
+                time.sleep(self._retry_backoff * attempt)
+            try:
+                with httpx.Client(timeout=self._timeout) as client:
+                    resp = client.post(url, json=payload, headers=headers)
+
+                if resp.status_code == 200:
+                    try:
+                        data = resp.json()
+                    except Exception as exc:
+                        raise OnlineCheckError(f"sync: invalid json: {exc}") from exc
+                    if not isinstance(data, dict):
+                        raise OnlineCheckError("sync: unexpected response shape")
+                    status = str(data.get("status") or "").strip().lower()
+                    if status not in _valid_sync_statuses:
+                        raise OnlineCheckError(f"sync: unexpected status: {status!r}")
+
+                    raw_gen = data.get("license_generation")
+                    gen_val: Optional[int] = None
+                    if raw_gen is not None:
+                        try:
+                            gen_val = int(raw_gen)
+                        except (TypeError, ValueError):
+                            pass
+
+                    raw_doc = data.get("license_doc")
+                    license_doc: Optional[dict] = raw_doc if isinstance(raw_doc, dict) else None
+
+                    return LicenseSyncResponse(
+                        status=status,
+                        license_generation=gen_val,
+                        license_doc=license_doc,
+                        reason=data.get("reason") or None,
+                    )
+
+                if resp.status_code in _NO_RETRY_HTTP_STATUSES:
+                    raise OnlineCheckError(f"sync: http_{resp.status_code}: {resp.text[:300]}")
+
+                last_error = OnlineCheckError(f"sync: http_{resp.status_code}: {resp.text[:200]}")
+
+            except OnlineCheckError:
+                raise
+            except httpx.TimeoutException as exc:
+                last_error = OnlineCheckError(f"sync: timeout: {exc}")
+            except httpx.RequestError as exc:
+                last_error = OnlineCheckError(f"sync: network: {exc}")
+
+        raise last_error or OnlineCheckError("sync: unknown error after retries")
 
     # ---------------------------------------------------------------------------
     # Factory

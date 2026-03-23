@@ -32,7 +32,13 @@ import threading
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, Optional
 
-from honey_licensing.online_client import LicenseCheckRequest, OnlineCheckError, OnlineLicenseClient
+from honey_licensing.online_client import (
+    LicenseCheckRequest,
+    LicenseSyncRequest,
+    OnlineCheckError,
+    OnlineLicenseClient,
+)
+from honey_licensing.offline_license import LicenseVerifier, load_public_key_pem
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +107,9 @@ class OnlineLicenseManager:
         get_instance_id_fn: Callable[[], str],
         get_instance_fingerprint_fn: Optional[Callable[[], Optional[str]]] = None,
         get_client_tier_fn: Optional[Callable[[], Optional[str]]] = None,
+        license_path: Optional[str] = None,
+        get_local_generation_fn: Optional[Callable[[], int]] = None,
+        on_new_license_fn: Optional[Callable[[], None]] = None,
     ) -> None:
         self._client = client
         self._state_path = state_path
@@ -112,6 +121,9 @@ class OnlineLicenseManager:
         self._get_instance_id = get_instance_id_fn
         self._get_instance_fingerprint = get_instance_fingerprint_fn
         self._get_client_tier = get_client_tier_fn
+        self._license_path = license_path
+        self._get_local_generation = get_local_generation_fn
+        self._on_new_license = on_new_license_fn
 
         self._lock = threading.Lock()
         self._state: Dict[str, Any] = self._load_state()
@@ -261,6 +273,20 @@ class OnlineLicenseManager:
                     license_id,
                     resp.status,
                 )
+                # If server has a newer license generation, pull the updated doc
+                if resp.status == "active" and resp.license_generation is not None and self._license_path:
+                    local_gen = 0
+                    if self._get_local_generation is not None:
+                        try:
+                            local_gen = int(self._get_local_generation() or 0)
+                        except Exception:
+                            pass
+                    if resp.license_generation > local_gen:
+                        logger.info(
+                            "license_online: server gen %d > local gen %d — triggering sync",
+                            resp.license_generation, local_gen,
+                        )
+                        self._run_sync(license_id=license_id, instance_id=instance_id)
         except OnlineCheckError as exc:
             self._apply_check_error(license_id=license_id, error=str(exc))
             logger.warning(
@@ -317,6 +343,112 @@ class OnlineLicenseManager:
             }
             self._state = new_state
         self._save_state(new_state)
+
+    def _run_sync(self, *, license_id: str, instance_id: str) -> None:
+        """Pull a fresh signed license doc from the server and write it atomically.
+
+        Only runs when the server advertises a higher license_generation than local.
+        Validates the RSA signature before writing to prevent garbage writes.
+        """
+        if not self._license_path:
+            return
+
+        local_gen = 0
+        if self._get_local_generation is not None:
+            try:
+                local_gen = int(self._get_local_generation() or 0)
+            except Exception:
+                pass
+
+        instance_fingerprint: Optional[str] = None
+        if self._get_instance_fingerprint is not None:
+            try:
+                instance_fingerprint = self._get_instance_fingerprint()
+            except Exception:
+                pass
+
+        client_tier: Optional[str] = None
+        if self._get_client_tier is not None:
+            try:
+                client_tier = self._get_client_tier()
+            except Exception:
+                pass
+
+        sync_req = LicenseSyncRequest(
+            license_id=license_id,
+            instance_id=instance_id,
+            product=self._product,
+            version=self._app_version,
+            local_generation=local_gen,
+            instance_fingerprint=instance_fingerprint,
+            client_tier=client_tier,
+        )
+
+        try:
+            sync_resp = self._client.sync(sync_req)
+        except OnlineCheckError as exc:
+            logger.warning("license_online: sync request failed: %s", exc)
+            return
+
+        if sync_resp.status == "unchanged":
+            logger.debug("license_online: sync — already at latest generation")
+            return
+
+        if sync_resp.status != "active" or sync_resp.license_doc is None:
+            logger.warning(
+                "license_online: sync returned status=%s reason=%s; no doc written",
+                sync_resp.status, sync_resp.reason,
+            )
+            return
+
+        # Validate signature before writing (prevents corrupt/tampered docs from disk)
+        try:
+            pub_pem = load_public_key_pem()
+            verifier = LicenseVerifier(public_key_pem=pub_pem)
+            ok, _, sig_reason = verifier.verify(sync_resp.license_doc)
+            if not ok:
+                logger.warning(
+                    "license_online: sync doc signature invalid (%s); refusing to write", sig_reason
+                )
+                return
+        except Exception as exc:
+            logger.warning("license_online: could not verify synced doc signature: %s; refusing to write", exc)
+            return
+
+        # Atomic write
+        path = self._license_path
+        parent = os.path.dirname(path) or "."
+        try:
+            os.makedirs(parent, exist_ok=True)
+            fd, tmp = tempfile.mkstemp(prefix="license-sync-", suffix=".tmp", dir=parent)
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(
+                        sync_resp.license_doc, f,
+                        ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+                    )
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp, path)
+            except Exception:
+                try:
+                    os.unlink(tmp)
+                except Exception:
+                    pass
+                raise
+        except Exception as exc:
+            logger.error("license_online: failed to write synced license to %s: %s", path, exc)
+            return
+
+        logger.info(
+            "license_online: new license written gen=%s path=%s",
+            sync_resp.license_generation, path,
+        )
+        if self._on_new_license is not None:
+            try:
+                self._on_new_license()
+            except Exception as exc:
+                logger.warning("license_online: on_new_license callback failed: %s", exc)
 
     # -------------------------------------------------------------------------
     # State persistence
@@ -375,6 +507,9 @@ class OnlineLicenseManager:
         get_instance_id_fn: Callable[[], str],
         get_instance_fingerprint_fn: Optional[Callable[[], Optional[str]]] = None,
         get_client_tier_fn: Optional[Callable[[], Optional[str]]] = None,
+        license_path: Optional[str] = None,
+        get_local_generation_fn: Optional[Callable[[], int]] = None,
+        on_new_license_fn: Optional[Callable[[], None]] = None,
     ) -> Optional["OnlineLicenseManager"]:
         """Build from environment variables. Returns None if online checks are not configured."""
         client = OnlineLicenseClient.from_env()
@@ -400,6 +535,9 @@ class OnlineLicenseManager:
             get_instance_id_fn=get_instance_id_fn,
             get_instance_fingerprint_fn=get_instance_fingerprint_fn,
             get_client_tier_fn=get_client_tier_fn,
+            license_path=license_path,
+            get_local_generation_fn=get_local_generation_fn,
+            on_new_license_fn=on_new_license_fn,
         )
 
 
@@ -417,6 +555,9 @@ def init_manager(
     get_instance_id_fn: Callable[[], str],
     get_instance_fingerprint_fn: Optional[Callable[[], Optional[str]]] = None,
     get_client_tier_fn: Optional[Callable[[], Optional[str]]] = None,
+    license_path: Optional[str] = None,
+    get_local_generation_fn: Optional[Callable[[], int]] = None,
+    on_new_license_fn: Optional[Callable[[], None]] = None,
 ) -> Optional[OnlineLicenseManager]:
     """Initialize the module singleton from env vars. Returns None if not configured.
 
@@ -431,6 +572,9 @@ def init_manager(
             get_instance_id_fn=get_instance_id_fn,
             get_instance_fingerprint_fn=get_instance_fingerprint_fn,
             get_client_tier_fn=get_client_tier_fn,
+            license_path=license_path,
+            get_local_generation_fn=get_local_generation_fn,
+            on_new_license_fn=on_new_license_fn,
         )
         _MANAGER = mgr
         if mgr is None:

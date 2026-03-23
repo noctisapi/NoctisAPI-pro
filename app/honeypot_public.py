@@ -259,11 +259,28 @@ def _start_online_license_manager() -> None:
     def _get_client_tier() -> Optional[str]:
         return "pro" if pro_license.is_pro_enabled() else "core"
 
+    def _get_local_generation() -> int:
+        snap = pro_license.get_backend_license_snapshot(force_refresh=False)
+        return int(snap.get("license_generation") or 0)
+
+    _hp_license_path = (
+        os.getenv("HP_OFFLINE_LICENSE_PATH")
+        or os.getenv("LICENSING_OFFLINE_LICENSE_PATH")
+        or "/var/lib/myapp/license.json"
+    ).strip()
+
+    def _on_new_license() -> None:
+        pro_license.get_backend_license_snapshot(force_refresh=True)
+        _logger.info("startup: license refreshed after sync")
+
     mgr = _lo.init_manager(
         get_license_id_fn=_get_license_id,
         get_instance_id_fn=_get_instance_id,
         get_instance_fingerprint_fn=_get_instance_fingerprint,
         get_client_tier_fn=_get_client_tier,
+        license_path=_hp_license_path,
+        get_local_generation_fn=_get_local_generation,
+        on_new_license_fn=_on_new_license,
     )
     if mgr is not None:
         pro_license.set_online_gate(_lo.is_online_allowed)

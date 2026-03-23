@@ -116,6 +116,8 @@ class LocalLicenseDecision:
     license_id: Optional[str]
     license_generation: int   # maps from payload.license_version
     deployment_id: Optional[str]  # maps from payload.machine_fingerprint
+    in_grace: bool = False          # True when expired but within grace_seconds window
+    grace_until: Optional[int] = None  # epoch when grace ends
 
 
 # ── verification pipeline ─────────────────────────────────────────────────────
@@ -210,6 +212,18 @@ class LicenseValidator:
         # 3 — expiry
         expires_at = _parse_iso_epoch(payload.get("expires_at"))
         if expires_at is not None and now > expires_at:
+            grace_seconds = int(payload.get("grace_seconds") or 0)
+            if grace_seconds > 0:
+                grace_until = expires_at + grace_seconds
+                if now <= grace_until:
+                    logger.info(
+                        "license expired at epoch %d but in grace until %d (now %d)",
+                        expires_at, grace_until, now,
+                    )
+                    return True, "grace", {
+                        "expires_at": int(expires_at),
+                        "grace_until": int(grace_until),
+                    }
             logger.info("license expired at epoch %d (now %d)", expires_at, now)
             return False, "license_expired", {"expires_at": int(expires_at)}
 
@@ -316,10 +330,13 @@ class LicenseStateResolver:
                 deployment_id=bound_deployment,
             )
 
+        in_grace = (validation_reason == "grace")
+        grace_until: Optional[int] = details.get("grace_until") if in_grace else None
+
         return LocalLicenseDecision(
             valid=(tier == "pro"),
-            decision="ALLOW" if tier == "pro" else "LIMITED",
-            reason_code="OK",
+            decision="GRACE" if (in_grace and tier == "pro") else ("ALLOW" if tier == "pro" else "LIMITED"),
+            reason_code="GRACE" if in_grace else "OK",
             tier=tier,
             features=features if tier == "pro" else tuple(),
             entitlements=entitlements,
@@ -328,6 +345,8 @@ class LicenseStateResolver:
             license_id=license_id,
             license_generation=generation,
             deployment_id=bound_deployment,
+            in_grace=in_grace,
+            grace_until=grace_until,
         )
 
 
