@@ -59,6 +59,7 @@ _STATUS_CACHE: dict[str, Any] = {
         "source": "offline_license",
         "license_generation": 0,
         "deployment_id": None,
+        "online_check_required": True,
     },
 }
 
@@ -153,6 +154,7 @@ def _fetch_local_license() -> tuple[bool, Optional[int], Optional[str], dict[str
         "license_generation": int(decision.license_generation or 0),
         "deployment_id": decision.deployment_id,
         "reason_code": decision.reason_code,
+        "online_check_required": bool(decision.online_check_required),
     }
     return bool(decision.valid), decision.expires_at, (None if decision.valid else decision.reason_code), meta
 
@@ -189,6 +191,7 @@ def _snapshot_from_local_result(
         "license_generation": int(meta.get("license_generation") or 0),
         "deployment_id": meta.get("deployment_id"),
         "license_id": meta.get("license_id"),
+        "online_check_required": bool(meta.get("online_check_required", True)),
     }
 
 
@@ -238,15 +241,23 @@ def is_pro_enabled() -> bool:
     """Return True only when BOTH offline validation passes AND the online gate allows.
 
     State machine:
-      offline invalid                              => False  (INVALID)
-      offline valid + online active                => True   (PRO_ACTIVE)
-      offline valid + online error within grace    => True   (PRO_GRACE)
-      offline valid + online revoked/expired/susp  => False  (PRO_OFF)
-      offline valid + online error grace exhausted => False  (PRO_OFF)
-      offline valid + no online check configured   => True   (offline-only mode)
+      offline invalid                                              => False
+      offline valid + online_check_required=False                  => True  (offline-only license)
+      offline valid + online_check_required=True + no gate         => False (fail-closed; no URL configured)
+      offline valid + online_check_required=True + online active   => True
+      offline valid + online_check_required=True + online error    => depends on grace period
+      offline valid + online_check_required=True + revoked/expired => False
     """
     snapshot = get_backend_license_snapshot(force_refresh=False)
     if not snapshot.get("pro_enabled"):
+        return False
+    online_required = bool(snapshot.get("online_check_required", True))
+    if not online_required:
+        return True  # offline-only license; skip online gate entirely
+    with _ONLINE_GATE_LOCK:
+        gate = _ONLINE_GATE
+    if gate is None:
+        logger.info("pro_license: online_check_required=True but no gate configured; denying PRO")
         return False
     return _check_online_gate()
 
@@ -268,6 +279,7 @@ def clear_cache() -> None:
             "source": "offline_license",
             "license_generation": 0,
             "deployment_id": None,
+            "online_check_required": True,
         }
 
 

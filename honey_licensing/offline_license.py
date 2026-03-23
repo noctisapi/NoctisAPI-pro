@@ -118,6 +118,7 @@ class LocalLicenseDecision:
     deployment_id: Optional[str]  # maps from payload.machine_fingerprint
     in_grace: bool = False          # True when expired but within grace_seconds window
     grace_until: Optional[int] = None  # epoch when grace ends
+    online_check_required: bool = True  # from signed payload; False = offline-only license
 
 
 # ── verification pipeline ─────────────────────────────────────────────────────
@@ -276,6 +277,7 @@ class LicenseStateResolver:
         tier = str(payload.get("tier") or "core").strip().lower() or "core"
         if tier not in ("core", "pro"):
             tier = "core"
+        online_check_required = bool(payload.get("online_check_required", True))
         features = tuple(
             str(x or "").strip().lower()
             for x in (payload.get("features") or [])
@@ -347,6 +349,7 @@ class LicenseStateResolver:
             deployment_id=bound_deployment,
             in_grace=in_grace,
             grace_until=grace_until,
+            online_check_required=online_check_required,
         )
 
 
