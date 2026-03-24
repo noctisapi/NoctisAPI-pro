@@ -3373,6 +3373,7 @@ async def infra_vault(request: Request, v: str = Depends(require_vault_token)):
     finally:
         conn.close()
 
+    _set_hp_event(request, kind="infra_vault", points=0, trap_flags=["critical"])
     return payload
 
 
@@ -3404,6 +3405,7 @@ async def cloud_metadata(request: Request, c: str = Depends(require_cloud_token)
     finally:
         conn.close()
 
+    _set_hp_event(request, kind="cloud_metadata", points=0, trap_flags=["critical"])
     return payload
 
 
@@ -3431,6 +3433,7 @@ async def root_console(request: Request, r: str = Depends(require_root_token)):
     finally:
         conn.close()
 
+    _set_hp_event(request, kind="root_console", points=0, trap_flags=["critical"])
     return payload
 
 
