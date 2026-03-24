@@ -2314,43 +2314,78 @@ def dashboard_api_modular_resolve(path: str = "/", method: str = "GET"):
 
 @app.get("/dashboard/actors", response_class=HTMLResponse)
 def dashboard(request: Request):
+    try:
+        page = max(1, int(request.query_params.get("page") or 1))
+    except (ValueError, TypeError):
+        page = 1
+    try:
+        per_page = min(200, max(10, int(request.query_params.get("per_page") or 50)))
+    except (ValueError, TypeError):
+        per_page = 50
+    offset = (page - 1) * per_page
+
     conn = db()
     try:
         cur = conn.cursor()
+
+        # Count total (one fast query, no correlated subqueries)
         cur.execute(
             """
-            WITH last_events AS (
-              SELECT e.*
-              FROM events e
-              JOIN (
-                SELECT actor_id, MAX(id) AS max_id
-                FROM events
-                GROUP BY actor_id
-              ) m ON e.actor_id = m.actor_id AND e.id = m.max_id
+            SELECT COUNT(*) AS n FROM actors a
+            JOIN (SELECT DISTINCT actor_id FROM events) ae ON ae.actor_id = a.actor_id
+            WHERE COALESCE(a.lifecycle_state, 'active') != 'deleted'
+            """
+        )
+        total_actors = int((cur.fetchone() or {}).get("n") or 0)
+        total_pages = max(1, (total_actors + per_page - 1) // per_page)
+        page = min(page, total_pages)
+        offset = (page - 1) * per_page
+
+        # Main query: single GROUP BY replaces 9 correlated subqueries
+        cur.execute(
+            """
+            WITH actor_counts AS (
+              SELECT
+                actor_id,
+                MAX(id) AS max_event_id,
+                SUM(CASE WHEN kind = 'token_used'                              THEN 1 ELSE 0 END) AS token_used_count,
+                SUM(CASE WHEN kind = 'unknown_token'                           THEN 1 ELSE 0 END) AS unknown_token_count,
+                SUM(CASE WHEN kind LIKE 'recon_%'                              THEN 1 ELSE 0 END) AS recon_count,
+                SUM(CASE WHEN kind LIKE 'auth_%'                               THEN 1 ELSE 0 END) AS auth_count,
+                SUM(CASE WHEN kind LIKE 'admin_%' OR kind LIKE 'internal_%'    THEN 1 ELSE 0 END) AS internal_count,
+                SUM(CASE WHEN kind LIKE 'devops_%' OR kind = 'pipeline_job'    THEN 1 ELSE 0 END) AS devops_count,
+                SUM(CASE WHEN kind LIKE 'files_%'  OR kind = 'upload_trap'     THEN 1 ELSE 0 END) AS files_count,
+                SUM(CASE WHEN kind LIKE 'console_%' OR kind LIKE 'root_%'      THEN 1 ELSE 0 END) AS console_count,
+                SUM(CASE WHEN kind LIKE 'business_%'                           THEN 1 ELSE 0 END) AS business_count
+              FROM events
+              GROUP BY actor_id
+            ),
+            geo_fallback AS (
+              SELECT actor_id, MAX(id) AS geo_id
+              FROM events
+              WHERE extra_json LIKE '%country_iso2%'
+              GROUP BY actor_id
             )
             SELECT
               a.actor_id, a.first_seen, a.last_seen, a.score,
               a.err_total, a.err_consecutive, a.last_status, a.last_error_ts,
-              le.ip AS last_ip,
-              le.ua AS last_ua,
+              le.ip  AS last_ip,
+              le.ua  AS last_ua,
               le.extra_json AS last_extra_json,
-              (SELECT e.extra_json FROM events e WHERE e.actor_id = a.actor_id AND e.extra_json LIKE '%country_iso2%' ORDER BY e.id DESC LIMIT 1) AS last_geo_extra_json,
-              (SELECT COUNT(*) FROM events e WHERE e.actor_id = a.actor_id AND e.kind = 'token_used') AS token_used_count,
-              (SELECT COUNT(*) FROM events e WHERE e.actor_id = a.actor_id AND e.kind = 'unknown_token') AS unknown_token_count,
-              (SELECT COUNT(*) FROM events e WHERE e.actor_id = a.actor_id AND e.kind LIKE 'recon_%') AS recon_count,
-              (SELECT COUNT(*) FROM events e WHERE e.actor_id = a.actor_id AND e.kind LIKE 'auth_%') AS auth_count,
-              (SELECT COUNT(*) FROM events e WHERE e.actor_id = a.actor_id AND (e.kind LIKE 'admin_%' OR e.kind LIKE 'internal_%')) AS internal_count,
-              (SELECT COUNT(*) FROM events e WHERE e.actor_id = a.actor_id AND (e.kind LIKE 'devops_%' OR e.kind = 'pipeline_job')) AS devops_count,
-              (SELECT COUNT(*) FROM events e WHERE e.actor_id = a.actor_id AND (e.kind LIKE 'files_%' OR e.kind = 'upload_trap')) AS files_count,
-              (SELECT COUNT(*) FROM events e WHERE e.actor_id = a.actor_id AND (e.kind LIKE 'console_%' OR e.kind LIKE 'root_%')) AS console_count,
-              (SELECT COUNT(*) FROM events e WHERE e.actor_id = a.actor_id AND e.kind LIKE 'business_%') AS business_count
+              gf_ev.extra_json AS last_geo_extra_json,
+              ac.token_used_count, ac.unknown_token_count,
+              ac.recon_count, ac.auth_count, ac.internal_count,
+              ac.devops_count, ac.files_count, ac.console_count, ac.business_count
             FROM actors a
-            LEFT JOIN last_events le ON le.actor_id = a.actor_id
+            JOIN actor_counts ac ON ac.actor_id = a.actor_id
+            LEFT JOIN events le   ON le.id  = ac.max_event_id
+            LEFT JOIN geo_fallback gf    ON gf.actor_id  = a.actor_id
+            LEFT JOIN events gf_ev ON gf_ev.id = gf.geo_id
             WHERE COALESCE(a.lifecycle_state, 'active') != 'deleted'
-              AND EXISTS (SELECT 1 FROM events e WHERE e.actor_id = a.actor_id)
             ORDER BY a.last_seen DESC
-            LIMIT 200
-            """
+            LIMIT ? OFFSET ?
+            """,
+            (per_page, offset),
         )
         actors = [dict(r) for r in cur.fetchall()]
         cur.execute("SELECT COALESCE(MAX(stage_max), 0) AS max_stage FROM sessions")
@@ -2416,7 +2451,16 @@ def dashboard(request: Request):
 
         return templates.TemplateResponse(
             "dashboard.html",
-            {"request": request, "actors": actors, "max_stage": max_stage, **_license_context()},
+            {
+                "request": request,
+                "actors": actors,
+                "max_stage": max_stage,
+                "page": page,
+                "per_page": per_page,
+                "total_actors": total_actors,
+                "total_pages": total_pages,
+                **_license_context(),
+            },
         )
     finally:
         conn.close()

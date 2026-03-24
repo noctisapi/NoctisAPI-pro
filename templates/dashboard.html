@@ -50,7 +50,7 @@
 <div class="page-head">
   <div>
     <h1>Actors</h1>
-    <div class="sub">Latest 200 &middot; sorted by activity</div>
+    <div class="sub">{{ total_actors }} total &middot; page {{ page }} of {{ total_pages }} &middot; sorted by activity</div>
     <div id="refreshBar">
       <span id="refreshDot" class="live"></span>
       <span id="refreshLabel">Live · refreshes when idle</span>
@@ -58,8 +58,8 @@
   </div>
   <div class="kpis">
     <div class="kpi">
-      <div class="kpi-label">Visible</div>
-      <div class="kpi-value">{{ actors|length }}</div>
+      <div class="kpi-label">Total</div>
+      <div class="kpi-value">{{ total_actors }}</div>
     </div>
     <div class="kpi">
       <div class="kpi-label">Top stage</div>
@@ -71,7 +71,7 @@
 <div class="card">
   <div class="card-head">
     <div class="card-title">Actors</div>
-    <div class="card-sub" id="actorCount">{{ actors|length }} actors</div>
+    <div class="card-sub" id="actorCount">{{ actors|length }} / {{ total_actors }} actors</div>
   </div>
 
   <!-- Filter bar -->
@@ -150,6 +150,45 @@
       </tbody>
     </table>
   </div>
+
+  {% if total_pages > 1 %}
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-top:1px solid var(--stroke);flex-wrap:wrap;gap:8px;">
+    <div style="font-size:0.8rem;color:var(--muted);">
+      Page {{ page }} of {{ total_pages }} &middot; {{ total_actors }} actors total
+    </div>
+    <div style="display:flex;gap:6px;align-items:center;">
+      {% if page > 1 %}
+        <a href="?page={{ page - 1 }}&per_page={{ per_page }}" class="btn btn-ghost btn-small">&laquo; Prev</a>
+      {% else %}
+        <span class="btn btn-ghost btn-small" style="opacity:.35;pointer-events:none;">&laquo; Prev</span>
+      {% endif %}
+
+      {% set pg_start = [1, page - 2]|max %}
+      {% set pg_end   = [total_pages, page + 2]|min %}
+      {% if pg_start > 1 %}
+        <a href="?page=1&per_page={{ per_page }}" class="btn btn-ghost btn-small">1</a>
+        {% if pg_start > 2 %}<span style="color:var(--muted);padding:0 2px;">…</span>{% endif %}
+      {% endif %}
+      {% for p in range(pg_start, pg_end + 1) %}
+        {% if p == page %}
+          <span class="btn btn-small" style="background:var(--accent);color:#fff;border-color:var(--accent);">{{ p }}</span>
+        {% else %}
+          <a href="?page={{ p }}&per_page={{ per_page }}" class="btn btn-ghost btn-small">{{ p }}</a>
+        {% endif %}
+      {% endfor %}
+      {% if pg_end < total_pages %}
+        {% if pg_end < total_pages - 1 %}<span style="color:var(--muted);padding:0 2px;">…</span>{% endif %}
+        <a href="?page={{ total_pages }}&per_page={{ per_page }}" class="btn btn-ghost btn-small">{{ total_pages }}</a>
+      {% endif %}
+
+      {% if page < total_pages %}
+        <a href="?page={{ page + 1 }}&per_page={{ per_page }}" class="btn btn-ghost btn-small">Next &raquo;</a>
+      {% else %}
+        <span class="btn btn-ghost btn-small" style="opacity:.35;pointer-events:none;">Next &raquo;</span>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
 </div>
 
 <script>
@@ -181,7 +220,7 @@
     });
     const total = document.querySelectorAll('#actorsBody tr').length;
     const countEl = document.getElementById('actorCount');
-    if (countEl) countEl.textContent = filterActive ? `${visible} / ${total} actors` : `${total} actors`;
+    if (countEl) countEl.textContent = filterActive ? `${visible} / {{ total_actors }} actors` : `${total} / {{ total_actors }} actors`;
   }
 
   function clearActorFilter() {
