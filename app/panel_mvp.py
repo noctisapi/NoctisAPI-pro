@@ -3666,6 +3666,24 @@ def dashboard_alerts(request: Request, limit: int = 200):
             r["stage_after"] = ex.get("stage_after", "—")
             r["scanner"] = ex.get("scanner", False)
 
+            # Geo flag from extra_json, fallback to GeoIP
+            geo = parse_geo_from_extra(r.get("extra_json") or "")
+            if not geo.get("geo_iso2") and r.get("ip"):
+                try:
+                    import geoip2.database
+                    if os.path.exists(HP_GEOIP_DB):
+                        reader = geoip2.database.Reader(HP_GEOIP_DB)
+                        try:
+                            resp = reader.country(r["ip"])
+                            iso = (resp.country.iso_code or "").strip().upper()
+                            if iso:
+                                geo = {"geo_iso2": iso, "geo_name": resp.country.name or "", "geo_flag": _flag_emoji_from_iso2(iso)}
+                        finally:
+                            reader.close()
+                except Exception:
+                    pass
+            r.update(geo)
+
         # Summary stats (24h window regardless of tier)
         cur.execute(
             f"""
