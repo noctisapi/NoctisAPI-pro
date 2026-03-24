@@ -458,7 +458,7 @@
           <td>
             <a class="link mono" href="/actor/{{ l.actor_id }}">{{ l.actor_id[:8] }}</a>
           </td>
-          <td class="mono" style="font-size:0.82rem;">
+          <td class="mono ip-cell" style="font-size:0.82rem;">
             {% if l.geo_flag %}<span style="margin-right:4px;">{{ l.geo_flag }}</span>{% endif %}
             {{ l.last_ip or '—' }}
           </td>
