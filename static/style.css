@@ -267,7 +267,8 @@ input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(.6) opaci
   padding: 7px 10px;
   border-bottom: 1px solid var(--stroke);
   vertical-align: top;
-  word-break: break-word;
+  word-break: normal;
+  white-space: nowrap;
   font-size: 12px;
 }
 .table th, .data-table th {
