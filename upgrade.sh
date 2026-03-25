@@ -409,6 +409,29 @@ docker run --rm \
 info "license.json installed"
 
 # ---------------------------------------------------------------------------
+# Step 4b — Stop any running Core installation to free ports
+# ---------------------------------------------------------------------------
+step "4b/5" "Stopping NoctisAPI Core (if running)"
+
+# Find all compose projects running the Core image and bring them down.
+# This frees ports (9001, 8081, 80, 443) before PRO tries to bind them.
+CORE_IMAGE="ghcr.io/noctisapi/noctisapi-core"
+CORE_CONTAINERS=$(docker ps -q --filter "ancestor=${CORE_IMAGE}" 2>/dev/null || true)
+if [[ -n "$CORE_CONTAINERS" ]]; then
+  # Resolve the compose project(s) behind those containers and stop them.
+  CORE_PROJECTS=$(docker inspect $CORE_CONTAINERS \
+    --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null \
+    | sort -u || true)
+  for project in $CORE_PROJECTS; do
+    info "Stopping Core project: ${project}"
+    docker compose -p "$project" down 2>/dev/null || true
+  done
+  info "Core stopped"
+else
+  info "No running Core containers found — skipping"
+fi
+
+# ---------------------------------------------------------------------------
 # Step 5 — Restart services (no pull — images are already local)
 # ---------------------------------------------------------------------------
 step "5/5" "Restarting services"
