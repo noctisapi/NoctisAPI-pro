@@ -174,12 +174,12 @@ Steps:
    - `ACME_EMAIL=<registration email>`
    - `LICENSE_KEY=sk_live_...`
    - `PRO_BACKEND_URL=https://pro-backend.example.com`
-   - `LICENSING_URL=https://license.unkwn0wn.com` (alternate backend)
+   - `LICENSING_URL=https://license.noctisapi.com` (alternate backend)
    - `LICENSING_PINNED_PUBLIC_KEY_PATH=/app/app/licensing_server_public_key.pem`
    - `INSTANCE_ID_PATH=/var/lib/myapp/instance_id`
    - `HP_PRO_LEASE_CACHE_PATH=/var/lib/myapp/pro_lease_cache.json`
    - `HP_LICENSE_REPORT_TO_SERVER=0` (0/1)
-   - `HP_LICENSE_REPORT_URL=https://license.unkwn0wn.com`
+   - `HP_LICENSE_REPORT_URL=https://license.noctisapi.com`
    - `INSTANCE_FINGERPRINT_SHA256=<fingerprint>`
    - `HP_CAMPAIGN_MIN_FEATURES=4`
    - `HP_CAMPAIGN_MIN_INTERSECTION=3`

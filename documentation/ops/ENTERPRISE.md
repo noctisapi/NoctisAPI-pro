@@ -178,7 +178,7 @@ KEEPALIVE_TIMEOUT=75
 REQUEST_TIMEOUT=30
 
 # ── Startup egress checks ──────────────────────────────────────────────────
-EGRESS_REQUIRED_HOSTS=license.unkwn0wn.com:443
+EGRESS_REQUIRED_HOSTS=license.noctisapi.com:443
 EGRESS_CONNECT_TIMEOUT=5
 
 # ── Logging ────────────────────────────────────────────────────────────────
@@ -315,7 +315,7 @@ KEEPALIVE_TIMEOUT=75
 REQUEST_TIMEOUT=30
 
 # ── Startup egress checks ──────────────────────────────────────────────────
-EGRESS_REQUIRED_HOSTS=license.unkwn0wn.com:443
+EGRESS_REQUIRED_HOSTS=license.noctisapi.com:443
 EGRESS_CONNECT_TIMEOUT=5
 
 # ── Logging ────────────────────────────────────────────────────────────────
@@ -332,7 +332,7 @@ LOG_SYSLOG_FACILITY=local0
 ## 4. Outbound Proxy Configuration
 
 NoctisAPI makes outbound HTTPS calls to:
-- `license.unkwn0wn.com` — license validation and PRO feature checks
+- `license.noctisapi.com` — license validation and PRO feature checks
 - `PRO_BACKEND_URL` — PRO feature backend
 
 If your network requires traffic to exit via a corporate proxy, configure the
@@ -388,16 +388,16 @@ Declare all expected outbound hosts so startup diagnostics verify
 reachability before the first request arrives:
 
 ```ini
-EGRESS_REQUIRED_HOSTS=license.unkwn0wn.com:443,pro-backend.example.com:443
+EGRESS_REQUIRED_HOSTS=license.noctisapi.com:443,pro-backend.example.com:443
 EGRESS_CONNECT_TIMEOUT=5
 ```
 
 At startup the app will log:
 
 ```
-egress: license.unkwn0wn.com OK (dns=ok tcp=ok)
+egress: license.noctisapi.com OK (dns=ok tcp=ok)
 egress: pro-backend.example.com OK (dns=ok tcp=ok)
-[OK] outbound HTTPS — license.unkwn0wn.com → HTTP 200
+[OK] outbound HTTPS — license.noctisapi.com → HTTP 200
 [OK] proxy — reachable: http://proxy.corp.local:3128
 ```
 
@@ -430,7 +430,7 @@ will reject these connections with a certificate verification error.
                   │  TLS (real cert)
                   ▼
           External Origin
-          (license.unkwn0wn.com)
+          (license.noctisapi.com)
 ```
 
 ### 5.2 Providing the Corporate CA Bundle
@@ -540,8 +540,8 @@ are emitted as structured log lines before the first request is served.
 ### 6.1 Check Output
 
 ```
-[OK]    DNS resolution       — resolved 'license.unkwn0wn.com'
-[OK]    outbound HTTPS       — license.unkwn0wn.com → HTTP 200
+[OK]    DNS resolution       — resolved 'license.noctisapi.com'
+[OK]    outbound HTTPS       — license.noctisapi.com → HTTP 200
 [WARN]  proxy                — not configured
 [OK]    TLS trust store      — system CA only
 ```
@@ -567,7 +567,7 @@ In addition to the four summary checks, the app logs a result for every host
 in `EGRESS_REQUIRED_HOSTS`:
 
 ```
-egress: license.unkwn0wn.com OK (dns=ok tcp=ok)
+egress: license.noctisapi.com OK (dns=ok tcp=ok)
 ```
 
 All checks share the `EGRESS_CONNECT_TIMEOUT` setting (default 5 s).
@@ -654,7 +654,7 @@ All checks share the `EGRESS_CONNECT_TIMEOUT` setting (default 5 s).
 |----------|---------|-------------|
 | `LICENSE_KEY` | *(required for PRO)* | License key (`sk_live_...`). |
 | `PRO_BACKEND_URL` | *(required for PRO)* | URL of the PRO feature backend. |
-| `LICENSING_URL` | `https://license.unkwn0wn.com` | License validation endpoint. |
+| `LICENSING_URL` | `https://license.noctisapi.com` | License validation endpoint. |
 | `LICENSING_PINNED_PUBLIC_KEY_PATH` | `/app/app/licensing_server_public_key.pem` | Path to the licensing server's pinned public key. |
 | `HP_LICENSE_REPORT_TO_SERVER` | `0` | Set to `1` to post license telemetry back to the backend. |
 
@@ -721,14 +721,14 @@ SSL_CERT_FILE=/certs/corp-root-ca.crt
 HP_EXTRA_CERTS_DIR=/certs
 
 # ── Egress checks ─────────────────────────────────────────────────────────
-EGRESS_REQUIRED_HOSTS=license.unkwn0wn.com:443,pro-backend.example.com:443
+EGRESS_REQUIRED_HOSTS=license.noctisapi.com:443,pro-backend.example.com:443
 EGRESS_CONNECT_TIMEOUT=5
 
 # ── Application secrets ────────────────────────────────────────────────────
 HP_SEED=<generate with: python -c "import secrets; print(secrets.token_hex(32))">
 LICENSE_KEY=sk_live_...
 PRO_BACKEND_URL=https://pro-backend.example.com
-LICENSING_URL=https://license.unkwn0wn.com
+LICENSING_URL=https://license.noctisapi.com
 
 # ── Data retention ─────────────────────────────────────────────────────────
 HP_RETENTION_ENABLE=1
