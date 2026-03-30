@@ -175,7 +175,8 @@
   </div>
 
   {% if events %}
-    <div class="table-wrap">
+    <div class="table-scroll-top" id="eventsScrollTop"><div class="table-scroll-top__inner" id="eventsScrollInner"></div></div>
+    <div class="table-wrap" id="eventsTableWrap">
       <table class="table table-sortable" id="eventsTable">
         <thead>
           <tr class="header">
@@ -404,6 +405,21 @@
   }
 
   ensureEventsTableHelper();
+
+  // Scrollbar espejo sincronizado arriba de la tabla
+  (function(){
+    const top  = document.getElementById('eventsScrollTop');
+    const wrap = document.getElementById('eventsTableWrap');
+    const inner = document.getElementById('eventsScrollInner');
+    if(!top || !wrap || !inner) return;
+    function syncWidth(){
+      inner.style.width = wrap.scrollWidth + 'px';
+    }
+    syncWidth();
+    new ResizeObserver(syncWidth).observe(wrap);
+    top.addEventListener('scroll',  () => { wrap.scrollLeft = top.scrollLeft; }, {passive:true});
+    wrap.addEventListener('scroll', () => { top.scrollLeft  = wrap.scrollLeft; }, {passive:true});
+  })();
 </script>
 
 {% endblock %}

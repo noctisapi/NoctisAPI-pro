@@ -256,6 +256,8 @@ input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(.6) opaci
 
 /* ── TABLES ─────────────────────────────────────────────────────────────── */
 .table-wrap { overflow-x: auto; overflow-y: visible; display: block; }
+.table-scroll-top { overflow-x: auto; overflow-y: hidden; height: 14px; position: sticky; top: 0; z-index: 10; background: var(--bg-card, #1a1a2e); box-shadow: 0 2px 4px rgba(0,0,0,.25); }
+.table-scroll-top__inner { height: 1px; }
 .table-toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 8px 4px 10px; }
 
 .table, .data-table {
