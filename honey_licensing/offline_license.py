@@ -230,14 +230,31 @@ class LicenseValidator:
 
         # 4 — machine fingerprint
         machine_fp = payload.get("machine_fingerprint")
-        if machine_fp is not None:
-            fp_str = str(machine_fp).strip()
-            if not fp_str:
-                pass  # treat empty string fingerprint as unbound
-            elif not self.instance_fingerprint:
+        fp_str = str(machine_fp).strip() if machine_fp is not None else ""
+
+        if not fp_str:
+            # License is unbound — can run on any machine.
+            # If HP_REQUIRE_MACHINE_BINDING=1 is set, reject unbound licenses so
+            # that a stolen license file cannot be replayed on arbitrary hosts.
+            import os as _os
+            require_binding = _os.getenv("HP_REQUIRE_MACHINE_BINDING", "").strip().lower() in (
+                "1", "true", "yes",
+            )
+            if require_binding:
+                logger.error(
+                    "HP_REQUIRE_MACHINE_BINDING is set but license has no machine_fingerprint; "
+                    "denying PRO — issue a machine-bound license or unset HP_REQUIRE_MACHINE_BINDING"
+                )
+                return False, "license_machine_binding_required", {}
+            logger.warning(
+                "license has no machine_fingerprint binding and can be used on any machine; "
+                "set HP_REQUIRE_MACHINE_BINDING=1 or issue a machine-bound license for production"
+            )
+        else:
+            if not self.instance_fingerprint:
                 logger.warning("license requires machine_fingerprint but none configured")
                 return False, "license_fingerprint_required", {}
-            elif fp_str != self.instance_fingerprint:
+            if fp_str != self.instance_fingerprint:
                 logger.warning("license machine_fingerprint mismatch")
                 return False, "license_fingerprint_mismatch", {}
 

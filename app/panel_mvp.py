@@ -435,9 +435,18 @@ def _start_background_tasks():
     from app.diagnostics import run_diagnostics
     run_diagnostics()
     honeypot_monitor.start()
+    from app import source_integrity as _si
+    _integrity_ok, _integrity_violations = _si.check()
     from app import license_online as _lo
     pro_license.set_online_gate(_lo.is_online_allowed)
-    licensing.set_pro_enabled_provider(pro_license.is_pro_enabled)
+    if _integrity_ok:
+        licensing.set_pro_enabled_provider(pro_license.is_pro_enabled)
+    else:
+        _logger.critical(
+            "startup: source integrity check FAILED (%d violation(s)) — "
+            "Pro features will remain disabled for this session.",
+            len(_integrity_violations),
+        )
     pro_license.get_backend_license_snapshot(force_refresh=True)
     pro_ops.clear_cache()
     if _CAMPAIGN_AUTO_THRESHOLD > 0:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from enum import Enum
 from typing import Callable, Optional, Set
 
@@ -32,25 +33,45 @@ _PRO_FEATURES: Set[str] = {
     Feature.WEBHOOKS.value,
 }
 
+_PROVIDER_LOCK = threading.Lock()
 _PRO_ENABLED_PROVIDER: Optional[Callable[[], bool]] = None
+# True once a real provider has been installed. Prevents replacing the provider
+# with an arbitrary callable (e.g. lambda: True) after startup.
+_PROVIDER_INITIALIZED: bool = False
 
 
 def set_pro_enabled_provider(fn: Optional[Callable[[], bool]]) -> None:
-    global _PRO_ENABLED_PROVIDER
-    _PRO_ENABLED_PROVIDER = fn
+    global _PRO_ENABLED_PROVIDER, _PROVIDER_INITIALIZED
+    with _PROVIDER_LOCK:
+        if fn is None:
+            # Clearing is always allowed (called by shutdown handlers).
+            _PRO_ENABLED_PROVIDER = None
+            _PROVIDER_INITIALIZED = False
+            return
+        if _PROVIDER_INITIALIZED:
+            # Already set — silently ignore replacement attempts.
+            # An attacker calling set_pro_enabled_provider(lambda: True) after
+            # startup will find the legitimate provider already in place.
+            return
+        _PRO_ENABLED_PROVIDER = fn
+        _PROVIDER_INITIALIZED = True
 
 
 def is_pro_enabled() -> bool:
-    if _PRO_ENABLED_PROVIDER is not None:
+    with _PROVIDER_LOCK:
+        fn = _PRO_ENABLED_PROVIDER
+    if fn is not None:
         try:
-            return bool(_PRO_ENABLED_PROVIDER())
+            return bool(fn())
         except Exception:
             return False
     return False
 
 
 def get_license_tier() -> LicenseTier:
-    if _PRO_ENABLED_PROVIDER is not None:
+    with _PROVIDER_LOCK:
+        initialized = _PROVIDER_INITIALIZED
+    if initialized:
         return LicenseTier.PRO if is_pro_enabled() else LicenseTier.CORE
     return LicenseTier.CORE
 

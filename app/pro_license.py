@@ -241,12 +241,13 @@ def is_pro_enabled() -> bool:
     """Return True only when BOTH offline validation passes AND the online gate allows.
 
     State machine:
-      offline invalid                                              => False
-      offline valid + online_check_required=False                  => True  (offline-only license)
-      offline valid + online_check_required=True + no gate         => False (fail-closed; no URL configured)
-      offline valid + online_check_required=True + online active   => True
-      offline valid + online_check_required=True + online error    => depends on grace period
-      offline valid + online_check_required=True + revoked/expired => False
+      offline invalid                                                        => False
+      offline valid + online_check_required=False                            => True  (offline-only license)
+      offline valid + online_check_required=True + manager not configured    => False (fail-closed; HP_LICENSING_SERVER_URL not set)
+      offline valid + online_check_required=True + no gate callback          => False (fail-closed; wiring missing)
+      offline valid + online_check_required=True + online active             => True
+      offline valid + online_check_required=True + online error (in grace)   => True
+      offline valid + online_check_required=True + revoked/expired/no grace  => False
     """
     snapshot = get_backend_license_snapshot(force_refresh=False)
     if not snapshot.get("pro_enabled"):
@@ -254,6 +255,23 @@ def is_pro_enabled() -> bool:
     online_required = bool(snapshot.get("online_check_required", True))
     if not online_required:
         return True  # offline-only license; skip online gate entirely
+
+    # online_check_required=True: the online manager MUST be configured.
+    # Removing HP_LICENSING_SERVER_URL must not silently bypass this requirement —
+    # is_online_allowed() returns True when no manager exists (offline-only mode),
+    # but that must not satisfy a license that explicitly requires online validation.
+    try:
+        from app import license_online as _lo  # local import avoids circular dependency
+        if _lo.get_manager() is None:
+            logger.warning(
+                "pro_license: online_check_required=True but online manager not configured "
+                "(HP_LICENSING_SERVER_URL not set); denying PRO"
+            )
+            return False
+    except Exception as exc:
+        logger.warning("pro_license: could not check online manager status: %s; denying PRO", exc)
+        return False
+
     with _ONLINE_GATE_LOCK:
         gate = _ONLINE_GATE
     if gate is None:

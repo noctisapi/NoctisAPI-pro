@@ -378,17 +378,38 @@ class OnlineLicenseManager:
         now = _utc_now_iso()
         with self._lock:
             existing_grace = self._state.get("grace_deadline")
+            last_online_at = self._state.get("last_online_at")
 
             if existing_grace is None:
-                # First error: start grace countdown from now
-                deadline_dt = datetime.now(timezone.utc) + timedelta(seconds=self._grace_period)
+                # Distinguish first-ever failure (no prior confirmed check) from
+                # connectivity loss on a previously-validated instance.
+                #
+                # Without this, an attacker can block the licensing server from day 1
+                # and receive the full grace period (default 3 days) of free Pro access.
+                # HP_ONLINE_STARTUP_GRACE_SECONDS caps the window for a fresh instance
+                # that has never reached the server. Default: 600 s (10 min).
+                if last_online_at is None:
+                    startup_grace_s = _env_int(
+                        "HP_ONLINE_STARTUP_GRACE_SECONDS", default=600, min_val=0
+                    )
+                    effective_grace = min(startup_grace_s, self._grace_period)
+                    logger.warning(
+                        "license_online: first-ever check failed with no prior online history; "
+                        "using startup grace of %ds (HP_ONLINE_STARTUP_GRACE_SECONDS). "
+                        "Pro features will be denied after this window if the server remains unreachable.",
+                        effective_grace,
+                    )
+                else:
+                    effective_grace = self._grace_period
+
+                deadline_dt = datetime.now(timezone.utc) + timedelta(seconds=effective_grace)
                 grace_deadline: Optional[str] = (
                     deadline_dt.replace(microsecond=0).isoformat().replace("+00:00", "Z")
                 )
                 logger.info(
                     "license_online: starting grace period deadline=%s grace_seconds=%d",
                     grace_deadline,
-                    self._grace_period,
+                    effective_grace,
                 )
             else:
                 # Keep original deadline — do NOT extend on repeated failures
