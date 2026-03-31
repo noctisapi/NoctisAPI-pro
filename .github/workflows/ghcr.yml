@@ -89,3 +89,29 @@ jobs:
             -H "X-Admin-Token: ${{ secrets.LICENSING_ADMIN_TOKEN }}" \
             -H "Content-Type: application/json" \
             -d "{\"version\": \"${{ steps.version.outputs.sha }}\"}"
+
+      - name: Clean up old images from R2 (keep latest 3 + noctisapi-pro-latest.tar)
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          ENDPOINT="https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com"
+          BUCKET="${{ secrets.R2_BUCKET_NAME }}"
+
+          # List all versioned tars sorted by LastModified (oldest first), exclude -latest.tar
+          aws s3api list-objects \
+            --bucket "$BUCKET" \
+            --prefix "images/noctisapi-pro-" \
+            --query "sort_by(Contents, &LastModified)[].Key" \
+            --output text \
+            --endpoint-url "$ENDPOINT" \
+            --region auto \
+          | tr '\t' '\n' \
+          | grep -v 'noctisapi-pro-latest\.tar' \
+          | head -n -3 \
+          | while read key; do
+              echo "Deleting old image: $key"
+              aws s3 rm "s3://$BUCKET/$key" \
+                --endpoint-url "$ENDPOINT" \
+                --region auto
+            done
