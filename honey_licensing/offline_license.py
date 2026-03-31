@@ -19,11 +19,27 @@ _EXPECTED_PUBKEY_SHA256 = "118a86fc8f1c69609a71e3f314957a8221dd03febdf01745dc0be
 
 
 def load_public_key_pem() -> bytes:
-    """Load and verify the RSA public key PEM from the fixed image path.
+    """Load the RSA public key PEM used to verify offline license signatures.
 
-    Raises RuntimeError if the file is missing, unreadable, empty, or tampered.
+    If HP_OFFLINE_LICENSE_PUBLIC_KEY_PATH is set, load from that path (no
+    integrity check — the key is operator-provided, e.g. installed by upgrade.sh).
+    Otherwise fall back to the bundled key with its SHA256 integrity check.
+
+    Raises RuntimeError if the file is missing, unreadable, or empty.
     Callers should catch this and degrade to CORE.
     """
+    override = os.getenv("HP_OFFLINE_LICENSE_PUBLIC_KEY_PATH", "").strip()
+    if override:
+        try:
+            with open(override, "rb") as f:
+                data = f.read()
+            if not data:
+                raise ValueError("PEM file is empty")
+            return data
+        except Exception as exc:
+            raise RuntimeError(
+                f"License public key unavailable at {override}: {exc}"
+            ) from exc
     try:
         with open(PUBLIC_KEY_PATH, "rb") as f:
             data = f.read()
