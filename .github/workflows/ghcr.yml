@@ -115,7 +115,7 @@ jobs:
             -X POST "${{ secrets.LICENSING_SERVER_URL }}/v1/distribution/set-version" \
             -H "X-Admin-Token: ${{ secrets.LICENSING_ADMIN_TOKEN }}" \
             -H "Content-Type: application/json" \
-            -d "{\"version\":\"${{ steps.version.outputs.sha }}\",\"sha256\":\"${{ steps.artifact.outputs.sha256 }}\",\"filename\":\"${{ steps.artifact.outputs.filename }}\"}")
+            -d "{\"version\":\"${{ steps.version.outputs.sha }}\",\"sha256\":\"${{ steps.artifact.outputs.sha256 }}\"}")
           echo "$RESPONSE"
 
       - name: Verify licensing server current version
