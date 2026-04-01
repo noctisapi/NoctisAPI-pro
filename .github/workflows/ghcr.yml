@@ -151,26 +151,9 @@ jobs:
             RESPONSE=$(cat "$TMP_BODY")
             echo "$RESPONSE"
             export RESPONSE
-            python - <<'PY'
-            import json
-            import os
-
-            response = json.loads(os.environ["RESPONSE"])
-            current = (
-                response.get("current_version")
-                or response.get("image_version")
-                or response.get("current", {}).get("version")
-            )
-            if not current:
-                raise SystemExit(
-                    "Licensing verification response did not expose current_version, image_version, or current.version"
-                )
-            expected = os.environ["EXPECTED_VERSION"]
-            if current != expected:
-                raise SystemExit(
-                    f"Licensing server current version '{current}' does not match expected '{expected}'"
-                )
-            PY
+            python -c "import json, os; response=json.loads(os.environ['RESPONSE']); current=response.get('current_version') or response.get('image_version') or response.get('current', {}).get('version'); expected=os.environ['EXPECTED_VERSION']; \
+if not current: raise SystemExit('Licensing verification response did not expose current_version, image_version, or current.version'); \
+if current != expected: raise SystemExit(f\"Licensing server current version '{current}' does not match expected '{expected}'\")"
             VERIFIED=1
             break
           done
