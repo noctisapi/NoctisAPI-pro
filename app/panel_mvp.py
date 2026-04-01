@@ -2583,14 +2583,24 @@ def _normalize_endpoint_override_payload(payload: dict, *, registry: CatalogRegi
         else:
             normalized_flaw = str(flaw_profile_id)
 
+        fixed_status_raw = raw.get("fixed_status")
+        fixed_status = None
+        if fixed_status_raw not in (None, ""):
+            fixed_status = int(fixed_status_raw)
+
+        latency_raw = raw.get("latency_ms")
+        latency_ms = None
+        if latency_raw not in (None, ""):
+            latency_ms = int(latency_raw)
+
         try:
             endpoint_configs[str(endpoint_id)] = EndpointConfig(
                 endpoint_id=str(endpoint_id),
                 enabled=bool(raw.get("enabled", True)),
                 response_profile_id=str(response_profile_id).strip() or None if response_profile_id is not None else None,
                 flaw_profile_id=normalized_flaw,
-                fixed_status=int(raw["fixed_status"]) if str(raw.get("fixed_status", "")).strip() else None,
-                latency_ms=int(raw["latency_ms"]) if str(raw.get("latency_ms", "")).strip() else None,
+                fixed_status=fixed_status,
+                latency_ms=latency_ms,
             )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=f"invalid_endpoint_override:{endpoint_id}:{exc}")
