@@ -124,31 +124,61 @@ jobs:
           LICENSING_SERVER_URL: ${{ secrets.LICENSING_SERVER_URL }}
           LICENSING_ADMIN_TOKEN: ${{ secrets.LICENSING_ADMIN_TOKEN }}
         run: |
-          STATUS_URL="${LICENSING_SERVER_URL}/v1/distribution/status?_ts=$(date +%s)"
-          RESPONSE=$(curl --silent --show-error --fail \
-            --retry 5 \
-            --retry-delay 3 \
-            --retry-all-errors \
-            -H "Cache-Control: no-cache, no-store, max-age=0" \
-            -H "Pragma: no-cache" \
-            -H "X-Admin-Token: ${LICENSING_ADMIN_TOKEN}" \
-            "$STATUS_URL")
-          echo "$RESPONSE"
-          export RESPONSE
-          python - <<'PY'
-          import json
-          import os
+          TMP_BODY=$(mktemp)
+          VERIFIED=0
 
-          response = json.loads(os.environ["RESPONSE"])
-          current = response.get("current_version") or response.get("image_version")
-          if not current:
-              raise SystemExit("Licensing status response did not expose current_version or image_version")
-          expected = os.environ["EXPECTED_VERSION"]
-          if current != expected:
-              raise SystemExit(
-                  f"Licensing server current version '{current}' does not match expected '{expected}'"
-              )
-          PY
+          for path in "/v1/distribution/status" "/admin/api/distribution"; do
+            STATUS_URL="${LICENSING_SERVER_URL}${path}?_ts=$(date +%s)"
+            HTTP_CODE=$(curl --silent --show-error \
+              --retry 5 \
+              --retry-delay 3 \
+              --retry-all-errors \
+              -H "Cache-Control: no-cache, no-store, max-age=0" \
+              -H "Pragma: no-cache" \
+              -H "X-Admin-Token: ${LICENSING_ADMIN_TOKEN}" \
+              -o "$TMP_BODY" \
+              -w "%{http_code}" \
+              "$STATUS_URL")
+            if [ "$HTTP_CODE" = "404" ]; then
+              continue
+            fi
+            if [ "$HTTP_CODE" != "200" ]; then
+              echo "Licensing verification endpoint ${path} returned HTTP ${HTTP_CODE}" >&2
+              cat "$TMP_BODY"
+              exit 1
+            fi
+
+            RESPONSE=$(cat "$TMP_BODY")
+            echo "$RESPONSE"
+            export RESPONSE
+            python - <<'PY'
+            import json
+            import os
+
+            response = json.loads(os.environ["RESPONSE"])
+            current = (
+                response.get("current_version")
+                or response.get("image_version")
+                or response.get("current", {}).get("version")
+            )
+            if not current:
+                raise SystemExit(
+                    "Licensing verification response did not expose current_version, image_version, or current.version"
+                )
+            expected = os.environ["EXPECTED_VERSION"]
+            if current != expected:
+                raise SystemExit(
+                    f"Licensing server current version '{current}' does not match expected '{expected}'"
+                )
+            PY
+            VERIFIED=1
+            break
+          done
+
+          if [ "$VERIFIED" != "1" ]; then
+            echo "::warning::Licensing server does not expose a readable distribution status endpoint yet; publish completed but post-publish verification was skipped."
+          fi
+          rm -f "$TMP_BODY"
 
       - name: Clean up old images from R2 (keep latest 3 + noctisapi-pro-latest.tar)
         env:
