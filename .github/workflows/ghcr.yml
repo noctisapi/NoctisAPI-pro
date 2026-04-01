@@ -150,10 +150,15 @@ jobs:
 
             RESPONSE=$(cat "$TMP_BODY")
             echo "$RESPONSE"
-            export RESPONSE
-            python -c "import json, os; response=json.loads(os.environ['RESPONSE']); current=response.get('current_version') or response.get('image_version') or response.get('current', {}).get('version'); expected=os.environ['EXPECTED_VERSION']; \
-if not current: raise SystemExit('Licensing verification response did not expose current_version, image_version, or current.version'); \
-if current != expected: raise SystemExit(f\"Licensing server current version '{current}' does not match expected '{expected}'\")"
+            CURRENT_VERSION=$(printf '%s' "$RESPONSE" | jq -r '.current_version // .image_version // .current.version // empty')
+            if [ -z "$CURRENT_VERSION" ]; then
+              echo "Licensing verification response did not expose current_version, image_version, or current.version" >&2
+              exit 1
+            fi
+            if [ "$CURRENT_VERSION" != "$EXPECTED_VERSION" ]; then
+              echo "Licensing server current version '$CURRENT_VERSION' does not match expected '$EXPECTED_VERSION'" >&2
+              exit 1
+            fi
             VERIFIED=1
             break
           done
