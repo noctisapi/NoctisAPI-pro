@@ -175,27 +175,38 @@ jobs:
         run: |
           ENDPOINT="https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com"
           BUCKET="${{ secrets.R2_BUCKET_NAME }}"
-
-          # List all versioned tars sorted by LastModified (oldest first), exclude -latest.tar
-          aws s3api list-objects \
+          LIST_JSON=$(aws s3api list-objects-v2 \
             --bucket "$BUCKET" \
             --prefix "images/noctisapi-pro-" \
-            --query "sort_by(Contents, &LastModified)[].Key" \
-            --output text \
+            --output json \
             --endpoint-url "$ENDPOINT" \
-            --region auto \
-          | tr '\t' '\n' \
-          | grep '^images/noctisapi-pro-.*\.tar$' \
-          | grep -v 'noctisapi-pro-latest\.tar$' \
-          | head -n -3 \
-          | while read key; do
-              echo "Deleting old image: $key"
-              aws s3 rm "s3://$BUCKET/$key" \
-                --endpoint-url "$ENDPOINT" \
-                --region auto
-              if [ -n "$key" ]; then
-                aws s3 rm "s3://$BUCKET/${key}.sha256" \
-                  --endpoint-url "$ENDPOINT" \
-                  --region auto || true
-              fi
-            done
+            --region auto)
+
+          DELETE_KEYS=$(printf '%s' "$LIST_JSON" | jq -r '
+            (.Contents // [])
+            | map(select(
+                (.Key | test("^images/noctisapi-pro-.*\\.tar$"))
+                and (.Key != "images/noctisapi-pro-latest.tar")
+              ))
+            | sort_by(.LastModified)
+            | if length > 3 then .[0:(length - 3)] else [] end
+            | .[].Key
+          ')
+
+          if [ -z "$DELETE_KEYS" ]; then
+            echo "No old versioned R2 images to delete."
+            exit 0
+          fi
+
+          while IFS= read -r key; do
+            [ -z "$key" ] && continue
+            echo "Deleting old image: $key"
+            aws s3 rm "s3://$BUCKET/$key" \
+              --endpoint-url "$ENDPOINT" \
+              --region auto
+            aws s3 rm "s3://$BUCKET/${key}.sha256" \
+              --endpoint-url "$ENDPOINT" \
+              --region auto || true
+          done <<EOF
+          $DELETE_KEYS
+          EOF
