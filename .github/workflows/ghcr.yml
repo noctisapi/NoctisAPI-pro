@@ -113,10 +113,17 @@ jobs:
             --retry-delay 3 \
             --retry-all-errors \
             -X POST "${{ secrets.LICENSING_SERVER_URL }}/v1/distribution/set-version" \
+            -H "Cache-Control: no-cache, no-store, max-age=0" \
+            -H "Pragma: no-cache" \
             -H "X-Admin-Token: ${{ secrets.LICENSING_ADMIN_TOKEN }}" \
             -H "Content-Type: application/json" \
             -d "{\"version\":\"${{ steps.version.outputs.sha }}\",\"sha256\":\"${{ steps.artifact.outputs.sha256 }}\"}")
           echo "$RESPONSE"
+          POSTED_VERSION=$(printf '%s' "$RESPONSE" | jq -r '.version // empty')
+          if [ "$POSTED_VERSION" != "${{ steps.version.outputs.sha }}" ]; then
+            echo "Licensing server set-version response did not echo expected version '${{ steps.version.outputs.sha }}'" >&2
+            exit 1
+          fi
 
       - name: Verify licensing server current version
         env:
@@ -164,7 +171,8 @@ jobs:
           done
 
           if [ "$VERIFIED" != "1" ]; then
-            echo "::warning::Licensing server does not expose a readable distribution status endpoint yet; publish completed but post-publish verification was skipped."
+            echo "Licensing server does not expose a readable distribution status endpoint; refusing to mark publish as successful without read-back verification." >&2
+            exit 1
           fi
           rm -f "$TMP_BODY"
 
