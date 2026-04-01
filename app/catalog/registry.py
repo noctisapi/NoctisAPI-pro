@@ -224,6 +224,24 @@ class CatalogRegistry:
     def get_flaw_profile(self, flaw_id: str) -> Optional[SecurityFlawProfileDefinition]:
         return self._flaw_profiles.get(flaw_id)
 
+    def list_endpoints(self) -> list[EndpointDefinition]:
+        return list(self._endpoints.values())
+
+    def list_groups(self) -> list[EndpointGroupDefinition]:
+        return list(self._groups.values())
+
+    def list_templates(self) -> list[BaseTemplateDefinition]:
+        return list(self._templates.values())
+
+    def list_extensions(self) -> list[ExtensionPackDefinition]:
+        return list(self._extensions.values())
+
+    def list_response_profiles(self) -> list[ResponseProfileDefinition]:
+        return list(self._response_profiles.values())
+
+    def list_flaw_profiles(self) -> list[SecurityFlawProfileDefinition]:
+        return list(self._flaw_profiles.values())
+
     def endpoints_for_template(self, template_id: str) -> list[EndpointDefinition]:
         """Returns all endpoints contributed by a template's groups (deduped, ordered)."""
         tmpl = self._templates.get(template_id)

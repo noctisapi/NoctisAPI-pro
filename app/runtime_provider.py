@@ -19,7 +19,6 @@ DESIGN DECISIONS:
   - No FastAPI dependency — safe to import from any context.
 
 NON-GOALS:
-  - Does NOT replace api_modular.resolve_request_policy(). Both coexist.
   - Does NOT modify DB tables.
   - Does NOT touch the events / actors / scoring pipeline.
 """
@@ -258,6 +257,17 @@ def resolve_effective_endpoint(method: str, path: str) -> Optional[EffectiveEndp
         return EndpointResolver(get_provider()).resolve(method, path)
     except Exception as exc:
         logger.debug("resolve_effective_endpoint error: %s", exc)
+        return None
+
+
+def resolve_effective_endpoint_including_disabled(method: str, path: str) -> Optional[EffectiveEndpoint]:
+    """Resolve an HTTP (method, path) pair including disabled endpoints."""
+    from app.endpoint_resolver import EndpointResolver
+
+    try:
+        return EndpointResolver(get_provider()).resolve_including_disabled(method, path)
+    except Exception as exc:
+        logger.debug("resolve_effective_endpoint_including_disabled error: %s", exc)
         return None
 
 

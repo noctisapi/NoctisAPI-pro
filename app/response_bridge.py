@@ -38,9 +38,9 @@ def _request_has_registered_route(request: Any) -> bool:
 
 def _response_backend(request: Any) -> str:
     try:
-        return str(getattr(getattr(request, "state", None), "response_backend", "legacy") or "legacy")
+        return str(getattr(getattr(request, "state", None), "response_backend", "runtime_native") or "runtime_native")
     except Exception:
-        return "legacy"
+        return "runtime_native"
 
 
 async def try_factory_response(
@@ -95,6 +95,71 @@ async def try_factory_response(
     except Exception as exc:
         logger.debug(
             "try_factory_response failed for %s %s: %s",
+            getattr(request, "method", "?"),
+            getattr(getattr(request, "url", None), "path", "?"),
+            exc,
+        )
+        return None
+
+
+async def try_handler_factory_response(
+    request: Any,
+    *,
+    actor_id: str = "",
+) -> Optional[Any]:
+    """Handler-assisted factory interception: side effects already executed.
+
+    Call this from inside a route handler AFTER all side effects (_set_hp_event,
+    DB writes, token generation) have completed.  The factory only generates the
+    HTTP response body/status/headers.
+
+    Returns a Starlette Response when:
+    - the request resolves to a catalog endpoint
+    - that endpoint is in HANDLER_MIGRATED_ENDPOINT_IDS
+    - the factory supports that endpoint's operation_type
+
+    Returns None in every other case so the handler falls back to its legacy
+    JSONResponse.  Never raises.
+
+    Sets request.state.response_backend = "handler_factory" on success so that
+    the log_all_requests middleware knows to skip _apply_modular_response_policy()
+    (double-mutation prevention).
+    """
+    try:
+        from app.runtime_provider import resolve_effective_endpoint
+        from app.response_factory.factory import build_response, is_supported
+        from app.response_factory.migration import is_handler_migrated_endpoint
+
+        method = request.method
+        path = request.url.path
+
+        effective_ep = resolve_effective_endpoint(method, path)
+        if effective_ep is None:
+            return None
+        if not is_handler_migrated_endpoint(effective_ep.endpoint_id):
+            return None
+        if not is_supported(effective_ep):
+            return None
+
+        spec = build_response(effective_ep, salt=actor_id)
+        if spec is None:
+            return None
+
+        try:
+            request.state.response_spec = spec
+            request.state.response_backend = "handler_factory"
+        except Exception:
+            pass
+
+        if spec.latency_ms > 0:
+            import asyncio
+            await asyncio.sleep(spec.latency_ms / 1000.0)
+
+        return _spec_to_response(spec)
+
+    except Exception as exc:
+        logger.debug(
+            "try_handler_factory_response failed for %s %s: %s",
             getattr(request, "method", "?"),
             getattr(getattr(request, "url", None), "path", "?"),
             exc,
@@ -165,9 +230,9 @@ def _build_legacy_interaction_fragment(
 ) -> dict[str, Any]:
     """Build the interaction fragment from request routing data. Never raises."""
     try:
-        from app.runtime_provider import resolve_effective_endpoint
+        from app.runtime_provider import resolve_effective_endpoint_including_disabled
 
-        effective_ep = resolve_effective_endpoint(
+        effective_ep = resolve_effective_endpoint_including_disabled(
             str(getattr(request, "method", "")),
             str(getattr(getattr(request, "url", None), "path", "")),
         )

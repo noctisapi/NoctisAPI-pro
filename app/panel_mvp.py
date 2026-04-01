@@ -31,7 +31,22 @@ from app import pro_ops
 from app import license_runtime
 from app import api_modular
 from app import license_online
+from app.catalog.builtin.loader import build_default_registry
+from app.catalog.registry import CatalogRegistry
+from app.catalog.types import Difficulty
 from app.honeypot_monitor import HoneypotAvailabilityMonitor, get_history as hp_get_history, get_summary as hp_get_summary
+from app.instance_config.models import (
+    EndpointConfig,
+    InstanceConfig,
+    MutationConfig,
+    ResponseRule,
+    ResponseRuleAction,
+    ResponseRuleMatch,
+)
+from app.response_factory.factory import is_supported as factory_supports_endpoint
+from app.response_factory.migration import is_handler_migrated_endpoint, is_migrated_endpoint
+from app.runtime.builder import BuildError, build_effective_runtime_config
+from app.runtime_provider import get_provider, invalidate_runtime_cache
 from honey_licensing.client import compute_client_identity
 from honey_licensing.offline_license import LicenseVerifier, load_public_key_pem
 from app.server_config import RequestTimeoutMiddleware, get_request_timeout
@@ -2114,6 +2129,540 @@ def _api_modular_endpoint_catalog(conn: sqlite3.Connection, limit: int = 400) ->
     return catalog
 
 
+def _api_modular_registry() -> CatalogRegistry:
+    try:
+        return get_provider().registry
+    except Exception:
+        return build_default_registry()
+
+
+def _api_modular_group_maps(registry: CatalogRegistry) -> tuple[dict[str, list[dict]], dict[str, dict]]:
+    endpoint_to_groups: dict[str, list[dict]] = {}
+    groups_by_id: dict[str, dict] = {}
+    for group in registry.list_groups():
+        entry = {
+            "id": group.id,
+            "name": group.name,
+            "description": group.description,
+            "endpoint_ids": list(group.endpoint_ids),
+        }
+        groups_by_id[group.id] = entry
+        for endpoint_id in group.endpoint_ids:
+            endpoint_to_groups.setdefault(endpoint_id, []).append(entry)
+    return endpoint_to_groups, groups_by_id
+
+
+def _difficulty_profile_by_value(registry: CatalogRegistry) -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    for profile in registry.list_response_profiles():
+        key = profile.difficulty.value
+        if key not in mapping and profile.id.startswith("standard_"):
+            mapping[key] = profile.id
+    return mapping
+
+
+def _profile_to_legacy_behavior(
+    profile_id: Optional[str],
+    *,
+    registry: CatalogRegistry,
+    global_difficulty: Difficulty,
+) -> tuple[str, int]:
+    profile = registry.get_response_profile(profile_id or "")
+    if profile is None:
+        difficulty = global_difficulty
+        if difficulty == Difficulty.BASIC:
+            return "minimal", 0
+        if difficulty == Difficulty.ADVANCED:
+            return "normal", 2
+        return "normal", 2
+
+    if profile.id == "error_trap_medium":
+        return "error_bias", 1
+    if profile.difficulty == Difficulty.BASIC:
+        return "minimal", 0
+    if profile.difficulty == Difficulty.ADVANCED:
+        return "normal", 2
+    return "normal", 2
+
+
+def _upsert_system_setting(conn: sqlite3.Connection, key: str, value: str) -> None:
+    conn.execute(
+        """
+        INSERT INTO system_settings(key, value, updated_at)
+        VALUES(?, ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+        ON CONFLICT(key) DO UPDATE
+            SET value=excluded.value,
+                updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')
+        """,
+        (key, value),
+    )
+
+
+def _delete_legacy_override(conn: sqlite3.Connection, *, method: str, path: str) -> None:
+    conn.execute(
+        "DELETE FROM api_endpoint_configs WHERE method=? AND path=?",
+        (method, path),
+    )
+
+
+def _upsert_legacy_override(
+    conn: sqlite3.Connection,
+    *,
+    method: str,
+    path: str,
+    enabled: bool,
+    response_mode: str,
+    richness_level: int,
+    fixed_status: Optional[int],
+) -> None:
+    now = _utc_now_iso()
+    conn.execute(
+        """
+        INSERT INTO api_endpoint_configs(method, path, enabled, response_mode, fixed_status, richness_level, updated_ts)
+        VALUES(?,?,?,?,?,?,?)
+        ON CONFLICT(method, path) DO UPDATE
+            SET enabled=excluded.enabled,
+                response_mode=excluded.response_mode,
+                fixed_status=excluded.fixed_status,
+                richness_level=excluded.richness_level,
+                updated_ts=excluded.updated_ts
+        """,
+        (
+            method,
+            path,
+            1 if enabled else 0,
+            response_mode,
+            fixed_status,
+            richness_level,
+            now,
+        ),
+    )
+
+
+def _sync_instance_config_to_legacy(
+    conn: sqlite3.Connection,
+    *,
+    registry: CatalogRegistry,
+    previous_config: InstanceConfig,
+    next_config: InstanceConfig,
+) -> None:
+    previous_ids = set(previous_config.endpoint_configs.keys())
+    next_ids = set(next_config.endpoint_configs.keys())
+    removed_ids = previous_ids - next_ids
+
+    for endpoint_id in sorted(removed_ids):
+        endpoint = registry.get_endpoint(endpoint_id)
+        if endpoint is None:
+            continue
+        _delete_legacy_override(
+            conn,
+            method=endpoint.method.value,
+            path=endpoint.path_pattern,
+        )
+
+    for endpoint_id, endpoint_cfg in next_config.endpoint_configs.items():
+        endpoint = registry.get_endpoint(endpoint_id)
+        if endpoint is None:
+            continue
+        response_mode, richness_level = _profile_to_legacy_behavior(
+            endpoint_cfg.response_profile_id,
+            registry=registry,
+            global_difficulty=next_config.global_difficulty,
+        )
+        _upsert_legacy_override(
+            conn,
+            method=endpoint.method.value,
+            path=endpoint.path_pattern,
+            enabled=endpoint_cfg.enabled,
+            response_mode=response_mode,
+            richness_level=richness_level,
+            fixed_status=endpoint_cfg.fixed_status,
+        )
+
+
+def _load_current_instance_config(conn: sqlite3.Connection, registry: CatalogRegistry) -> InstanceConfig:
+    from app.legacy_config_adapter import LegacyConfigAdapter
+
+    return LegacyConfigAdapter(conn, registry=registry).to_instance_config()
+
+
+def _load_saved_panel_instance_config(conn: sqlite3.Connection) -> Optional[InstanceConfig]:
+    row = conn.execute(
+        "SELECT value FROM system_settings WHERE key='instance_config'"
+    ).fetchone()
+    if not row or not row[0]:
+        return None
+    try:
+        return InstanceConfig.from_json(str(row[0]))
+    except Exception:
+        return None
+
+
+def _serialize_endpoint_definition(
+    endpoint,
+    *,
+    endpoint_groups: dict[str, list[dict]],
+    instance_config: Optional[InstanceConfig] = None,
+    effective_runtime=None,
+) -> dict:
+    groups = endpoint_groups.get(endpoint.id, [])
+    override = instance_config.endpoint_configs.get(endpoint.id) if instance_config else None
+    effective = effective_runtime.get_endpoint(endpoint.id) if effective_runtime else None
+    if effective and is_migrated_endpoint(endpoint.id) and factory_supports_endpoint(effective):
+        backend = "factory"
+    elif effective and is_handler_migrated_endpoint(endpoint.id) and factory_supports_endpoint(effective):
+        backend = "handler_factory"
+    else:
+        backend = "runtime_native"
+    return {
+        "endpoint_id": endpoint.id,
+        "method": endpoint.method.value,
+        "path_pattern": endpoint.path_pattern,
+        "description": endpoint.description,
+        "operation_type": endpoint.operation_type.value,
+        "surface_type": endpoint.surface_type.value,
+        "resource_type": endpoint.resource_type.value,
+        "sensitivity_level": endpoint.sensitivity_level.value,
+        "include_in_schema": bool(endpoint.include_in_schema),
+        "supported_flaw_profile_ids": list(endpoint.supported_flaw_profile_ids),
+        "group_ids": [group["id"] for group in groups],
+        "group_names": [group["name"] for group in groups],
+        "enabled_override": override.enabled if override else None,
+        "response_profile_override": override.response_profile_id if override else None,
+        "flaw_profile_override": override.flaw_profile_id if override else None,
+        "fixed_status_override": override.fixed_status if override else None,
+        "latency_override": override.latency_ms if override else None,
+        "runtime_enabled": bool(effective.enabled) if effective else False,
+        "runtime_response_profile_id": effective.response.profile_id if effective else None,
+        "runtime_flaw_profile_id": effective.flaw.profile_id if (effective and effective.flaw) else None,
+        "response_backend": backend,
+    }
+
+
+def _serialize_template(template, *, registry: CatalogRegistry, groups_by_id: dict[str, dict]) -> dict:
+    endpoints = registry.endpoints_for_template(template.id)
+    return {
+        "id": template.id,
+        "name": template.name,
+        "description": template.description,
+        "default_response_profile_id": template.default_response_profile_id,
+        "default_flaw_profile_id": template.default_flaw_profile_id,
+        "compatible_extension_ids": list(template.compatible_extension_ids),
+        "endpoint_groups": [groups_by_id[group_id] for group_id in template.endpoint_group_ids if group_id in groups_by_id],
+        "endpoint_preview": [
+            {
+                "endpoint_id": endpoint.id,
+                "method": endpoint.method.value,
+                "path_pattern": endpoint.path_pattern,
+            }
+            for endpoint in endpoints[:8]
+        ],
+        "endpoint_count": len(endpoints),
+    }
+
+
+def _serialize_extension(extension, *, registry: CatalogRegistry, groups_by_id: dict[str, dict]) -> dict:
+    endpoints = registry.endpoints_for_extension(extension.id)
+    return {
+        "id": extension.id,
+        "name": extension.name,
+        "description": extension.description,
+        "dependencies": list(extension.dependencies),
+        "incompatible_with": list(extension.incompatible_with),
+        "endpoint_groups": [groups_by_id[group_id] for group_id in extension.endpoint_group_ids if group_id in groups_by_id],
+        "endpoint_preview": [
+            {
+                "endpoint_id": endpoint.id,
+                "method": endpoint.method.value,
+                "path_pattern": endpoint.path_pattern,
+            }
+            for endpoint in endpoints[:8]
+        ],
+        "endpoint_count": len(endpoints),
+    }
+
+
+def _serialize_response_profile(profile) -> dict:
+    return {
+        "id": profile.id,
+        "name": profile.name,
+        "difficulty": profile.difficulty.value,
+        "description": profile.description,
+        "default_headers": dict(profile.default_headers),
+    }
+
+
+def _serialize_flaw_profile(flaw) -> dict:
+    return {
+        "id": flaw.id,
+        "name": flaw.name,
+        "kind": flaw.kind.value,
+        "description": flaw.description,
+        "compatible_operation_types": [item.value for item in flaw.compatible_operation_types],
+        "ttp_tags": list(flaw.ttp_tags),
+    }
+
+
+def _serialize_runtime_snapshot(
+    runtime_config,
+    *,
+    registry: CatalogRegistry,
+    endpoint_groups: dict[str, list[dict]],
+) -> dict:
+    endpoints = []
+    for endpoint in sorted(runtime_config.endpoints.values(), key=lambda item: (item.path_pattern, item.method.value)):
+        groups = endpoint_groups.get(endpoint.endpoint_id, [])
+        if is_migrated_endpoint(endpoint.endpoint_id) and factory_supports_endpoint(endpoint):
+            backend = "factory"
+        elif is_handler_migrated_endpoint(endpoint.endpoint_id) and factory_supports_endpoint(endpoint):
+            backend = "handler_factory"
+        else:
+            backend = "runtime_native"
+        endpoints.append(
+            {
+                "endpoint_id": endpoint.endpoint_id,
+                "method": endpoint.method.value,
+                "path_pattern": endpoint.path_pattern,
+                "operation_type": endpoint.operation_type.value,
+                "surface_type": endpoint.surface_type.value,
+                "resource_type": endpoint.resource_type.value,
+                "group_ids": [group["id"] for group in groups],
+                "group_names": [group["name"] for group in groups],
+                "enabled": bool(endpoint.enabled),
+                "response_profile_id": endpoint.response.profile_id,
+                "difficulty": endpoint.response.difficulty.value,
+                "fixed_status": endpoint.response.fixed_status,
+                "latency_ms": endpoint.response.latency.max_ms,
+                "flaw_profile_id": endpoint.flaw.profile_id if endpoint.flaw else None,
+                "template_id": endpoint.template_id,
+                "extension_ids": list(endpoint.extension_ids),
+                "response_backend": backend,
+                "has_instance_override": bool(endpoint.has_instance_override),
+            }
+        )
+    return {
+        "template_id": runtime_config.template_id,
+        "extension_ids": list(runtime_config.extension_ids),
+        "global_difficulty": runtime_config.global_difficulty.value,
+        "mutation_config": runtime_config.mutation_config.to_legacy_dict(),
+        "response_rules": [
+            {
+                "id": rule.id,
+                "enabled": bool(rule.enabled),
+                "match": {
+                    "endpoint_id": rule.match.endpoint_id,
+                    "endpoint_group_id": rule.match.endpoint_group_id,
+                    "method": rule.match.method,
+                    "user_agent_contains": rule.match.user_agent_contains,
+                },
+                "action": {
+                    "richness_delta": rule.action.richness_delta,
+                    "force_status": rule.action.force_status,
+                    "extra_latency_ms": rule.action.extra_latency_ms,
+                },
+                "created_at": rule.created_at,
+                "updated_at": rule.updated_at,
+            }
+            for rule in runtime_config.response_rules
+        ],
+        "generated_at": runtime_config.generated_at,
+        "stats": runtime_config.stats(),
+        "endpoints": endpoints,
+    }
+
+
+def _build_api_modular_v2_state(*, include_legacy_controls: bool = True) -> dict:
+    registry = _api_modular_registry()
+    endpoint_groups, groups_by_id = _api_modular_group_maps(registry)
+    conn = db()
+    try:
+        ensure_schema(conn)
+        from app.legacy_config_adapter import LegacyConfigAdapter
+
+        current_instance = _load_current_instance_config(conn, registry)
+        adapter = LegacyConfigAdapter(conn, registry=registry)
+        runtime_build_error = ""
+        try:
+            effective_runtime = build_effective_runtime_config(current_instance, registry)
+        except BuildError as exc:
+            runtime_build_error = str(exc)
+            effective_runtime = build_effective_runtime_config(InstanceConfig.default(), registry)
+        route_catalog, catalog_source, catalog_error = _honeypot_public_endpoint_catalog()
+        modular_ok, modular_reason = _pro_feature_status(
+            licensing.Feature.API_MUTATION,
+            action="panel_api_modular",
+        )
+        analytics_ok, analytics_reason = _pro_feature_status(
+            licensing.Feature.ANALYTICS,
+            action="panel_pro_analytics",
+        )
+        state = {
+            "templates": [
+                _serialize_template(template, registry=registry, groups_by_id=groups_by_id)
+                for template in registry.list_templates()
+            ],
+            "extensions": [
+                _serialize_extension(extension, registry=registry, groups_by_id=groups_by_id)
+                for extension in registry.list_extensions()
+            ],
+            "response_profiles": [
+                _serialize_response_profile(profile)
+                for profile in registry.list_response_profiles()
+            ],
+            "flaw_profiles": [
+                _serialize_flaw_profile(flaw)
+                for flaw in registry.list_flaw_profiles()
+            ],
+            "endpoint_groups": [
+                {
+                    **group,
+                    "endpoints": [
+                        _serialize_endpoint_definition(
+                            registry.get_endpoint(endpoint_id),
+                            endpoint_groups=endpoint_groups,
+                            instance_config=current_instance,
+                            effective_runtime=effective_runtime,
+                        )
+                        for endpoint_id in group["endpoint_ids"]
+                        if registry.get_endpoint(endpoint_id) is not None
+                    ],
+                }
+                for group in groups_by_id.values()
+            ],
+            "instance_config": json.loads(current_instance.to_json()),
+            "effective_runtime": _serialize_runtime_snapshot(
+                effective_runtime,
+                registry=registry,
+                endpoint_groups=endpoint_groups,
+            ),
+            "legacy_migration": adapter.migration_report(),
+            "runtime_build_error": runtime_build_error,
+            "endpoint_catalog": route_catalog,
+            "endpoint_catalog_source": catalog_source,
+            "endpoint_catalog_error": catalog_error,
+            "pro_modular_visible": _tier_has_feature(licensing.Feature.API_MUTATION),
+            "pro_modular_enabled": modular_ok,
+            "pro_modular_reason": modular_reason,
+            "pro_analytics_visible": _tier_has_feature(licensing.Feature.ANALYTICS),
+            "pro_analytics_enabled": analytics_ok,
+            "pro_analytics_reason": analytics_reason,
+        }
+        if include_legacy_controls:
+            state["legacy_controls"] = {
+                "mode": "diagnostic_only",
+                "mutation": current_instance.mutation_config.to_legacy_dict(),
+                "rules": [rule.model_dump(mode="json") for rule in current_instance.response_rules],
+            }
+        return state
+    finally:
+        conn.close()
+
+
+def _normalize_endpoint_override_payload(payload: dict, *, registry: CatalogRegistry) -> dict[str, EndpointConfig]:
+    profile_by_difficulty = _difficulty_profile_by_value(registry)
+    raw_configs = payload.get("endpoint_configs") or {}
+    if not isinstance(raw_configs, dict):
+        raise HTTPException(status_code=400, detail="endpoint_configs_invalid")
+
+    endpoint_configs: dict[str, EndpointConfig] = {}
+    for endpoint_id, raw in raw_configs.items():
+        if not isinstance(raw, dict):
+            raise HTTPException(status_code=400, detail=f"endpoint_config_invalid:{endpoint_id}")
+        endpoint = registry.get_endpoint(str(endpoint_id))
+        if endpoint is None:
+            raise HTTPException(status_code=400, detail=f"unknown_endpoint:{endpoint_id}")
+
+        difficulty_override = str(raw.get("difficulty") or "").strip().lower()
+        response_profile_id = raw.get("response_profile_id")
+        if difficulty_override and not response_profile_id:
+            response_profile_id = profile_by_difficulty.get(difficulty_override)
+
+        flaw_profile_id = raw.get("flaw_profile_id")
+        if flaw_profile_id is None:
+            normalized_flaw = None
+        else:
+            normalized_flaw = str(flaw_profile_id)
+
+        try:
+            endpoint_configs[str(endpoint_id)] = EndpointConfig(
+                endpoint_id=str(endpoint_id),
+                enabled=bool(raw.get("enabled", True)),
+                response_profile_id=str(response_profile_id).strip() or None if response_profile_id is not None else None,
+                flaw_profile_id=normalized_flaw,
+                fixed_status=int(raw["fixed_status"]) if str(raw.get("fixed_status", "")).strip() else None,
+                latency_ms=int(raw["latency_ms"]) if str(raw.get("latency_ms", "")).strip() else None,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"invalid_endpoint_override:{endpoint_id}:{exc}")
+    return endpoint_configs
+
+
+def _normalize_mutation_config_payload(payload: dict) -> MutationConfig:
+    raw = payload.get("mutation_config") or {}
+    if not isinstance(raw, dict):
+        raise HTTPException(status_code=400, detail="mutation_config_invalid")
+    try:
+        return MutationConfig.model_validate(raw)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"invalid_mutation_config:{exc}")
+
+
+def _normalize_response_rules_payload(payload: dict, *, registry: CatalogRegistry) -> list[ResponseRule]:
+    raw_rules = payload.get("response_rules") or []
+    if not isinstance(raw_rules, list):
+        raise HTTPException(status_code=400, detail="response_rules_invalid")
+
+    rules: list[ResponseRule] = []
+    for index, raw_rule in enumerate(raw_rules, start=1):
+        if not isinstance(raw_rule, dict):
+            raise HTTPException(status_code=400, detail=f"response_rule_invalid:{index}")
+
+        match_raw = raw_rule.get("match") or {}
+        if not isinstance(match_raw, dict):
+            raise HTTPException(status_code=400, detail=f"response_rule_match_invalid:{index}")
+        endpoint_id = str(match_raw.get("endpoint_id") or "").strip() or None
+        endpoint_group_id = str(match_raw.get("endpoint_group_id") or "").strip() or None
+        if endpoint_id and registry.get_endpoint(endpoint_id) is None:
+            raise HTTPException(status_code=400, detail=f"unknown_rule_endpoint:{endpoint_id}")
+        if endpoint_group_id and registry.get_group(endpoint_group_id) is None:
+            raise HTTPException(status_code=400, detail=f"unknown_rule_group:{endpoint_group_id}")
+
+        action_raw = raw_rule.get("action") or {}
+        if not isinstance(action_raw, dict):
+            raise HTTPException(status_code=400, detail=f"response_rule_action_invalid:{index}")
+
+        try:
+            rule = ResponseRule(
+                id=str(raw_rule.get("id") or f"rule_{index}"),
+                enabled=bool(raw_rule.get("enabled", True)),
+                match=ResponseRuleMatch(
+                    endpoint_id=endpoint_id,
+                    endpoint_group_id=endpoint_group_id,
+                    method=str(match_raw.get("method") or "").strip().upper() or None,
+                    user_agent_contains=str(match_raw.get("user_agent_contains") or "").strip() or None,
+                ),
+                action=ResponseRuleAction(
+                    richness_delta=action_raw.get("richness_delta"),
+                    force_status=action_raw.get("force_status"),
+                    extra_latency_ms=action_raw.get("extra_latency_ms"),
+                ),
+                created_at=str(raw_rule.get("created_at") or "").strip() or None,
+                updated_at=str(raw_rule.get("updated_at") or "").strip() or None,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"invalid_response_rule:{index}:{exc}")
+
+        if endpoint_id:
+            endpoint = registry.get_endpoint(endpoint_id)
+            if endpoint is not None and rule.match.endpoint_group_id:
+                if rule.match.endpoint_group_id not in [group.id for group in registry.list_groups() if endpoint_id in group.endpoint_ids]:
+                    raise HTTPException(status_code=400, detail=f"rule_group_mismatch:{rule.id}")
+
+        rules.append(rule)
+
+    return rules
+
+
 @app.get("/dashboard/api-modular/state", response_class=JSONResponse)
 def dashboard_api_modular_state():
     modular_visible = _tier_has_feature(licensing.Feature.API_MUTATION)
@@ -2154,126 +2703,119 @@ def dashboard_api_modular_state():
     }
 
 
-@app.post("/dashboard/api-modular/config", response_class=JSONResponse)
-def dashboard_api_modular_save_config(payload: dict = Body(default={})):
+@app.get("/dashboard/api-modular/state-v2", response_class=JSONResponse)
+def dashboard_api_modular_state_v2():
+    return _build_api_modular_v2_state()
+
+
+@app.post("/dashboard/api-modular/instance-config/save", response_class=JSONResponse)
+def dashboard_api_modular_save_instance_config(payload: dict = Body(default={})):
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="invalid_payload")
-    path = str(payload.get("path") or "").strip()
-    if not path:
-        raise HTTPException(status_code=400, detail="path_required")
-    method = str(payload.get("method") or "*").strip().upper() or "*"
-    config_raw = payload.get("config")
-    if not isinstance(config_raw, dict):
-        raise HTTPException(status_code=400, detail="config_required")
+
+    registry = _api_modular_registry()
+    template_id = str(payload.get("base_template_id") or "").strip()
+    if not template_id:
+        raise HTTPException(status_code=400, detail="base_template_id_required")
+    if registry.get_template(template_id) is None:
+        raise HTTPException(status_code=400, detail="unknown_template")
+
+    raw_extension_ids = payload.get("enabled_extension_ids") or []
+    if not isinstance(raw_extension_ids, list):
+        raise HTTPException(status_code=400, detail="enabled_extension_ids_invalid")
+    extension_ids = [str(item).strip() for item in raw_extension_ids if str(item).strip()]
+
+    raw_difficulty = str(payload.get("global_difficulty") or "medium").strip().lower()
+    try:
+        global_difficulty = Difficulty(raw_difficulty)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid_global_difficulty")
+
+    endpoint_configs = _normalize_endpoint_override_payload(payload, registry=registry)
+    mutation_config = _normalize_mutation_config_payload(payload)
+    response_rules = _normalize_response_rules_payload(payload, registry=registry)
+
+    try:
+        next_config = InstanceConfig(
+            base_template_id=template_id,
+            enabled_extension_ids=extension_ids,
+            global_difficulty=global_difficulty,
+            endpoint_configs=endpoint_configs,
+            mutation_config=mutation_config,
+            response_rules=response_rules,
+        )
+        preview_runtime = build_effective_runtime_config(next_config, registry)
+    except BuildError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"invalid_instance_config:{exc}")
+
     conn = db()
     try:
         ensure_schema(conn)
-        api_modular.ensure_tables(conn)
-        route_catalog, _catalog_source, _catalog_error = _honeypot_public_endpoint_catalog()
-        if not _is_real_honeypot_endpoint(path, method, route_catalog):
-            raise HTTPException(status_code=400, detail="unknown_honeypot_endpoint")
-        saved = api_modular.upsert_endpoint_config(conn, path=path, method=method, config=config_raw)
+        from app.system_settings import ensure_settings_table
+
+        ensure_settings_table(conn)
+        conn.execute("BEGIN")
+        _upsert_system_setting(conn, "instance_config", next_config.to_json())
+        _upsert_system_setting(conn, "hp_base_template", next_config.base_template_id)
+        _upsert_system_setting(
+            conn,
+            "hp_enabled_extensions",
+            json.dumps(list(next_config.enabled_extension_ids), separators=(",", ":")),
+        )
+        _upsert_system_setting(conn, "hp_global_difficulty", next_config.global_difficulty.value)
+        conn.commit()
+    except HTTPException:
+        conn.rollback()
+        raise
+    except Exception as exc:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=f"save_failed:{exc.__class__.__name__}")
     finally:
         conn.close()
-    return {"saved": True, "entry": saved}
+
+    invalidate_runtime_cache()
+    endpoint_groups, _groups_by_id = _api_modular_group_maps(registry)
+    return {
+        "saved": True,
+        "instance_config": json.loads(next_config.to_json()),
+        "effective_runtime": _serialize_runtime_snapshot(
+            preview_runtime,
+            registry=registry,
+            endpoint_groups=endpoint_groups,
+        ),
+    }
+
+
+@app.post("/dashboard/api-modular/config", response_class=JSONResponse)
+def dashboard_api_modular_save_config(payload: dict = Body(default={})):
+    raise HTTPException(status_code=410, detail="deprecated_use_instance_config_save")
 
 
 @app.post("/dashboard/api-modular/config/delete", response_class=JSONResponse)
 def dashboard_api_modular_delete_config(payload: dict = Body(default={})):
-    if not isinstance(payload, dict):
-        raise HTTPException(status_code=400, detail="invalid_payload")
-    path = str(payload.get("path") or "").strip()
-    method = str(payload.get("method") or "*").strip().upper() or "*"
-    if not path:
-        raise HTTPException(status_code=400, detail="path_required")
-    conn = db()
-    try:
-        ensure_schema(conn)
-        api_modular.ensure_tables(conn)
-        deleted = api_modular.delete_endpoint_config(conn, path=path, method=method)
-    finally:
-        conn.close()
-    return {"deleted": bool(deleted)}
+    raise HTTPException(status_code=410, detail="deprecated_use_instance_config_save")
 
 
 @app.post("/dashboard/api-modular/template/apply", response_class=JSONResponse)
 def dashboard_api_modular_apply_template(payload: dict = Body(default={})):
-    if not isinstance(payload, dict):
-        raise HTTPException(status_code=400, detail="invalid_payload")
-    template_name = str(payload.get("template_name") or "").strip().lower()
-    path = str(payload.get("path") or "").strip()
-    method = str(payload.get("method") or "*").strip().upper() or "*"
-    if not template_name:
-        raise HTTPException(status_code=400, detail="template_name_required")
-    if not path:
-        raise HTTPException(status_code=400, detail="path_required")
-    conn = db()
-    try:
-        ensure_schema(conn)
-        api_modular.ensure_tables(conn)
-        route_catalog, _catalog_source, _catalog_error = _honeypot_public_endpoint_catalog()
-        if not _is_real_honeypot_endpoint(path, method, route_catalog):
-            raise HTTPException(status_code=400, detail="unknown_honeypot_endpoint")
-        try:
-            saved = api_modular.apply_template(conn, template_name=template_name, path=path, method=method)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-    finally:
-        conn.close()
-    return {"saved": True, "entry": saved}
+    raise HTTPException(status_code=410, detail="deprecated_use_instance_config_save")
 
 
 @app.post("/dashboard/api-modular/mutation", response_class=JSONResponse)
 def dashboard_api_modular_set_mutation(payload: dict = Body(default={})):
-    if not _has_modular_pro():
-        raise HTTPException(status_code=403, detail="feature not available")
-    if not isinstance(payload, dict):
-        raise HTTPException(status_code=400, detail="invalid_payload")
-    policy = str(payload.get("mutation_policy") or "none")
-    intensity = int(payload.get("mutation_intensity") or 0)
-    conn = db()
-    try:
-        ensure_schema(conn)
-        api_modular.ensure_tables(conn)
-        saved = api_modular.set_mutation_config(conn, mutation_policy=policy, mutation_intensity=intensity)
-    finally:
-        conn.close()
-    return {"saved": True, "mutation": saved}
+    raise HTTPException(status_code=410, detail="deprecated_use_instance_config_save")
 
 
 @app.post("/dashboard/api-modular/rules", response_class=JSONResponse)
 def dashboard_api_modular_add_rule(payload: dict = Body(default={})):
-    if not _has_modular_pro():
-        raise HTTPException(status_code=403, detail="feature not available")
-    if not isinstance(payload, dict):
-        raise HTTPException(status_code=400, detail="invalid_payload")
-    conn = db()
-    try:
-        ensure_schema(conn)
-        api_modular.ensure_tables(conn)
-        saved = api_modular.add_rule(conn, payload)
-    finally:
-        conn.close()
-    return {"saved": True, "rule": saved}
+    raise HTTPException(status_code=410, detail="deprecated_use_instance_config_save")
 
 
 @app.post("/dashboard/api-modular/rules/delete", response_class=JSONResponse)
 def dashboard_api_modular_delete_rule(payload: dict = Body(default={})):
-    if not _has_modular_pro():
-        raise HTTPException(status_code=403, detail="feature not available")
-    if not isinstance(payload, dict):
-        raise HTTPException(status_code=400, detail="invalid_payload")
-    rule_id = int(payload.get("id") or 0)
-    if rule_id <= 0:
-        raise HTTPException(status_code=400, detail="id_required")
-    conn = db()
-    try:
-        ensure_schema(conn)
-        api_modular.ensure_tables(conn)
-        deleted = api_modular.delete_rule(conn, rule_id=rule_id)
-    finally:
-        conn.close()
-    return {"deleted": bool(deleted)}
+    raise HTTPException(status_code=410, detail="deprecated_use_instance_config_save")
 
 
 @app.get("/dashboard/api-modular/analytics", response_class=JSONResponse)

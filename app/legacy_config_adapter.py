@@ -1,48 +1,32 @@
-"""LegacyConfigAdapter — converts the existing DB schema to the new domain model.
+"""LegacyConfigAdapter converts legacy DB state into InstanceConfig.
 
-WHAT IT DOES:
-  Reads from the existing api_endpoint_configs table (and system_settings)
-  and produces an InstanceConfig that the builder can consume.
+Read order:
+1. Canonical InstanceConfig from system_settings.instance_config, if present.
+2. Supplemental system_settings keys for base template / extensions / difficulty.
+3. Legacy api_endpoint_configs rows, merged underneath canonical endpoint overrides.
+4. Legacy api_mutation_settings / api_rules, only when canonical payload does not
+   already persist the new mutation/rules blocks.
 
-WHAT IT DOES NOT DO:
-  - Modify any DB table.
-  - Block if DB is unavailable (caller catches exceptions).
-  - Map mutation settings or rules (that is Phase 2 / ResponseFactory territory).
-  - Guarantee a 1:1 mapping for every legacy row (unmapped rows are skipped with a warning).
-
-MAPPING RULES:
-  api_endpoint_configs (method, path)       →  EndpointConfig (endpoint_id)
-  ─────────────────────────────────────────────────────────────────────────
-  enabled = 0 / 1                           →  enabled = False / True
-  response_mode = "normal"                  →  response_profile_id = "standard_medium"
-  response_mode = "minimal"                 →  response_profile_id = "standard_basic"
-  response_mode = "error_bias"              →  response_profile_id = "error_trap_medium"
-  richness_level = 3 (override only)        →  response_profile_id = "standard_advanced"
-  fixed_status != NULL                      →  fixed_status = <value>
-  (path, method) → CatalogRegistry lookup  →  endpoint_id
-
-  system_settings key "hp_base_template"   →  InstanceConfig.base_template_id
-  (falls back to env HP_BASE_TEMPLATE, then "ecommerce")
-
-LIMITATIONS (explicit, for next phase):
-  - api_mutation_settings (mutation_policy, mutation_intensity) → NOT mapped.
-  - api_rules → NOT mapped.
-  - Paths in api_endpoint_configs that don't match any catalog entry → skipped.
-  - Wildcard method "*" entries → applied to all catalog entries at that path (best-effort).
+The adapter never mutates the DB.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import sqlite3
 from typing import Any, Optional
 
 from app.catalog.registry import CatalogRegistry
-from app.instance_config.models import EndpointConfig, InstanceConfig
+from app.catalog.types import Difficulty
+from app.instance_config.models import (
+    EndpointConfig,
+    InstanceConfig,
+    MutationConfig,
+    ResponseRule,
+)
 
 logger = logging.getLogger(__name__)
-
-# ── Profile mapping ───────────────────────────────────────────────────────────
 
 _RESPONSE_MODE_TO_PROFILE: dict[str, str] = {
     "normal": "standard_medium",
@@ -62,13 +46,6 @@ def _map_response_profile(
     response_mode: Optional[str],
     richness_level: Optional[int],
 ) -> Optional[str]:
-    """Derive a response_profile_id from legacy response_mode + richness_level.
-
-    Priority:
-      1. response_mode (explicit setting)
-      2. richness_level (fallback if mode is absent/null)
-      3. None (use catalog/template default)
-    """
     if response_mode and response_mode in _RESPONSE_MODE_TO_PROFILE:
         return _RESPONSE_MODE_TO_PROFILE[response_mode]
     if richness_level is not None and richness_level in _RICHNESS_TO_PROFILE:
@@ -76,195 +53,324 @@ def _map_response_profile(
     return None
 
 
-# ── DB helpers ────────────────────────────────────────────────────────────────
-
 def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
     row = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+        (table,),
     ).fetchone()
     return row is not None
 
 
-def _read_endpoint_configs(conn: sqlite3.Connection) -> list[dict[str, Any]]:
-    """Read all rows from api_endpoint_configs.
+def _read_setting(conn: sqlite3.Connection, key: str) -> Optional[str]:
+    if not _table_exists(conn, "system_settings"):
+        return None
+    row = conn.execute(
+        "SELECT value FROM system_settings WHERE key=?",
+        (key,),
+    ).fetchone()
+    if row and row[0] is not None:
+        return str(row[0])
+    return None
 
-    Returns empty list if the table does not exist (fresh install before first startup).
-    """
+
+def _read_instance_config_payload(conn: sqlite3.Connection) -> Optional[dict[str, Any]]:
+    raw = _read_setting(conn, "instance_config")
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except Exception as exc:
+        logger.warning(
+            "LegacyConfigAdapter: invalid system_settings.instance_config JSON; ignoring. Error: %s",
+            exc,
+        )
+        return None
+    if isinstance(parsed, dict):
+        return parsed
+    logger.warning("LegacyConfigAdapter: instance_config payload is not a JSON object; ignoring")
+    return None
+
+
+def _read_instance_config(conn: sqlite3.Connection) -> Optional[InstanceConfig]:
+    payload = _read_instance_config_payload(conn)
+    if payload is None:
+        return None
+    try:
+        return InstanceConfig.from_dict(payload)
+    except Exception as exc:
+        logger.warning(
+            "LegacyConfigAdapter: invalid system_settings.instance_config model; ignoring. Error: %s",
+            exc,
+        )
+        return None
+
+
+def _read_base_template(conn: sqlite3.Connection) -> Optional[str]:
+    return _read_setting(conn, "hp_base_template")
+
+
+def _read_enabled_extensions(conn: sqlite3.Connection) -> list[str]:
+    raw = _read_setting(conn, "hp_enabled_extensions")
+    if not raw:
+        return []
+    try:
+        if raw.lstrip().startswith("["):
+            parsed = json.loads(raw)
+            values = parsed if isinstance(parsed, list) else []
+        else:
+            values = raw.split(",")
+    except Exception:
+        logger.warning("LegacyConfigAdapter: invalid hp_enabled_extensions value %r; ignoring", raw)
+        return []
+
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        item = str(value).strip()
+        if item and item not in seen:
+            result.append(item)
+            seen.add(item)
+    return result
+
+
+def _read_global_difficulty(conn: sqlite3.Connection) -> Optional[Difficulty]:
+    raw = (_read_setting(conn, "hp_global_difficulty") or "").strip().lower()
+    if not raw:
+        return None
+    try:
+        return Difficulty(raw)
+    except ValueError:
+        logger.warning("LegacyConfigAdapter: invalid hp_global_difficulty value %r; ignoring", raw)
+        return None
+
+
+def _read_endpoint_configs(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     if not _table_exists(conn, "api_endpoint_configs"):
-        logger.debug("LegacyConfigAdapter: api_endpoint_configs table does not exist yet")
         return []
     rows = conn.execute(
         "SELECT method, path, enabled, response_mode, fixed_status, richness_level "
         "FROM api_endpoint_configs"
     ).fetchall()
-    return [dict(r) for r in rows]
+    return [dict(row) for row in rows]
 
 
-def _read_base_template(conn: sqlite3.Connection) -> Optional[str]:
-    """Read hp_base_template from system_settings, if it exists."""
-    if not _table_exists(conn, "system_settings"):
+def _read_mutation_row(conn: sqlite3.Connection) -> Optional[dict[str, Any]]:
+    if not _table_exists(conn, "api_mutation_settings"):
         return None
     row = conn.execute(
-        "SELECT value FROM system_settings WHERE key='hp_base_template'"
+        "SELECT mutation_policy, mutation_intensity, updated_ts "
+        "FROM api_mutation_settings WHERE singleton_id=1"
     ).fetchone()
-    if row and row[0]:
-        return row[0]
-    return None
+    return dict(row) if row is not None else None
 
 
-# ── Path → endpoint_id mapping ────────────────────────────────────────────────
+def _read_rule_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    if not _table_exists(conn, "api_rules"):
+        return []
+    rows = conn.execute(
+        """
+        SELECT id, enabled, match_path, match_method, match_user_agent,
+               action_change_richness, action_force_status, action_increase_latency,
+               created_ts, updated_ts
+        FROM api_rules
+        ORDER BY id ASC
+        """
+    ).fetchall()
+    return [dict(row) for row in rows]
+
 
 def _find_endpoint_id(
     registry: CatalogRegistry,
     method: str,
     path: str,
 ) -> Optional[str]:
-    """Find the endpoint_id in the catalog that best matches (method, path).
-
-    Strategy:
-      1. Exact (method, path) lookup in registry path index.
-      2. Pattern match: iterate all catalog endpoints, find one whose path_pattern
-         matches the legacy literal path (handles stored patterns like /api/v1/users).
-      3. Wildcard method ("*"): try GET, POST, PATCH, PUT, DELETE.
-
-    Returns endpoint_id or None if no match.
-    """
     from app.endpoint_resolver import _pattern_matches, _specificity_score
 
     method_upper = method.upper()
+    endpoint = registry.get_endpoint_by_path(method_upper, path)
+    if endpoint:
+        return endpoint.id
 
-    # 1. Exact lookup
-    ep = registry.get_endpoint_by_path(method_upper, path)
-    if ep:
-        return ep.id
-
-    # 2. Pattern match (catalog pattern → legacy literal path)
-    #    e.g. catalog has "/api/v1/orders/{order_id}", legacy stored "/api/v1/orders/123"
-    #    OR   catalog has "/api/v1/orders", legacy stored "/api/v1/orders"
     best_id: Optional[str] = None
     best_score = -1
-
-    candidates = list(registry._endpoints.values())  # access internal dict (read-only)
-    for ep_def in candidates:
-        if ep_def.method.value != method_upper:
+    for endpoint_def in registry.list_endpoints():
+        if endpoint_def.method.value != method_upper:
             continue
-        if _pattern_matches(ep_def.path_pattern, path):
-            score = _specificity_score(ep_def.path_pattern)
+        if _pattern_matches(endpoint_def.path_pattern, path):
+            score = _specificity_score(endpoint_def.path_pattern)
             if score > best_score:
-                best_id = ep_def.id
+                best_id = endpoint_def.id
                 best_score = score
 
     if best_id:
         return best_id
 
-    # 3. Wildcard method — try all methods
     if method_upper == "*":
         for try_method in ("GET", "POST", "PATCH", "PUT", "DELETE"):
             found = _find_endpoint_id(registry, try_method, path)
             if found:
-                logger.debug(
-                    "LegacyConfigAdapter: wildcard method entry %r matched endpoint '%s' "
-                    "via method=%s",
-                    path, found, try_method,
-                )
                 return found
-
     return None
 
 
-# ── Main adapter class ────────────────────────────────────────────────────────
-
 class LegacyConfigAdapter:
-    """Converts existing DB tables to a new InstanceConfig.
+    """Converts existing DB tables to InstanceConfig."""
 
-    Usage:
-        conn = sqlite3.connect(db_path)
-        conn.row_factory = sqlite3.Row
-        instance_config = LegacyConfigAdapter(conn, registry=registry).to_instance_config()
-        conn.close()
-    """
-
-    def __init__(
-        self,
-        conn: sqlite3.Connection,
-        *,
-        registry: CatalogRegistry,
-    ) -> None:
+    def __init__(self, conn: sqlite3.Connection, *, registry: CatalogRegistry) -> None:
         self._conn = conn
         self._registry = registry
+        self._canonical_payload = _read_instance_config_payload(conn)
+        self._canonical_instance = _read_instance_config(conn)
 
     def to_instance_config(self) -> InstanceConfig:
-        """Build InstanceConfig from current DB state.
-
-        Returns InstanceConfig.default() on any DB error (never raises).
-        """
-        # Base template: system_settings → env var → "ecommerce"
-        base_template_id = self._resolve_base_template()
-
-        # Per-endpoint configs
+        canonical = self._resolve_canonical_instance_config()
         endpoint_configs = self._build_endpoint_configs()
+        endpoint_configs.update(canonical.endpoint_configs)
 
         try:
             return InstanceConfig(
-                base_template_id=base_template_id,
-                enabled_extension_ids=[],   # Phase 2: read from system_settings
+                base_template_id=canonical.base_template_id,
+                enabled_extension_ids=list(canonical.enabled_extension_ids),
+                global_difficulty=canonical.global_difficulty,
                 endpoint_configs=endpoint_configs,
+                mutation_config=self._resolve_mutation_config(canonical),
+                response_rules=self._resolve_response_rules(canonical),
             )
         except Exception as exc:
             logger.warning(
-                "LegacyConfigAdapter: failed to construct InstanceConfig: %s; "
-                "using default",
+                "LegacyConfigAdapter: failed to construct InstanceConfig: %s; using default",
                 exc,
             )
             return InstanceConfig.default()
 
-    # ── Private helpers ───────────────────────────────────────────────────────
+    def _resolve_canonical_instance_config(self) -> InstanceConfig:
+        base_template_id = self._resolve_base_template()
+        return InstanceConfig(
+            base_template_id=base_template_id,
+            enabled_extension_ids=self._resolve_enabled_extensions(base_template_id),
+            global_difficulty=self._resolve_global_difficulty(),
+            endpoint_configs=self._read_canonical_endpoint_configs(),
+            mutation_config=self._read_canonical_mutation_config(),
+            response_rules=self._read_canonical_response_rules(),
+        )
 
     def _resolve_base_template(self) -> str:
-        """Determine base_template_id with fallback chain."""
-        try:
-            from_db = _read_base_template(self._conn)
-            if from_db:
-                if self._registry.get_template(from_db):
-                    return from_db
-                logger.warning(
-                    "LegacyConfigAdapter: hp_base_template=%r not found in catalog; "
-                    "ignoring",
-                    from_db,
-                )
-        except Exception as exc:
-            logger.debug("LegacyConfigAdapter: error reading hp_base_template: %s", exc)
+        canonical = self._canonical_instance
+        if canonical and self._registry.get_template(canonical.base_template_id):
+            return canonical.base_template_id
+        if canonical:
+            logger.warning(
+                "LegacyConfigAdapter: instance_config.base_template_id=%r not found in catalog; ignoring",
+                canonical.base_template_id,
+            )
+
+        from_db = _read_base_template(self._conn)
+        if from_db and self._registry.get_template(from_db):
+            return from_db
+        if from_db:
+            logger.warning(
+                "LegacyConfigAdapter: hp_base_template=%r not found in catalog; ignoring",
+                from_db,
+            )
 
         env_template = os.environ.get("HP_BASE_TEMPLATE", "").strip()
+        if env_template and self._registry.get_template(env_template):
+            return env_template
         if env_template:
-            if self._registry.get_template(env_template):
-                return env_template
             logger.warning(
-                "LegacyConfigAdapter: HP_BASE_TEMPLATE=%r not found in catalog; "
-                "ignoring",
+                "LegacyConfigAdapter: HP_BASE_TEMPLATE=%r not found in catalog; ignoring",
                 env_template,
             )
 
         return "ecommerce"
 
-    def _build_endpoint_configs(self) -> dict[str, EndpointConfig]:
-        """Convert api_endpoint_configs rows to EndpointConfig objects.
+    def _resolve_enabled_extensions(self, base_template_id: str) -> list[str]:
+        canonical = self._canonical_instance
+        canonical_payload = self._canonical_payload or {}
+        selected = (
+            list(canonical.enabled_extension_ids)
+            if canonical and "enabled_extension_ids" in canonical_payload
+            else _read_enabled_extensions(self._conn)
+        )
 
-        Rows that cannot be mapped to a catalog endpoint_id are skipped.
-        """
+        template = self._registry.get_template(base_template_id)
+        compatible = set(template.compatible_extension_ids) if template else set()
+        result: list[str] = []
+        seen: set[str] = set()
+        for ext_id in selected:
+            if ext_id in seen:
+                continue
+            if not self._registry.get_extension(ext_id):
+                logger.warning("LegacyConfigAdapter: enabled extension %r not found in catalog; ignoring", ext_id)
+                continue
+            if compatible and ext_id not in compatible:
+                logger.warning(
+                    "LegacyConfigAdapter: extension %r is not compatible with template %r; keeping for builder validation",
+                    ext_id,
+                    base_template_id,
+                )
+            result.append(ext_id)
+            seen.add(ext_id)
+        return result
+
+    def _resolve_global_difficulty(self) -> Difficulty:
+        canonical_payload = self._canonical_payload or {}
+        if self._canonical_instance and "global_difficulty" in canonical_payload:
+            return self._canonical_instance.global_difficulty
+        return _read_global_difficulty(self._conn) or Difficulty.MEDIUM
+
+    def _read_canonical_endpoint_configs(self) -> dict[str, EndpointConfig]:
+        canonical_payload = self._canonical_payload or {}
+        if self._canonical_instance and "endpoint_configs" in canonical_payload:
+            return dict(self._canonical_instance.endpoint_configs)
+        return {}
+
+    def _read_canonical_mutation_config(self) -> MutationConfig:
+        canonical_payload = self._canonical_payload or {}
+        if self._canonical_instance and "mutation_config" in canonical_payload:
+            return self._canonical_instance.mutation_config
+        return MutationConfig()
+
+    def _read_canonical_response_rules(self) -> list[ResponseRule]:
+        canonical_payload = self._canonical_payload or {}
+        if self._canonical_instance and "response_rules" in canonical_payload:
+            return list(self._canonical_instance.response_rules)
+        return []
+
+    def _resolve_mutation_config(self, canonical: InstanceConfig) -> MutationConfig:
+        canonical_payload = self._canonical_payload or {}
+        if "mutation_config" in canonical_payload:
+            return canonical.mutation_config
+        legacy_row = _read_mutation_row(self._conn)
+        if not legacy_row:
+            return canonical.mutation_config
+        try:
+            return MutationConfig(
+                policy=str(legacy_row.get("mutation_policy") or "none"),
+                intensity=int(legacy_row.get("mutation_intensity") or 0),
+            )
+        except Exception as exc:
+            logger.warning("LegacyConfigAdapter: invalid legacy mutation config; ignoring. Error: %s", exc)
+            return canonical.mutation_config
+
+    def _resolve_response_rules(self, canonical: InstanceConfig) -> list[ResponseRule]:
+        canonical_payload = self._canonical_payload or {}
+        if "response_rules" in canonical_payload:
+            return list(canonical.response_rules)
+        return self._build_response_rules()
+
+    def _build_endpoint_configs(self) -> dict[str, EndpointConfig]:
         try:
             rows = _read_endpoint_configs(self._conn)
         except Exception as exc:
             logger.warning(
-                "LegacyConfigAdapter: error reading api_endpoint_configs: %s; "
-                "returning empty overrides",
+                "LegacyConfigAdapter: error reading api_endpoint_configs: %s; returning empty overrides",
                 exc,
             )
             return {}
 
         result: dict[str, EndpointConfig] = {}
         skipped = 0
-
         for row in rows:
             method = str(row.get("method") or "*").strip()
             path = str(row.get("path") or "").strip()
@@ -274,103 +380,125 @@ class LegacyConfigAdapter:
             endpoint_id = _find_endpoint_id(self._registry, method, path)
             if endpoint_id is None:
                 skipped += 1
-                logger.debug(
-                    "LegacyConfigAdapter: no catalog entry for (%s %s); skipping",
-                    method, path,
-                )
                 continue
 
-            # Map fields
-            enabled = bool(row.get("enabled", True))
-            response_mode = row.get("response_mode") or None
-            richness_level = row.get("richness_level")
-            fixed_status = row.get("fixed_status")
+            response_profile_id = _map_response_profile(
+                row.get("response_mode") or None,
+                row.get("richness_level"),
+            )
 
-            response_profile_id = _map_response_profile(response_mode, richness_level)
-
-            # Validate fixed_status
             valid_status: Optional[int] = None
+            fixed_status = row.get("fixed_status")
             if fixed_status is not None:
                 try:
-                    s = int(fixed_status)
-                    if 100 <= s <= 599:
-                        valid_status = s
+                    parsed = int(fixed_status)
+                    if 100 <= parsed <= 599:
+                        valid_status = parsed
                 except (TypeError, ValueError):
                     pass
 
             try:
-                cfg = EndpointConfig(
+                result[endpoint_id] = EndpointConfig(
                     endpoint_id=endpoint_id,
-                    enabled=enabled,
+                    enabled=bool(row.get("enabled", True)),
                     response_profile_id=response_profile_id,
                     fixed_status=valid_status,
                 )
             except Exception as exc:
-                logger.debug(
-                    "LegacyConfigAdapter: invalid EndpointConfig for %r: %s; skipping",
-                    endpoint_id, exc,
-                )
-                continue
-
-            # Last write wins if same endpoint_id appears multiple times
-            # (can happen with wildcard method "*" + specific method)
-            if endpoint_id in result:
-                logger.debug(
-                    "LegacyConfigAdapter: duplicate mapping for endpoint_id=%r "
-                    "(old: %s %s), overwriting",
-                    endpoint_id, method, path,
-                )
-            result[endpoint_id] = cfg
+                logger.debug("LegacyConfigAdapter: invalid EndpointConfig for %r: %s; skipping", endpoint_id, exc)
 
         if skipped:
             logger.info(
-                "LegacyConfigAdapter: %d api_endpoint_configs row(s) had no catalog "
-                "match and were skipped",
+                "LegacyConfigAdapter: %d api_endpoint_configs row(s) had no catalog match and were skipped",
                 skipped,
             )
-
         return result
 
-    # ── Diagnostics ───────────────────────────────────────────────────────────
+    def _build_response_rules(self) -> list[ResponseRule]:
+        try:
+            rows = _read_rule_rows(self._conn)
+        except Exception as exc:
+            logger.warning("LegacyConfigAdapter: error reading api_rules: %s; returning no rules", exc)
+            return []
+
+        result: list[ResponseRule] = []
+        for row in rows:
+            match_path = str(row.get("match_path") or "").strip()
+            match_method = str(row.get("match_method") or "*").strip().upper() or "*"
+            endpoint_id = _find_endpoint_id(self._registry, match_method, match_path) if match_path else None
+            if not endpoint_id:
+                continue
+            try:
+                result.append(
+                    ResponseRule.model_validate(
+                        {
+                            "id": f"legacy_rule_{int(row.get('id') or 0)}",
+                            "enabled": bool(row.get("enabled", True)),
+                            "match": {
+                                "endpoint_id": endpoint_id,
+                                "method": None if match_method == "*" else match_method,
+                                "user_agent_contains": str(row.get("match_user_agent") or "").strip() or None,
+                            },
+                            "action": {
+                                "richness_delta": row.get("action_change_richness"),
+                                "force_status": row.get("action_force_status"),
+                                "extra_latency_ms": row.get("action_increase_latency"),
+                            },
+                            "created_at": row.get("created_ts"),
+                            "updated_at": row.get("updated_ts"),
+                        }
+                    )
+                )
+            except Exception as exc:
+                logger.debug("LegacyConfigAdapter: invalid legacy rule %r skipped: %s", row.get("id"), exc)
+        return result
 
     def migration_report(self) -> dict:
-        """Return a summary of what was / was not mapped. Useful for the panel."""
         try:
-            rows = _read_endpoint_configs(self._conn)
+            endpoint_rows = _read_endpoint_configs(self._conn)
         except Exception:
-            rows = []
+            endpoint_rows = []
 
         mapped = []
         unmapped = []
-        for row in rows:
+        for row in endpoint_rows:
             method = str(row.get("method") or "*").strip()
             path = str(row.get("path") or "").strip()
-            ep_id = _find_endpoint_id(self._registry, method, path)
-            entry = {"method": method, "path": path, "endpoint_id": ep_id}
-            if ep_id:
+            endpoint_id = _find_endpoint_id(self._registry, method, path)
+            entry = {"method": method, "path": path, "endpoint_id": endpoint_id}
+            if endpoint_id:
                 mapped.append(entry)
             else:
                 unmapped.append(entry)
 
+        mapped_rules = []
+        unmapped_rules = []
+        for row in _read_rule_rows(self._conn):
+            match_path = str(row.get("match_path") or "").strip()
+            match_method = str(row.get("match_method") or "*").strip().upper() or "*"
+            endpoint_id = _find_endpoint_id(self._registry, match_method, match_path) if match_path else None
+            entry = {
+                "id": int(row.get("id") or 0),
+                "method": match_method,
+                "path": match_path,
+                "endpoint_id": endpoint_id,
+            }
+            if endpoint_id:
+                mapped_rules.append(entry)
+            else:
+                unmapped_rules.append(entry)
+
         return {
-            "total_legacy_rows": len(rows),
+            "total_legacy_rows": len(endpoint_rows),
             "mapped": mapped,
             "unmapped": unmapped,
             "unmapped_count": len(unmapped),
+            "legacy_rule_count": len(mapped_rules) + len(unmapped_rules),
+            "mapped_rule_count": len(mapped_rules),
+            "unmapped_rule_count": len(unmapped_rules),
+            "canonical_instance_config_present": self._canonical_instance is not None,
+            "canonical_endpoint_overrides": len(self._canonical_instance.endpoint_configs) if self._canonical_instance else 0,
             "note": (
-                "Unmapped rows are not lost — they still govern response behavior "
-                "via api_modular.resolve_request_policy(). They simply have no "
-                "semantic endpoint_id in the new domain yet."
+                "Unmapped rows still require catalog alignment before the legacy tables can be removed."
             ),
         }
-
-
-# ── LIMITATIONS (documented, not implemented) ─────────────────────────────────
-#
-# Phase 2 (ResponseFactory) will also need to adapt:
-#   - api_mutation_settings  → mutation policy per endpoint or globally
-#   - api_rules              → rule-based overrides
-#
-# Phase 3 will introduce:
-#   - enabled_extension_ids  → read from system_settings key "hp_enabled_extensions"
-#   - global_difficulty      → read from system_settings key "hp_global_difficulty"

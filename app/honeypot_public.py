@@ -1494,7 +1494,13 @@ def _route_is_registered(path: str, method: str) -> bool:
 
 def _default_modular_policy(*, source: str = "ok", error: str = "") -> Dict[str, Any]:
     return {
-        "endpoint_config": dict(api_modular.DEFAULT_ENDPOINT_CONFIG),
+        "endpoint_id": None,
+        "endpoint_config": {
+            "enabled": True,
+            "response_mode": "normal",
+            "fixed_status": None,
+            "richness_level": 2,
+        },
         "endpoint_match_type": "default",
         "rules": {"matched_rule_ids": [], "richness_delta": 0, "extra_latency_ms": 0, "force_status": None},
         "latency_ms": 0,
@@ -1520,41 +1526,29 @@ def _is_sqlite_lock_error(exc: Exception) -> bool:
 
 
 async def _resolve_modular_policy_with_retry(request: Request) -> Dict[str, Any]:
-    pro_enabled = _has_modular_pro()
-    delays = (0.0, 0.025, 0.075, 0.150)
-    last_exc: Optional[Exception] = None
+    from app.runtime.policy import resolve_runtime_request_policy
+    from app.runtime_provider import get_runtime_config, resolve_effective_endpoint_including_disabled
 
-    for idx, base_delay in enumerate(delays):
-        if idx > 0:
-            await asyncio.sleep(base_delay + random.uniform(0.0, 0.02))
-        conn_policy = _db()
-        try:
-            _ensure_schema(conn_policy)
-            resolved = api_modular.resolve_request_policy(
-                conn_policy,
-                path=request.url.path,
-                method=request.method,
-                user_agent=_user_agent(request),
-                pro_enabled=pro_enabled,
-                ensure_schema=False,
-            )
-            policy = dict(resolved or {})
-            policy["source"] = "ok"
-            policy["error"] = ""
-            return policy
-        except Exception as exc:
-            last_exc = exc
-            if not _is_sqlite_lock_error(exc):
-                break
-        finally:
-            conn_policy.close()
-
-    if last_exc is not None:
-        return _default_modular_policy(source="fallback", error=_short_error(last_exc))
-    return _default_modular_policy(source="fallback", error="policy_resolve_failed")
+    try:
+        endpoint = resolve_effective_endpoint_including_disabled(request.method, request.url.path)
+        policy = resolve_runtime_request_policy(
+            get_runtime_config(),
+            endpoint=endpoint,
+            path=request.url.path,
+            method=request.method,
+            user_agent=_user_agent(request),
+            pro_enabled=_has_modular_pro(),
+        )
+        policy["source"] = "runtime"
+        policy["error"] = ""
+        return policy
+    except Exception as exc:
+        return _default_modular_policy(source="fallback", error=_short_error(exc))
 
 
 async def _apply_modular_response_policy(request: Request, response: Any, policy: Dict[str, Any]) -> Any:
+    from app.runtime import policy as runtime_policy
+
     endpoint_cfg = dict(policy.get("endpoint_config") or {})
     mutation_cfg = dict(policy.get("mutation") or {})
     rules = dict(policy.get("rules") or {})
@@ -1562,7 +1556,7 @@ async def _apply_modular_response_policy(request: Request, response: Any, policy
     method = request.method
     actor_id = _actor_id_from_request(request)
 
-    final_status = api_modular.compute_status(
+    final_status = runtime_policy.compute_status(
         original_status=int(getattr(response, "status_code", 200) or 200),
         response_mode=str(endpoint_cfg.get("response_mode") or "normal"),
         fixed_status=endpoint_cfg.get("fixed_status"),
@@ -1573,7 +1567,7 @@ async def _apply_modular_response_policy(request: Request, response: Any, policy
         actor_id=actor_id,
     )
 
-    extra_headers = api_modular.mutation_headers(
+    extra_headers = runtime_policy.mutation_headers(
         mutation_policy=str(mutation_cfg.get("mutation_policy") or "none"),
         mutation_intensity=_int_with_default(mutation_cfg.get("mutation_intensity"), 0),
         matched_rule_ids=list(rules.get("matched_rule_ids") or []),
@@ -1600,7 +1594,7 @@ async def _apply_modular_response_policy(request: Request, response: Any, policy
 
     body_json = _load_json_from_response(response, raw_body if raw_body is not None else None)
     if body_json is not None:
-        transformed = api_modular.mutate_json_payload(
+        transformed = runtime_policy.mutate_json_payload(
             body_json,
             response_mode=str(endpoint_cfg.get("response_mode") or "normal"),
             richness_level=_int_with_default(endpoint_cfg.get("richness_level"), 2),
@@ -1697,11 +1691,7 @@ async def log_all_requests(request: Request, call_next):
                 headers=debug_headers,
             )
         else:
-            # Phase 2: try ResponseFactory for catalog-mapped endpoints.
-            # Only intercept when the legacy modular system has no explicit per-endpoint
-            # config (endpoint_match_type == "default" means no DB row was found).
-            # When legacy has explicit config (e.g. fixed_status, error mode), defer to it
-            # so the migration is safe and per-endpoint opt-in.
+            # ResponseFactory middleware interception stays opt-in via match_type.
             _has_explicit_legacy_config = (modular_policy.get("endpoint_match_type") or "default") != "default"
             _factory_resp = None
             if not _has_explicit_legacy_config:
@@ -1715,11 +1705,18 @@ async def log_all_requests(request: Request, call_next):
                     pass
             else:
                 try:
-                    request.state.response_backend = "legacy"
+                    request.state.response_backend = "runtime_native"
                 except Exception:
                     pass
                 response = await call_next(request)
-                if not skip_policy and _route_is_registered(request.url.path, request.method):
+                # Re-read response_backend: a handler-assisted factory response sets
+                # "handler_factory" so we must not re-mutate its body.
+                _backend_after = str(getattr(request.state, "response_backend", "runtime_native") or "runtime_native")
+                if (
+                    not skip_policy
+                    and _backend_after == "runtime_native"
+                    and _route_is_registered(request.url.path, request.method)
+                ):
                     response = await _apply_modular_response_policy(request, response, modular_policy)
     except Exception as e:
         exc = e
@@ -2220,6 +2217,44 @@ def _fake_transactions(actor_id: str, limit: int = 20, offset: int = 0) -> List[
     return txs
 
 
+def _fake_orders(actor_id: str, limit: int = 20, offset: int = 0) -> List[Dict[str, Any]]:
+    rng = _seeded_rng(actor_id, f"orders:{offset}")
+    orders = []
+    for _ in range(limit):
+        order_id = f"ord_{rng.randint(100000, 999999)}"
+        orders.append(
+            {
+                "id": order_id,
+                "status": rng.choice(["created", "processing", "shipped", "cancelled"]),
+                "currency": rng.choice(["USD", "EUR", "GBP"]),
+                "total": round(rng.uniform(12.0, 480.0), 2),
+                "customer_id": f"u_{rng.randint(10000, 99999)}",
+                "created_at": _utc_now_iso(),
+            }
+        )
+    return orders
+
+
+def _fake_order(actor_id: str, order_id: str) -> Dict[str, Any]:
+    rng = _seeded_rng(actor_id, f"order:{order_id}")
+    return {
+        "id": order_id,
+        "status": rng.choice(["created", "processing", "shipped", "cancelled"]),
+        "currency": rng.choice(["USD", "EUR", "GBP"]),
+        "total": round(rng.uniform(12.0, 480.0), 2),
+        "customer_id": f"u_{rng.randint(10000, 99999)}",
+        "line_items": [
+            {
+                "sku": f"sku_{rng.randint(100, 999)}",
+                "qty": rng.randint(1, 4),
+                "price": round(rng.uniform(4.0, 120.0), 2),
+            }
+            for _ in range(rng.randint(1, 3))
+        ],
+        "created_at": _utc_now_iso(),
+    }
+
+
 def _pagination_from_request(request: Request) -> Tuple[int, int, bool]:
     limit = int(request.query_params.get("limit", "20") or 20)
     offset = int(request.query_params.get("offset", "0") or 0)
@@ -2387,6 +2422,36 @@ async def auth_login(request: Request):
             "scope": scopes,
             "mfa_required": random.random() < 0.4,
         }
+    )
+
+
+@app.post("/auth/register", tags=["Auth"], response_class=JSONResponse)
+async def auth_register(request: Request):
+    await _sleep_jitter()
+    data = await _read_json_or_form(request)
+    email = str(data.get("email") or data.get("username") or "")
+    password = str(data.get("password") or "")
+    actor_id = _actor_id_from_request(request)
+    if not _is_monitor(request):
+        _set_hp_event(
+            request,
+            kind="auth_register",
+            points=4,
+            trap_flags=["auth"],
+            extra={"email": email, "password_hash": _hash_text(password)},
+        )
+    from app.response_bridge import try_handler_factory_response
+    factory_response = await try_handler_factory_response(request, actor_id=actor_id)
+    if factory_response is not None:
+        return factory_response
+    return JSONResponse(
+        status_code=201,
+        content={
+            "status": "created",
+            "user_id": f"u_{_seeded_rng(actor_id, 'register').randint(10000, 99999)}",
+            "email": email,
+            "verification_required": True,
+        },
     )
 
 
@@ -2895,7 +2960,7 @@ async def business_users(request: Request):
     await _sleep_jitter()
     limit, offset, aggressive = _pagination_from_request(request)
     actor_id = _actor_id_from_request(request)
-    users = _fake_users(actor_id, limit, offset)
+    # 1. Side effects first — scoring and event recording always happen.
     points = 3 + (3 if aggressive else 0)
     _set_hp_event(
         request,
@@ -2904,7 +2969,116 @@ async def business_users(request: Request):
         trap_flags=["business"],
         extra={"limit": limit, "offset": offset, "aggressive": aggressive},
     )
+    # 2. Delegate body generation to ResponseFactory when endpoint is migrated.
+    from app.response_bridge import try_handler_factory_response
+    _factory_resp = await try_handler_factory_response(request, actor_id=actor_id)
+    if _factory_resp is not None:
+        return _factory_resp
+    # 3. Legacy fallback — unchanged from original.
+    users = _fake_users(actor_id, limit, offset)
     return JSONResponse({"data": users, "next_offset": offset + limit})
+
+
+@app.get("/api/v1/users/{user_id}", tags=["Business"], response_class=JSONResponse)
+async def business_user_get(user_id: str, request: Request):
+    await _sleep_jitter()
+    actor_id = _actor_id_from_request(request)
+    if not _is_monitor(request):
+        _set_hp_event(
+            request,
+            kind="business_users",
+            points=3,
+            trap_flags=["business"],
+            extra={"user_id": user_id, "mode": "get"},
+        )
+    from app.response_bridge import try_handler_factory_response
+    factory_response = await try_handler_factory_response(request, actor_id=actor_id)
+    if factory_response is not None:
+        return factory_response
+    user = _fake_users(actor_id, 1, 0)[0]
+    user["id"] = user_id
+    return JSONResponse(user)
+
+
+@app.patch("/api/v1/users/{user_id}", tags=["Business"], response_class=JSONResponse)
+async def business_user_update(user_id: str, request: Request):
+    await _sleep_jitter()
+    actor_id = _actor_id_from_request(request)
+    payload = await _read_json_or_form(request)
+    if not _is_monitor(request):
+        _set_hp_event(
+            request,
+            kind="business_users",
+            points=4,
+            trap_flags=["business"],
+            extra={"user_id": user_id, "mode": "update", "keys": sorted(list(payload.keys()))[:8]},
+        )
+    from app.response_bridge import try_handler_factory_response
+    factory_response = await try_handler_factory_response(request, actor_id=actor_id)
+    if factory_response is not None:
+        return factory_response
+    return JSONResponse({"id": user_id, "status": "updated", "updated_fields": sorted(list(payload.keys()))})
+
+
+@app.get("/api/v1/orders", tags=["Business"], response_class=JSONResponse)
+async def business_orders(request: Request):
+    await _sleep_jitter()
+    limit, offset, aggressive = _pagination_from_request(request)
+    actor_id = _actor_id_from_request(request)
+    if not _is_monitor(request):
+        _set_hp_event(
+            request,
+            kind="business_reports",
+            points=3 + (3 if aggressive else 0),
+            trap_flags=["business"],
+            extra={"mode": "orders_list", "limit": limit, "offset": offset},
+        )
+    from app.response_bridge import try_handler_factory_response
+    factory_response = await try_handler_factory_response(request, actor_id=actor_id)
+    if factory_response is not None:
+        return factory_response
+    return JSONResponse({"data": _fake_orders(actor_id, limit, offset), "next_offset": offset + limit})
+
+
+@app.get("/api/v1/orders/{order_id}", tags=["Business"], response_class=JSONResponse)
+async def business_order_get(order_id: str, request: Request):
+    await _sleep_jitter()
+    actor_id = _actor_id_from_request(request)
+    if not _is_monitor(request):
+        _set_hp_event(
+            request,
+            kind="business_reports",
+            points=3,
+            trap_flags=["business"],
+            extra={"mode": "orders_get", "order_id": order_id},
+        )
+    from app.response_bridge import try_handler_factory_response
+    factory_response = await try_handler_factory_response(request, actor_id=actor_id)
+    if factory_response is not None:
+        return factory_response
+    return JSONResponse(_fake_order(actor_id, order_id))
+
+
+@app.post("/api/v1/orders", tags=["Business"], response_class=JSONResponse)
+async def business_order_create(request: Request):
+    await _sleep_jitter()
+    actor_id = _actor_id_from_request(request)
+    payload = await _read_json_or_form(request)
+    if not _is_monitor(request):
+        _set_hp_event(
+            request,
+            kind="business_reports",
+            points=4,
+            trap_flags=["business"],
+            extra={"mode": "orders_create", "keys": sorted(list(payload.keys()))[:8]},
+        )
+    from app.response_bridge import try_handler_factory_response
+    factory_response = await try_handler_factory_response(request, actor_id=actor_id)
+    if factory_response is not None:
+        return factory_response
+    order = _fake_order(actor_id, f"ord_{_seeded_rng(actor_id, 'orders:create').randint(100000, 999999)}")
+    order["status"] = "created"
+    return JSONResponse(status_code=201, content=order)
 
 
 @app.get("/api/v1/accounts", tags=["Business"], response_class=JSONResponse)
@@ -3342,8 +3516,7 @@ async def backup_list(request: Request, bkp: str = Depends(require_backup_token)
     return {"items": items}
 
 
-@app.get("/backup/download/{item_id}", include_in_schema=False, response_class=PlainTextResponse)
-async def backup_download(item_id: str, request: Request, bkp: str = Depends(require_backup_token)):
+async def _backup_download_impl(item_id: str, request: Request) -> str:
     if _is_monitor(request):
         if item_id == "env_prod":
             return "APP_ENV=production\nADMIN_SECRET=adm_monitor\nLOG_LEVEL=debug\nREGION=eu\n"
@@ -3374,6 +3547,12 @@ async def backup_download(item_id: str, request: Request, bkp: str = Depends(req
         return "[]\n"
 
     return "binary blob not available\n"
+
+
+@app.get("/backup/download/{backup_id}", include_in_schema=False, response_class=PlainTextResponse)
+async def backup_download(backup_id: str, request: Request, bkp: str = Depends(require_backup_token)):
+    _ = bkp
+    return await _backup_download_impl(backup_id, request)
 
 
 @app.get("/admin/secrets", include_in_schema=False, response_class=JSONResponse)
