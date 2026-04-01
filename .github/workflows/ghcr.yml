@@ -18,6 +18,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set image version from git SHA
+        id: version
+        run: echo "sha=$(echo ${{ github.sha }} | cut -c1-7)" >> "$GITHUB_OUTPUT"
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
@@ -46,7 +50,9 @@ jobs:
         with:
           context: .
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          tags: |
+            ${{ steps.meta.outputs.tags }}
+            ghcr.io/${{ github.repository_owner }}/noctisapi-pro:${{ steps.version.outputs.sha }}
           labels: ${{ steps.meta.outputs.labels }}
 
       # -----------------------------------------------------------------------
@@ -54,10 +60,6 @@ jobs:
       # Requires GitHub Secrets: R2_ACCOUNT_ID, R2_ACCESS_KEY_ID,
       #                          R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME
       # -----------------------------------------------------------------------
-
-      - name: Set image version from git SHA
-        id: version
-        run: echo "sha=$(echo ${{ github.sha }} | cut -c1-7)" >> "$GITHUB_OUTPUT"
 
       - name: Export Docker image to tar
         run: |
