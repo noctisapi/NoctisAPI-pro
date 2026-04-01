@@ -15,7 +15,7 @@ from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.serialization import load_pem_public_key
 
 PUBLIC_KEY_PATH = "/app/app/licensing_server_public_key.pem"
-_EXPECTED_PUBKEY_SHA256 = "118a86fc8f1c69609a71e3f314957a8221dd03febdf01745dc0be0d0a4088aea"
+_EXPECTED_PUBKEY_SHA256 = "8805058f4470f84ea6827b99ce460de8fe94f652d4da7307281b2e37a91f948e"
 
 
 def load_public_key_pem() -> bytes:
