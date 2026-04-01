@@ -61,9 +61,18 @@ jobs:
 
       - name: Export Docker image to tar
         run: |
-          docker pull ghcr.io/${{ github.repository_owner }}/noctisapi-pro:latest
-          docker save ghcr.io/${{ github.repository_owner }}/noctisapi-pro:latest \
+          docker pull ghcr.io/${{ github.repository_owner }}/noctisapi-pro:${{ steps.version.outputs.sha }}
+          docker save ghcr.io/${{ github.repository_owner }}/noctisapi-pro:${{ steps.version.outputs.sha }} \
             -o noctisapi-pro-${{ steps.version.outputs.sha }}.tar
+
+      - name: Compute artifact metadata
+        id: artifact
+        run: |
+          SHA256=$(sha256sum noctisapi-pro-${{ steps.version.outputs.sha }}.tar | cut -d' ' -f1)
+          echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
+          echo "filename=noctisapi-pro-${{ steps.version.outputs.sha }}.tar" >> "$GITHUB_OUTPUT"
+          printf '%s  %s\n' "$SHA256" "noctisapi-pro-${{ steps.version.outputs.sha }}.tar" \
+            > noctisapi-pro-${{ steps.version.outputs.sha }}.tar.sha256
 
       - name: Upload tar to Cloudflare R2
         env:
@@ -83,12 +92,61 @@ jobs:
             --endpoint-url https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com \
             --region auto
 
+          aws s3 cp \
+            noctisapi-pro-${{ steps.version.outputs.sha }}.tar.sha256 \
+            s3://${{ secrets.R2_BUCKET_NAME }}/images/noctisapi-pro-${{ steps.version.outputs.sha }}.tar.sha256 \
+            --endpoint-url https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com \
+            --region auto
+
+          aws s3 cp \
+            noctisapi-pro-${{ steps.version.outputs.sha }}.tar.sha256 \
+            s3://${{ secrets.R2_BUCKET_NAME }}/images/noctisapi-pro-latest.tar.sha256 \
+            --endpoint-url https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com \
+            --region auto
+
       - name: Notify licensing server of new image version
         run: |
-          curl --fail -X POST "${{ secrets.LICENSING_SERVER_URL }}/v1/distribution/set-version" \
+          RESPONSE=$(curl --silent --show-error --fail \
+            --retry 5 \
+            --retry-delay 3 \
+            --retry-all-errors \
+            -X POST "${{ secrets.LICENSING_SERVER_URL }}/v1/distribution/set-version" \
             -H "X-Admin-Token: ${{ secrets.LICENSING_ADMIN_TOKEN }}" \
             -H "Content-Type: application/json" \
-            -d "{\"version\": \"${{ steps.version.outputs.sha }}\"}"
+            -d "{\"version\":\"${{ steps.version.outputs.sha }}\",\"sha256\":\"${{ steps.artifact.outputs.sha256 }}\",\"filename\":\"${{ steps.artifact.outputs.filename }}\"}")
+          echo "$RESPONSE"
+
+      - name: Verify licensing server current version
+        env:
+          EXPECTED_VERSION: ${{ steps.version.outputs.sha }}
+          LICENSING_SERVER_URL: ${{ secrets.LICENSING_SERVER_URL }}
+          LICENSING_ADMIN_TOKEN: ${{ secrets.LICENSING_ADMIN_TOKEN }}
+        run: |
+          STATUS_URL="${LICENSING_SERVER_URL}/v1/distribution/status?_ts=$(date +%s)"
+          RESPONSE=$(curl --silent --show-error --fail \
+            --retry 5 \
+            --retry-delay 3 \
+            --retry-all-errors \
+            -H "Cache-Control: no-cache, no-store, max-age=0" \
+            -H "Pragma: no-cache" \
+            -H "X-Admin-Token: ${LICENSING_ADMIN_TOKEN}" \
+            "$STATUS_URL")
+          echo "$RESPONSE"
+          export RESPONSE
+          python - <<'PY'
+          import json
+          import os
+
+          response = json.loads(os.environ["RESPONSE"])
+          current = response.get("current_version") or response.get("image_version")
+          if not current:
+              raise SystemExit("Licensing status response did not expose current_version or image_version")
+          expected = os.environ["EXPECTED_VERSION"]
+          if current != expected:
+              raise SystemExit(
+                  f"Licensing server current version '{current}' does not match expected '{expected}'"
+              )
+          PY
 
       - name: Clean up old images from R2 (keep latest 3 + noctisapi-pro-latest.tar)
         env:
@@ -107,11 +165,17 @@ jobs:
             --endpoint-url "$ENDPOINT" \
             --region auto \
           | tr '\t' '\n' \
-          | grep -v 'noctisapi-pro-latest\.tar' \
+          | grep '^images/noctisapi-pro-.*\.tar$' \
+          | grep -v 'noctisapi-pro-latest\.tar$' \
           | head -n -3 \
           | while read key; do
               echo "Deleting old image: $key"
               aws s3 rm "s3://$BUCKET/$key" \
                 --endpoint-url "$ENDPOINT" \
                 --region auto
+              if [ -n "$key" ]; then
+                aws s3 rm "s3://$BUCKET/${key}.sha256" \
+                  --endpoint-url "$ENDPOINT" \
+                  --region auto || true
+              fi
             done
