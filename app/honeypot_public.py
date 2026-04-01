@@ -1697,9 +1697,30 @@ async def log_all_requests(request: Request, call_next):
                 headers=debug_headers,
             )
         else:
-            response = await call_next(request)
-            if not skip_policy and _route_is_registered(request.url.path, request.method):
-                response = await _apply_modular_response_policy(request, response, modular_policy)
+            # Phase 2: try ResponseFactory for catalog-mapped endpoints.
+            # Only intercept when the legacy modular system has no explicit per-endpoint
+            # config (endpoint_match_type == "default" means no DB row was found).
+            # When legacy has explicit config (e.g. fixed_status, error mode), defer to it
+            # so the migration is safe and per-endpoint opt-in.
+            _has_explicit_legacy_config = (modular_policy.get("endpoint_match_type") or "default") != "default"
+            _factory_resp = None
+            if not _has_explicit_legacy_config:
+                from app.response_bridge import try_factory_response  # lazy import
+                _factory_resp = await try_factory_response(request, actor_id=_actor_id_from_request(request))
+            if _factory_resp is not None:
+                response = _factory_resp
+                try:
+                    request.state.response_backend = "factory"
+                except Exception:
+                    pass
+            else:
+                try:
+                    request.state.response_backend = "legacy"
+                except Exception:
+                    pass
+                response = await call_next(request)
+                if not skip_policy and _route_is_registered(request.url.path, request.method):
+                    response = await _apply_modular_response_policy(request, response, modular_policy)
     except Exception as e:
         exc = e
         raise
@@ -1823,6 +1844,26 @@ async def log_all_requests(request: Request, call_next):
                 if hp_event:
                     kind = hp_event.get("kind", kind)
 
+                _event_extra = {
+                    "rt": "mw",
+                    "latency_ms": latency_ms,
+                    "headers": req_headers,
+                    "geo": geo,
+                    "token_valid": token_valid,
+                    "modular": {
+                        "match_type": modular_policy.get("endpoint_match_type"),
+                        "response_mode": (modular_policy.get("endpoint_config") or {}).get("response_mode"),
+                        "richness_level": (modular_policy.get("endpoint_config") or {}).get("richness_level"),
+                        "rule_hits": len(((modular_policy.get("rules") or {}).get("matched_rule_ids") or [])),
+                        "mutation_policy": (modular_policy.get("mutation") or {}).get("mutation_policy"),
+                        "mutation_intensity": (modular_policy.get("mutation") or {}).get("mutation_intensity"),
+                        "error": modular_policy.get("error"),
+                    },
+                    **(hp_event.get("extra") if hp_event else {}),
+                }
+                from app.response_bridge import enrich_extra_json  # lazy import
+                _event_extra = enrich_extra_json(request, _event_extra, status_code, latency_ms)
+
                 inserted_event_id = _insert_event(
                     conn,
                     req=request,
@@ -1832,23 +1873,7 @@ async def log_all_requests(request: Request, call_next):
                     token=token,
                     points_delta=hp_event.get("points") if hp_event else None,
                     trap_flags=hp_event.get("trap_flags") if hp_event else None,
-                    extra={
-                        "rt": "mw",
-                        "latency_ms": latency_ms,
-                        "headers": req_headers,
-                        "geo": geo,
-                        "token_valid": token_valid,
-                        "modular": {
-                            "match_type": modular_policy.get("endpoint_match_type"),
-                            "response_mode": (modular_policy.get("endpoint_config") or {}).get("response_mode"),
-                            "richness_level": (modular_policy.get("endpoint_config") or {}).get("richness_level"),
-                            "rule_hits": len(((modular_policy.get("rules") or {}).get("matched_rule_ids") or [])),
-                            "mutation_policy": (modular_policy.get("mutation") or {}).get("mutation_policy"),
-                            "mutation_intensity": (modular_policy.get("mutation") or {}).get("mutation_intensity"),
-                            "error": modular_policy.get("error"),
-                        },
-                        **(hp_event.get("extra") if hp_event else {}),
-                    },
+                    extra=_event_extra,
                 )
 
                 _update_actor_error_counters(conn, actor_id, int(status_code))
@@ -1916,6 +1941,34 @@ async def log_all_requests(request: Request, call_next):
     # can correlate their own logs with ours.
     response.headers["X-Request-ID"] = _request_id
     return response
+
+
+# ── Factory body helper (handler-level integration) ───────────────────────────
+#
+# Handlers call this to replace their hardcoded payload with a factory-
+# generated one while keeping all scoring / DB side effects intact.
+#
+# Returns a Starlette Response when the endpoint is catalog-mapped and
+# the factory produces a valid spec; returns None otherwise so the caller
+# can fall through to its legacy body.
+#
+# NEVER raises. Sync (no I/O; factory is a pure in-memory operation).
+
+def _try_factory_body(method: str, path: str, *, actor_id: str = "") -> Optional[Any]:
+    """Return a factory-generated Response for this (method, path), or None."""
+    try:
+        from app.runtime_provider import resolve_effective_endpoint
+        from app.response_factory.factory import build_response, is_supported
+        from app.response_bridge import _spec_to_response
+        ep = resolve_effective_endpoint(method, path)
+        if ep is None or not is_supported(ep):
+            return None
+        spec = build_response(ep, salt=actor_id)
+        if spec is None:
+            return None
+        return _spec_to_response(spec)
+    except Exception:
+        return None
 
 
 @app.get("/health", tags=["Health"], response_class=JSONResponse)
