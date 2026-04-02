@@ -40,6 +40,7 @@ from honey_licensing.online_client import (
     OnlineLicenseClient,
 )
 from honey_licensing.offline_license import LicenseVerifier, load_public_key_pem
+from honey_licensing.product import PRODUCT_ID as _PRODUCT_ID
 
 logger = logging.getLogger(__name__)
 
@@ -564,7 +565,7 @@ class OnlineLicenseManager:
         try:
             pub_pem = load_public_key_pem()
             verifier = LicenseVerifier(public_key_pem=pub_pem)
-            ok, _, sig_reason = verifier.verify(sync_resp.license_doc)
+            ok, payload, sig_reason = verifier.verify(sync_resp.license_doc)
             if not ok:
                 logger.warning(
                     "license_online: sync doc signature invalid (%s); refusing to write", sig_reason
@@ -572,6 +573,16 @@ class OnlineLicenseManager:
                 return
         except Exception as exc:
             logger.warning("license_online: could not verify synced doc signature: %s; refusing to write", exc)
+            return
+
+        # Validate product — refuse to write a doc that would immediately cause LICENSE_PRODUCT_MISMATCH
+        doc_product = str((payload or {}).get("product") or "").strip().lower()
+        if doc_product != _PRODUCT_ID:
+            logger.error(
+                "license_online: sync doc product %r != expected %r; "
+                "refusing to write — re-issue the license with app_id=%r",
+                doc_product, _PRODUCT_ID, _PRODUCT_ID,
+            )
             return
 
         # Atomic write
@@ -681,7 +692,7 @@ class OnlineLicenseManager:
         ).strip()
         check_interval_seconds = _env_int("HP_ONLINE_CHECK_INTERVAL_SECONDS", 14400, min_val=60)
         grace_period_seconds = _env_int("HP_ONLINE_GRACE_PERIOD_SECONDS", 259200, min_val=0)
-        product = (os.getenv("HP_PRODUCT") or "noctisapi").strip()
+        product = _PRODUCT_ID  # Fixed at build time — never read from environment.
         app_version = (os.getenv("APP_VERSION") or os.getenv("HP_API_VERSION") or "").strip()
 
         return cls(

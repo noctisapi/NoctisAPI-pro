@@ -229,7 +229,8 @@ def _license_config_snapshot() -> dict:
             return "env"
         return "default"
 
-    app_id = (license_runtime.get_effective("HP_APP_ID") or os.getenv("APP_ID") or "noctisapi-pro").strip()
+    from honey_licensing.product import PRODUCT_ID as _PRODUCT_ID
+    app_id = (license_runtime.get_effective("HP_APP_ID") or os.getenv("APP_ID") or _PRODUCT_ID).strip()
     app_version = (
         license_runtime.get_effective("HP_APP_VERSION")
         or os.getenv("APP_VERSION")
@@ -1844,9 +1845,17 @@ def dashboard_overview(request: Request):
             conn, backend_enabled=campaigns_backend_enabled
         )
         cur = conn.cursor()
-        cur.execute("SELECT COUNT(*) AS cnt FROM actors WHERE last_seen >= datetime('now','-1 day')")
+        cur.execute(
+            "SELECT COUNT(*) AS cnt FROM actors"
+            " WHERE last_seen >= datetime('now','-1 day')"
+            " AND actor_id IN (SELECT DISTINCT actor_id FROM events)"
+        )
         active_24h = int(cur.fetchone()["cnt"] or 0)
-        cur.execute("SELECT COUNT(*) AS cnt FROM actors WHERE last_seen >= datetime('now','-7 day')")
+        cur.execute(
+            "SELECT COUNT(*) AS cnt FROM actors"
+            " WHERE last_seen >= datetime('now','-7 day')"
+            " AND actor_id IN (SELECT DISTINCT actor_id FROM events)"
+        )
         active_7d = int(cur.fetchone()["cnt"] or 0)
         cur.execute("SELECT COUNT(*) AS cnt FROM events")
         events_total = int(cur.fetchone()["cnt"] or 0)
@@ -2742,8 +2751,17 @@ def dashboard_api_modular_save_instance_config(payload: dict = Body(default={}))
         raise HTTPException(status_code=400, detail="invalid_global_difficulty")
 
     endpoint_configs = _normalize_endpoint_override_payload(payload, registry=registry)
-    mutation_config = _normalize_mutation_config_payload(payload)
-    response_rules = _normalize_response_rules_payload(payload, registry=registry)
+    is_pro = _has_modular_pro()
+
+    if is_pro:
+        mutation_config = _normalize_mutation_config_payload(payload)
+        response_rules = _normalize_response_rules_payload(payload, registry=registry)
+    else:
+        # Core tier: ignore Pro-only fields; strip flaw overrides from endpoint configs.
+        mutation_config = MutationConfig()
+        response_rules = []
+        for cfg in endpoint_configs.values():
+            cfg.flaw_profile_id = None
 
     try:
         next_config = InstanceConfig(

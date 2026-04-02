@@ -642,12 +642,9 @@ def _update_actor_error_counters(conn: sqlite3.Connection, actor_id: str, status
         (actor_id,),
     ).fetchone()
     if not row:
-        # ensure actor exists
-        _bump_actor(conn, actor_id, score_delta=0)
-        row = conn.execute(
-            "SELECT err_total, err_consecutive FROM actors WHERE actor_id=?",
-            (actor_id,),
-        ).fetchone()
+        # Actor doesn't exist — event insertion must have failed/rolled back.
+        # Do not create an orphan actor row here; just bail out silently.
+        return
 
     err_total = int(row["err_total"] or 0)
     err_consec = int(row["err_consecutive"] or 0)
@@ -1873,7 +1870,11 @@ async def log_all_requests(request: Request, call_next):
                     extra=_event_extra,
                 )
 
-                _update_actor_error_counters(conn, actor_id, int(status_code))
+                # Only update error counters when the event was actually committed.
+                # If _insert_event rolled back (returns None), skip to avoid
+                # creating an orphan actor row without any event.
+                if inserted_event_id is not None:
+                    _update_actor_error_counters(conn, actor_id, int(status_code))
 
                 # add counters snapshot to this event (optional, but helps dashboards)
                 if inserted_event_id is not None:

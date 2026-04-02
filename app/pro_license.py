@@ -63,8 +63,8 @@ _STATUS_CACHE: dict[str, Any] = {
     },
 }
 
-# Product name expected in license payload. Hardcoded — change at build time if needed.
-_PRODUCT = "noctisapi"
+# Canonical product identifier — imported from honey_licensing.product (single source of truth).
+from honey_licensing.product import PRODUCT_ID as _PRODUCT
 
 
 def _env_int(name: str, default: int, min_value: int, max_value: int) -> int:
