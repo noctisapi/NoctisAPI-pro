@@ -28,6 +28,14 @@ from app import licensing
 from app import pro_license
 from app import pro_ops
 from app import api_modular
+from app.stage import (
+    CaseContext,
+    DetectionContext,
+    RequestContext as StageRequestContext,
+    classify_stage,
+    stage_from_score,
+    stage_label,
+)
 from app.trusted_proxy import resolve_client_ip
 from app.reverse_proxy import (
     ReverseProxyMiddleware,
@@ -155,6 +163,57 @@ app.add_middleware(NoCacheMiddleware)
 # Added last (executes first of all) so the clock starts before any other
 # middleware runs.
 app.add_middleware(RequestTimeoutMiddleware, timeout=get_request_timeout())
+
+
+# ── Custom OpenAPI schema — reflects catalog surface, not all internal routes ─
+#
+# Overrides app.openapi() so /docs and /openapi.json show only the endpoints
+# that are currently enabled in the modular runtime config and have
+# include_in_schema=True.  Not cached — runtime config has its own 60s TTL.
+
+def _catalog_openapi() -> dict:
+    """Generate OpenAPI schema filtered to the active catalog surface."""
+    from fastapi.openapi.utils import get_openapi
+
+    base = get_openapi(
+        title=app.title,
+        version=app.version,
+        openapi_version=app.openapi_version,
+        description=app.description or "",
+        routes=app.routes,
+        tags=app.openapi_tags,
+        servers=app.servers,
+    )
+
+    try:
+        from app.runtime_provider import get_runtime_config
+        runtime = get_runtime_config()
+        _HTTP_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"}
+        visible = {
+            (ep.method.upper(), ep.path_pattern)
+            for ep in runtime.endpoints.values()
+            if ep.enabled and ep.include_in_schema
+        }
+    except Exception:
+        return base  # fallback: show full schema
+
+    filtered: dict = {}
+    for path, path_item in base.get("paths", {}).items():
+        ops: dict = {}
+        for key, value in path_item.items():
+            if key.upper() in _HTTP_METHODS:
+                if (key.upper(), path) in visible:
+                    ops[key] = value
+            else:
+                ops[key] = value  # keep non-method keys (e.g. "parameters")
+        if any(k.upper() in _HTTP_METHODS for k in ops):
+            filtered[path] = ops
+
+    base["paths"] = filtered
+    return base
+
+
+app.openapi = _catalog_openapi  # type: ignore[method-assign]
 
 
 def _warn_if_default_seed() -> None:
@@ -553,6 +612,16 @@ def _geoip_country(ip_s: str) -> Dict[str, Any]:
         return {}
 
 
+def _ensure_session_step_metadata_columns(conn: sqlite3.Connection) -> None:
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(session_steps)").fetchall()}
+    if "ip" not in cols:
+        conn.execute("ALTER TABLE session_steps ADD COLUMN ip TEXT")
+    if "ua" not in cols:
+        conn.execute("ALTER TABLE session_steps ADD COLUMN ua TEXT")
+    if "geo_json" not in cols:
+        conn.execute("ALTER TABLE session_steps ADD COLUMN geo_json TEXT")
+
+
 def _score_for(kind: str) -> int:
     table = {
         "probe": 1,
@@ -681,6 +750,7 @@ def _insert_event(
     if "status" not in cols:
         conn.execute("ALTER TABLE events ADD COLUMN status INTEGER")
         conn.commit()
+    _ensure_session_step_metadata_columns(conn)
 
     actor_id = _actor_id_from_request(req)
     ip = _client_ip(req)
@@ -694,6 +764,13 @@ def _insert_event(
     stage_before = _stage_from_actor_score(score_before)
 
     base_points = points_delta if points_delta is not None else _score_for(kind)
+    geo = {}
+    if isinstance(extra, dict):
+        extra_geo = extra.get("geo")
+        if isinstance(extra_geo, dict):
+            geo = dict(extra_geo)
+    if not geo:
+        geo = _geoip_country(ip)
 
     cur = conn.cursor()
     try:
@@ -771,6 +848,55 @@ def _insert_event(
         # insert session_step
         seq_row = cur.execute("SELECT COALESCE(MAX(seq),0) AS m FROM session_steps WHERE session_id=?", (session_id,)).fetchone()
         seq = int(seq_row[0] or 0) + 1
+
+        # ── Attack phase classification (behavioural stage) ───────────────────
+        # seq is now known, so previous_requests_in_session = seq - 1.
+        # Resolve the catalog endpoint for its vulnerability_type, then run the
+        # single canonical classifier.  Never blocks or raises.
+        _vuln_type: Optional[str] = None
+        _ep_id: str = ""
+        try:
+            from app.runtime_provider import resolve_effective_endpoint
+            _ep_resolved = resolve_effective_endpoint(req.method, req.url.path)
+            if _ep_resolved is not None:
+                _vuln_type = _ep_resolved.vulnerability_type
+                _ep_id = _ep_resolved.endpoint_id
+        except Exception:
+            pass
+
+        _attack_phase = classify_stage(
+            StageRequestContext(
+                endpoint_id=_ep_id,
+                method=req.method,
+                path=req.url.path,
+                query_params=dict(req.query_params),
+                body={},
+                headers={},
+                response_status=int(status),
+                response_size=len(body) if body else 0,
+            ),
+            DetectionContext(
+                vulnerability_type=_vuln_type,
+                flags={f: True for f in (trap_flags or [])},
+            ),
+            CaseContext(previous_requests_in_session=seq - 1),
+        )
+        # Update extra_json with attack phase and vulnerability_type (amend in-place).
+        # vulnerability_type is stored so TTP classification can use it at case-view time
+        # without re-resolving from the catalog.
+        try:
+            _ep_payload = json.loads(extra_json)
+            _ep_payload["attack_phase"] = _attack_phase.stage.value
+            _ep_payload["attack_phase_reason"] = _attack_phase.reason
+            if _vuln_type:
+                _ep_payload["vulnerability_type"] = _vuln_type
+            cur.execute(
+                "UPDATE events SET extra_json=? WHERE rowid=?",
+                (json.dumps(_ep_payload, ensure_ascii=False), event_id),
+            )
+        except Exception:
+            pass  # never fail the pipeline; attack_phase is best-effort
+        # ─────────────────────────────────────────────────────────────────────
         headers_json = json.dumps(_safe_headers(req), ensure_ascii=False)
         query_json = json.dumps(dict(req.query_params), ensure_ascii=False)
         body_json = None
@@ -779,8 +905,9 @@ def _insert_event(
         except Exception:
             body_json = None
 
+        geo_json = json.dumps(geo, ensure_ascii=False) if geo else None
         cur.execute(
-            "INSERT INTO session_steps(session_id, seq, ts, method, path, query_json, headers_json, body_json, response_status, response_json, stage_before, stage_after) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO session_steps(session_id, seq, ts, method, path, query_json, headers_json, body_json, response_status, response_json, stage_before, stage_after, ip, ua, geo_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 session_id,
                 seq,
@@ -794,7 +921,19 @@ def _insert_event(
                 None,
                 stage_before,
                 stage_after,
+                ip,
+                ua,
+                geo_json,
             ),
+        )
+
+        _logger.debug(
+            "replay_capture session_id=%s actor_id=%s ip=%s geo=%s kind=%s",
+            session_id,
+            actor_id[:12],
+            ip,
+            (geo.get("country_iso2") or "unknown") if isinstance(geo, dict) else "unknown",
+            kind,
         )
 
         conn.commit()
@@ -833,24 +972,8 @@ def _actor_score(conn: sqlite3.Connection, actor_id: str) -> int:
     return int(r["score"]) if r else 0
 
 
-def _stage_from_actor_score(score: int) -> int:
-    if score < 10:
-        return 0
-    if score < 20:
-        return 1
-    if score < 32:
-        return 2
-    if score < 48:
-        return 3
-    if score < 68:
-        return 4
-    if score < 92:
-        return 5
-    if score < 120:
-        return 6
-    if score < 155:
-        return 7
-    return 8
+# Canonical implementation lives in app.stage.threat_level (imported above as stage_from_score).
+_stage_from_actor_score = stage_from_score
 
 
 def _get_or_create_secret(conn: sqlite3.Connection, actor_id: str, kind: str, prefix: str) -> str:

@@ -11,7 +11,8 @@ import tempfile
 import sqlite3
 import urllib.request
 from app.tls_config import get_ssl_context
-from collections import Counter
+from app.stage.threat_level import stage_from_score  # canonical — do not redefine
+from collections import Counter, defaultdict, deque
 from statistics import median
 from datetime import datetime, timezone
 
@@ -770,24 +771,7 @@ def short_id(actor_id: str) -> str:
     return actor_id[:8] + "..." if actor_id and len(actor_id) > 9 else actor_id
 
 
-def stage_from_score(score: int) -> int:
-    if score < 10:
-        return 0
-    if score < 20:
-        return 1
-    if score < 32:
-        return 2
-    if score < 48:
-        return 3
-    if score < 68:
-        return 4
-    if score < 92:
-        return 5
-    if score < 120:
-        return 6
-    if score < 155:
-        return 7
-    return 8
+# stage_from_score imported from app.stage.threat_level at top of file.
 
 
 def fmt_ts(iso: str) -> str:
@@ -958,6 +942,26 @@ def _safe_json_loads(raw: str, default):
         return default
 
 
+def _parse_iso_dt(raw: str):
+    try:
+        return datetime.fromisoformat((raw or "").replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def _event_stage(row: dict) -> Optional[int]:
+    extra = _safe_json_loads(row.get("extra_json"), {})
+    if not isinstance(extra, dict):
+        return None
+    stage = extra.get("stage_after")
+    if stage is None:
+        stage = extra.get("stage_before")
+    try:
+        return int(stage) if stage is not None else None
+    except Exception:
+        return None
+
+
 def _case_actor_ids(cur: sqlite3.Cursor, case_id: int) -> list[str]:
     cur.execute("SELECT actor_id FROM case_actors WHERE case_id=?", (case_id,))
     return [r[0] for r in cur.fetchall()]
@@ -1036,7 +1040,34 @@ def _case_stage_progression(steps: list[dict]) -> dict:
 
 def _case_timeline(steps: list[dict], events: list[dict], limit: int = 200) -> list[dict]:
     items = []
+    event_buckets: dict[tuple[str, str, str, str, str], deque[dict]] = defaultdict(deque)
+
+    for row in events:
+        key = (
+            str(row.get("actor_id") or ""),
+            str(row.get("ts") or ""),
+            str(row.get("method") or ""),
+            str(row.get("path") or ""),
+            str(row.get("status") if row.get("status") is not None else ""),
+        )
+        event_buckets[key].append(dict(row))
+
     for row in steps:
+        key = (
+            str(row.get("actor_id") or ""),
+            str(row.get("ts") or ""),
+            str(row.get("method") or ""),
+            str(row.get("path") or ""),
+            str(row.get("response_status") if row.get("response_status") is not None else ""),
+        )
+        matched_event = event_buckets[key].popleft() if event_buckets.get(key) else None
+        if matched_event is not None and not event_buckets[key]:
+            event_buckets.pop(key, None)
+
+        stage_value = row.get("stage_after") if row.get("stage_after") is not None else row.get("stage_before")
+        if stage_value is None and matched_event is not None:
+            stage_value = _event_stage(matched_event)
+
         items.append(
             {
                 "ts": row.get("ts"),
@@ -1045,65 +1076,54 @@ def _case_timeline(steps: list[dict], events: list[dict], limit: int = 200) -> l
                 "method": row.get("method"),
                 "path": row.get("path"),
                 "status": row.get("response_status"),
-                "stage": row.get("stage_after") if row.get("stage_after") is not None else row.get("stage_before"),
+                "stage": stage_value,
                 "session_id": row.get("session_id"),
                 "seq": row.get("seq"),
+                "kind": matched_event.get("kind") if matched_event else "",
+                "ua": matched_event.get("ua") if matched_event else "",
+                "ip": matched_event.get("ip") if matched_event else "",
             }
         )
-    for row in events:
-        items.append(
-            {
-                "ts": row.get("ts"),
-                "type": "event",
-                "actor_id": row.get("actor_id"),
+
+    for bucket in event_buckets.values():
+        for row in bucket:
+            items.append(
+                {
+                    "ts": row.get("ts"),
+                    "type": "event",
+                    "actor_id": row.get("actor_id"),
                 "method": row.get("method"),
                 "path": row.get("path"),
-                "status": row.get("status"),
-                "kind": row.get("kind"),
-                "ua": row.get("ua"),
-                "ip": row.get("ip"),
-            }
-        )
+                    "status": row.get("status"),
+                    "kind": row.get("kind"),
+                    "ua": row.get("ua"),
+                    "ip": row.get("ip"),
+                    "stage": _event_stage(row),
+                }
+            )
     items = [i for i in items if i.get("ts")]
-    items.sort(key=lambda x: x.get("ts") or "", reverse=True)
+    items.sort(
+        key=lambda x: (
+            _parse_iso_dt(x.get("ts") or "") or datetime.min.replace(tzinfo=timezone.utc),
+            1 if x.get("type") == "step" else 0,
+        ),
+        reverse=True,
+    )
     return items[:limit]
 
 
-def _case_techniques(steps: list[dict], events: list[dict]) -> list[str]:
-    paths = []
-    statuses = []
-    kinds = []
-    for row in steps:
-        paths.append(_normalize_path(row.get("path") or "/"))
-        status = row.get("response_status")
-        if status is not None:
-            statuses.append(int(status))
-    for row in events:
-        paths.append(_normalize_path(row.get("path") or "/"))
-        if row.get("status") is not None:
-            statuses.append(int(row.get("status")))
-        if row.get("kind"):
-            kinds.append(str(row.get("kind")))
+def _case_ttp(steps: list[dict], events: list[dict]) -> dict:
+    """Classify session TTPs using the canonical behavior-based classifier.
 
-    techniques = set()
-    if any(p in {"/docs", "/openapi.json", "/swagger", "/redoc", "/.env", "/config.json", "/.well-known/security.txt"} for p in paths):
-        techniques.add("enumeration")
-    if sum(1 for p in paths if "auth/login" in p or p.endswith("/v1/auth/token")) >= 3:
-        if any(s >= 401 for s in statuses):
-            techniques.add("brute_force")
-    if any(p.startswith("/apikeys") or p.startswith("/v1/keys") or p.startswith("/internal/config") for p in paths):
-        techniques.add("token_abuse")
-    if any(p.startswith("/admin") or p.startswith("/internal") for p in paths):
-        techniques.add("privilege_escalation")
-    if any(p.startswith("/root") or p.startswith("/console/exec") for p in paths):
-        techniques.add("privileged_access")
-    if any(p.startswith("/backup") or p.startswith("/api/v1/reports") or p.startswith("/api/v1/transactions") for p in paths):
-        techniques.add("data_exfiltration")
-    if any(p.startswith("/files") or p in {"/import", "/plugins/install", "/themes/upload"} for p in paths):
-        techniques.add("malware_upload")
-    if any("token_used" in k or "unknown_token" in k for k in kinds):
-        techniques.add("token_probe")
-    return sorted(techniques)
+    Returns a dict with:
+        techniques: list[str]  — technique keys (for scoring and backward compat)
+        primary:    str        — primary technique key
+        display:    list[dict] — full per-technique data for MITRE ATT&CK template section
+
+    All TTP logic lives in app.stage.ttp — this function is only a call-site adapter.
+    """
+    from app.stage.ttp import ttp_display_data
+    return ttp_display_data(steps, events)
 
 
 def _case_risk_score(stage_max: int, techniques: list[str], endpoint_count: int) -> int:
@@ -1151,7 +1171,8 @@ def _campaign_metrics(cur: sqlite3.Cursor, actor_ids: list[str]) -> dict:
     events = _case_events(cur, actor_ids, limit=800)
     endpoints_summary = _case_endpoints_summary(steps, events, top_k=12)
     stage_info = _case_stage_progression(steps)
-    techniques = _case_techniques(steps, events)
+    _ttp = _case_ttp(steps, events)
+    techniques = _ttp["techniques"]
 
     ts_values = []
     for row in events:
@@ -2039,6 +2060,64 @@ def _normalize_catalog_path(path: str) -> str:
     return raw
 
 
+def _timed_call(perf: dict, key: str, fn):
+    started = time.perf_counter()
+    result = fn()
+    perf[key] = round((time.perf_counter() - started) * 1000.0, 2)
+    return result
+
+
+def _format_server_timing(perf: dict) -> str:
+    timings: list[str] = []
+    metric_map = [
+        ("total_ms", "total"),
+        ("db_load_ms", "db"),
+        ("runtime_build_ms", "runtime"),
+        ("catalog_ms", "catalog"),
+        ("serialize_ms", "serialize"),
+    ]
+    for key, label in metric_map:
+        raw = perf.get(key)
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            continue
+        timings.append(f"{label};dur={value:.2f}")
+    return ", ".join(timings)
+
+
+def _json_response_with_perf(payload: dict, *, endpoint_name: str, perf: dict, total_started: float) -> Response:
+    serialize_started = time.perf_counter()
+    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    perf["serialize_ms"] = round((time.perf_counter() - serialize_started) * 1000.0, 2)
+    perf["payload_bytes"] = len(body.encode("utf-8"))
+    perf["total_ms"] = round((time.perf_counter() - total_started) * 1000.0, 2)
+    perf.setdefault("db_query_count", 0)
+    perf.setdefault("db_load_ms", 0.0)
+
+    _logger.info(
+        "api_modular_perf endpoint=%s total_ms=%.2f db_queries=%s db_ms=%.2f runtime_ms=%.2f "
+        "catalog_ms=%.2f serialize_ms=%.2f payload_bytes=%s",
+        endpoint_name,
+        float(perf.get("total_ms") or 0.0),
+        int(perf.get("db_query_count") or 0),
+        float(perf.get("db_load_ms") or 0.0),
+        float(perf.get("runtime_build_ms") or 0.0),
+        float(perf.get("catalog_ms") or 0.0),
+        float(perf.get("serialize_ms") or 0.0),
+        int(perf.get("payload_bytes") or 0),
+    )
+
+    headers = {
+        "Cache-Control": "no-store",
+        "Server-Timing": _format_server_timing(perf),
+        "X-Api-Modular-Total-Ms": f"{float(perf.get('total_ms') or 0.0):.2f}",
+        "X-Api-Modular-DB-Queries": str(int(perf.get("db_query_count") or 0)),
+        "X-Api-Modular-Payload-Bytes": str(int(perf.get("payload_bytes") or 0)),
+    }
+    return Response(content=body, media_type="application/json", headers=headers)
+
+
 def _honeypot_public_endpoint_catalog() -> tuple[list[dict], str, str]:
     now = int(time.time())
     with API_CATALOG_LOCK:
@@ -2480,23 +2559,64 @@ def _serialize_runtime_snapshot(
     }
 
 
-def _build_api_modular_v2_state(*, include_legacy_controls: bool = True) -> dict:
+def _build_api_modular_v2_state(
+    *,
+    include_legacy_controls: bool = False,
+    include_catalog: bool = False,
+    perf: Optional[dict] = None,
+) -> dict:
+    perf = perf if perf is not None else {}
+    registry_started = time.perf_counter()
     registry = _api_modular_registry()
     endpoint_groups, groups_by_id = _api_modular_group_maps(registry)
+    perf["registry_ms"] = round((time.perf_counter() - registry_started) * 1000.0, 2)
     conn = db()
+    query_count = 0
+    try:
+        def _trace_sql(statement: str):
+            nonlocal query_count
+            sql = str(statement or "").lstrip().upper()
+            if not sql or sql.startswith(("BEGIN", "COMMIT", "ROLLBACK", "PRAGMA")):
+                return
+            query_count += 1
+
+        conn.set_trace_callback(_trace_sql)
+    except Exception:
+        pass
     try:
         ensure_schema(conn)
         from app.legacy_config_adapter import LegacyConfigAdapter
 
-        current_instance = _load_current_instance_config(conn, registry)
+        current_instance = _timed_call(
+            perf,
+            "config_load_ms",
+            lambda: _load_current_instance_config(conn, registry),
+        )
         adapter = LegacyConfigAdapter(conn, registry=registry)
         runtime_build_error = ""
         try:
-            effective_runtime = build_effective_runtime_config(current_instance, registry)
+            effective_runtime = _timed_call(
+                perf,
+                "runtime_build_ms",
+                lambda: build_effective_runtime_config(current_instance, registry),
+            )
         except BuildError as exc:
             runtime_build_error = str(exc)
-            effective_runtime = build_effective_runtime_config(InstanceConfig.default(), registry)
-        route_catalog, catalog_source, catalog_error = _honeypot_public_endpoint_catalog()
+            effective_runtime = _timed_call(
+                perf,
+                "runtime_build_ms",
+                lambda: build_effective_runtime_config(InstanceConfig.default(), registry),
+            )
+
+        route_catalog: list[dict] = []
+        catalog_source = "skipped"
+        catalog_error = ""
+        if include_catalog:
+            route_catalog, catalog_source, catalog_error = _timed_call(
+                perf,
+                "catalog_ms",
+                _honeypot_public_endpoint_catalog,
+            )
         modular_ok, modular_reason = _pro_feature_status(
             licensing.Feature.API_MUTATION,
             action="panel_api_modular",
@@ -2505,6 +2625,36 @@ def _build_api_modular_v2_state(*, include_legacy_controls: bool = True) -> dict
             licensing.Feature.ANALYTICS,
             action="panel_pro_analytics",
         )
+        serialized_groups = _timed_call(
+            perf,
+            "endpoint_groups_ms",
+            lambda: [
+                {
+                    **group,
+                    "endpoints": [
+                        _serialize_endpoint_definition(
+                            registry.get_endpoint(endpoint_id),
+                            endpoint_groups=endpoint_groups,
+                            instance_config=current_instance,
+                            effective_runtime=effective_runtime,
+                        )
+                        for endpoint_id in group["endpoint_ids"]
+                        if registry.get_endpoint(endpoint_id) is not None
+                    ],
+                }
+                for group in groups_by_id.values()
+            ],
+        )
+        runtime_snapshot = _timed_call(
+            perf,
+            "runtime_snapshot_ms",
+            lambda: _serialize_runtime_snapshot(
+                effective_runtime,
+                registry=registry,
+                endpoint_groups=endpoint_groups,
+            ),
+        )
+        legacy_migration = _timed_call(perf, "migration_report_ms", adapter.migration_report)
         state = {
             "templates": [
                 _serialize_template(template, registry=registry, groups_by_id=groups_by_id)
@@ -2522,33 +2672,11 @@ def _build_api_modular_v2_state(*, include_legacy_controls: bool = True) -> dict
                 _serialize_flaw_profile(flaw)
                 for flaw in registry.list_flaw_profiles()
             ],
-            "endpoint_groups": [
-                {
-                    **group,
-                    "endpoints": [
-                        _serialize_endpoint_definition(
-                            registry.get_endpoint(endpoint_id),
-                            endpoint_groups=endpoint_groups,
-                            instance_config=current_instance,
-                            effective_runtime=effective_runtime,
-                        )
-                        for endpoint_id in group["endpoint_ids"]
-                        if registry.get_endpoint(endpoint_id) is not None
-                    ],
-                }
-                for group in groups_by_id.values()
-            ],
+            "endpoint_groups": serialized_groups,
             "instance_config": json.loads(current_instance.to_json()),
-            "effective_runtime": _serialize_runtime_snapshot(
-                effective_runtime,
-                registry=registry,
-                endpoint_groups=endpoint_groups,
-            ),
-            "legacy_migration": adapter.migration_report(),
+            "effective_runtime": runtime_snapshot,
+            "legacy_migration": legacy_migration,
             "runtime_build_error": runtime_build_error,
-            "endpoint_catalog": route_catalog,
-            "endpoint_catalog_source": catalog_source,
-            "endpoint_catalog_error": catalog_error,
             "pro_modular_visible": _tier_has_feature(licensing.Feature.API_MUTATION),
             "pro_modular_enabled": modular_ok,
             "pro_modular_reason": modular_reason,
@@ -2556,6 +2684,10 @@ def _build_api_modular_v2_state(*, include_legacy_controls: bool = True) -> dict
             "pro_analytics_enabled": analytics_ok,
             "pro_analytics_reason": analytics_reason,
         }
+        if include_catalog:
+            state["endpoint_catalog"] = route_catalog
+            state["endpoint_catalog_source"] = catalog_source
+            state["endpoint_catalog_error"] = catalog_error
         if include_legacy_controls:
             state["legacy_controls"] = {
                 "mode": "diagnostic_only",
@@ -2564,6 +2696,16 @@ def _build_api_modular_v2_state(*, include_legacy_controls: bool = True) -> dict
             }
         return state
     finally:
+        perf["db_query_count"] = query_count
+        perf["db_load_ms"] = round(
+            float(perf.get("config_load_ms") or 0.0)
+            + float(perf.get("migration_report_ms") or 0.0),
+            2,
+        )
+        try:
+            conn.set_trace_callback(None)
+        except Exception:
+            pass
         conn.close()
 
 
@@ -2722,9 +2864,42 @@ def dashboard_api_modular_state():
     }
 
 
-@app.get("/dashboard/api-modular/state-v2", response_class=JSONResponse)
-def dashboard_api_modular_state_v2():
-    return _build_api_modular_v2_state()
+@app.get("/dashboard/api-modular/state-v2", response_class=Response)
+def dashboard_api_modular_state_v2(
+    include_catalog: bool = False,
+    include_legacy_controls: bool = False,
+):
+    total_started = time.perf_counter()
+    perf: dict[str, object] = {}
+    state = _build_api_modular_v2_state(
+        include_catalog=include_catalog,
+        include_legacy_controls=include_legacy_controls,
+        perf=perf,
+    )
+    return _json_response_with_perf(
+        state,
+        endpoint_name="api_modular_state_v2",
+        perf=perf,
+        total_started=total_started,
+    )
+
+
+@app.get("/dashboard/api-modular/catalog", response_class=Response)
+def dashboard_api_modular_catalog():
+    total_started = time.perf_counter()
+    perf: dict[str, object] = {}
+    catalog, source, error = _timed_call(perf, "catalog_ms", _honeypot_public_endpoint_catalog)
+    payload = {
+        "endpoint_catalog": catalog,
+        "endpoint_catalog_source": source,
+        "endpoint_catalog_error": error,
+    }
+    return _json_response_with_perf(
+        payload,
+        endpoint_name="api_modular_catalog",
+        perf=perf,
+        total_started=total_started,
+    )
 
 
 @app.post("/dashboard/api-modular/instance-config/save", response_class=JSONResponse)
@@ -3191,7 +3366,8 @@ def dashboard_case_detail(case_id: int, request: Request):
         events = _case_events(cur, actor_ids, limit=400)
         endpoints_summary = _case_endpoints_summary(steps, events, top_k=12)
         stage_info = _case_stage_progression(steps)
-        techniques = _case_techniques(steps, events)
+        _ttp = _case_ttp(steps, events)
+        techniques = _ttp["techniques"]
         risk_score = _case_risk_score(stage_info.get("max_stage") or 0, techniques, len(endpoints_summary.get("top_paths") or []))
         timeline = _case_timeline(steps, events, limit=200)
         endpoints_set = set(endpoints_summary.get("top_paths") or [])
@@ -3275,6 +3451,7 @@ def dashboard_case_detail(case_id: int, request: Request):
             "case_endpoints": endpoints_summary.get("top_paths") or [],
             "case_stage": stage_info,
             "case_techniques": techniques,
+            "case_ttp_data": _ttp["display"],
             "case_risk_score": risk_score,
             "case_similarity": similarity,
         }
@@ -3589,7 +3766,8 @@ def _case_export_payload(cur: sqlite3.Cursor, case_id: int) -> dict:
     events = _case_events(cur, actor_ids, limit=500)
     endpoints_summary = _case_endpoints_summary(steps, events, top_k=20)
     stage_info = _case_stage_progression(steps)
-    techniques = _case_techniques(steps, events)
+    _ttp = _case_ttp(steps, events)
+    techniques = _ttp["techniques"]
     risk_score = _case_risk_score(stage_info.get("max_stage") or 0, techniques, len(endpoints_summary.get("top_paths") or []))
     timeline = _case_timeline(steps, events, limit=300)
     similarity = _case_similarity(cur, case_id, set(endpoints_summary.get("top_paths") or []), actor_ids, limit=5)
@@ -4867,11 +5045,22 @@ def _replay_kind_color(kind: str) -> str:
     return "neutral"
 
 
+def _ensure_replay_session_step_columns(conn: sqlite3.Connection) -> None:
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(session_steps)").fetchall()}
+    if "ip" not in cols:
+        conn.execute("ALTER TABLE session_steps ADD COLUMN ip TEXT")
+    if "ua" not in cols:
+        conn.execute("ALTER TABLE session_steps ADD COLUMN ua TEXT")
+    if "geo_json" not in cols:
+        conn.execute("ALTER TABLE session_steps ADD COLUMN geo_json TEXT")
+
+
 def _load_replay_data(conn: sqlite3.Connection, session_id: str) -> dict:
     """Load and enrich all replay data for a session. Returns a dict with
     keys: session, steps, actor_ip, actor_ua, actor_geo, actor_score,
     actor_err_total, total_points.  Raises HTTPException(404) if not found."""
     cur = conn.cursor()
+    _ensure_replay_session_step_columns(conn)
 
     row = cur.execute("SELECT * FROM sessions WHERE session_id=?", (session_id,)).fetchone()
     if not row:
@@ -4960,6 +5149,17 @@ def _load_replay_data(conn: sqlite3.Connection, session_id: str) -> dict:
         enriched["body"] = _safe_json_loads(step.get("body_json"), None)
         enriched["response_body"] = _safe_json_loads(step.get("response_json"), None)
 
+        try:
+            step_geo = json.loads(step.get("geo_json") or "{}")
+            if not isinstance(step_geo, dict):
+                step_geo = {}
+        except Exception:
+            step_geo = {}
+
+        enriched["ip"] = step.get("ip") or ""
+        enriched["ua"] = step.get("ua") or ""
+        enriched["geo"] = step_geo
+
         # Match to nearest event
         key = (step.get("method", ""), step.get("path", ""))
         candidates = events_by_key.get(key, [])
@@ -4980,8 +5180,10 @@ def _load_replay_data(conn: sqlite3.Connection, session_id: str) -> dict:
         if best_ev:
             enriched["kind"] = best_ev.get("kind") or "probe"
             enriched["token"] = best_ev.get("token") or ""
-            enriched["ip"] = best_ev.get("ip") or ""
-            enriched["ua"] = best_ev.get("ua") or ""
+            if not enriched["ip"]:
+                enriched["ip"] = best_ev.get("ip") or ""
+            if not enriched["ua"]:
+                enriched["ua"] = best_ev.get("ua") or ""
             enriched["latency_ms"] = best_ev.get("latency_ms")
             enriched["points_delta"] = int(best_ev.get("points_delta") or 0)
             enriched["trap_flags"] = _safe_json_loads(best_ev.get("trap_flags"), [])
@@ -4995,22 +5197,29 @@ def _load_replay_data(conn: sqlite3.Connection, session_id: str) -> dict:
                 geo = json.loads(best_ev.get("geo_json") or "{}")
             except Exception:
                 geo = {}
-            enriched["geo"] = geo
+            if not enriched["geo"] and geo:
+                enriched["geo"] = geo
             if not actor_geo and geo:
                 actor_geo = geo
             if not actor_ip:
-                actor_ip = best_ev.get("ip")
+                actor_ip = enriched.get("ip") or best_ev.get("ip")
             if not actor_ua:
-                actor_ua = best_ev.get("ua")
+                actor_ua = enriched.get("ua") or best_ev.get("ua")
             total_points += enriched["points_delta"]
         else:
             enriched.update({
-                "kind": "probe", "token": "", "ip": "", "ua": "",
+                "kind": "probe", "token": "",
                 "latency_ms": None, "points_delta": 0, "trap_flags": [],
                 "scanner": False, "recon": False, "token_valid": None,
                 "modular": {}, "replay_multiplier": 1.0, "err_consecutive": 0,
-                "geo": {},
             })
+
+        if not actor_geo and enriched.get("geo"):
+            actor_geo = enriched["geo"]
+        if not actor_ip and enriched.get("ip"):
+            actor_ip = enriched["ip"]
+        if not actor_ua and enriched.get("ua"):
+            actor_ua = enriched["ua"]
 
         enriched["kind_color"] = _replay_kind_color(enriched["kind"])
 
@@ -5054,6 +5263,16 @@ def _load_replay_data(conn: sqlite3.Connection, session_id: str) -> dict:
     ).fetchone()
     actor_score = actor_row["score"] if actor_row else 0
     actor_err_total = actor_row["err_total"] if actor_row else 0
+
+    _logger.debug(
+        "replay_payload session_id=%s actor_ip=%s actor_geo=%s steps=%d steps_with_ip=%d steps_with_geo=%d",
+        session_id,
+        actor_ip or "unknown",
+        (actor_geo.get("country_iso2") or "unknown") if isinstance(actor_geo, dict) else "unknown",
+        len(enriched_steps),
+        sum(1 for step in enriched_steps if step.get("ip")),
+        sum(1 for step in enriched_steps if step.get("geo")),
+    )
 
     return {
         "session": sess,
@@ -5110,6 +5329,7 @@ def replay_list(request: Request):
     conn = db()
     try:
         ensure_schema(conn)
+        _ensure_replay_session_step_columns(conn)
         cur = conn.cursor()
         total = cur.execute(f"SELECT COUNT(*) FROM sessions s {where}", params).fetchone()[0]
         cur.execute(
@@ -5118,13 +5338,30 @@ def replay_list(request: Request):
                    s.stage_max, s.summary, s.fingerprint,
                    (SELECT COUNT(*) FROM session_steps ss
                     WHERE ss.session_id = s.session_id) AS step_count,
-                   (SELECT e.ip FROM events e
-                    WHERE e.actor_id = s.actor_id AND e.ts >= s.started_at
-                    LIMIT 1) AS ip,
-                   (SELECT json_extract(e.extra_json, '$.geo')
-                    FROM events e
-                    WHERE e.actor_id = s.actor_id AND e.ts >= s.started_at
-                    LIMIT 1) AS geo_json,
+                   COALESCE(
+                     (SELECT NULLIF(TRIM(ss.ip), '')
+                      FROM session_steps ss
+                      WHERE ss.session_id = s.session_id
+                      ORDER BY ss.seq ASC LIMIT 1),
+                     (SELECT NULLIF(TRIM(e.ip), '')
+                      FROM events e
+                      WHERE e.actor_id = s.actor_id
+                        AND e.ts >= s.started_at
+                        AND (s.ended_at IS NULL OR e.ts <= s.ended_at)
+                      ORDER BY e.ts ASC LIMIT 1)
+                   ) AS ip,
+                   COALESCE(
+                     (SELECT NULLIF(TRIM(ss.geo_json), '')
+                      FROM session_steps ss
+                      WHERE ss.session_id = s.session_id
+                      ORDER BY ss.seq ASC LIMIT 1),
+                     (SELECT json_extract(e.extra_json, '$.geo')
+                      FROM events e
+                      WHERE e.actor_id = s.actor_id
+                        AND e.ts >= s.started_at
+                        AND (s.ended_at IS NULL OR e.ts <= s.ended_at)
+                      ORDER BY e.ts ASC LIMIT 1)
+                   ) AS geo_json,
                    (SELECT e.kind FROM events e
                     WHERE e.actor_id = s.actor_id
                       AND e.ts >= s.started_at
@@ -5166,6 +5403,7 @@ def replay_list(request: Request):
                 s["geo_flag"] = ""
                 s["geo_country"] = ""
                 s["geo_name"] = ""
+            s["ip"] = (s.get("ip") or "").strip()
             s["top_kind_color"] = _replay_kind_color(s.get("top_kind") or "probe")
             sessions.append(s)
 
@@ -5225,6 +5463,9 @@ def replay_detail(session_id: str, request: Request):
                 "response_body": st.get("response_body"),
                 "stage_before": st.get("stage_before", 0),
                 "stage_after": st.get("stage_after", 0),
+                "ip": st.get("ip", ""),
+                "ua": st.get("ua", ""),
+                "geo": st.get("geo") or {},
                 "kind": st.get("kind", "probe"),
                 "kind_color": st.get("kind_color", "neutral"),
                 "points_delta": st.get("points_delta", 0),
@@ -5285,6 +5526,9 @@ def api_replay_session(session_id: str):
                 "ts_offset_ms": st.get("ts_offset_ms", 0),
                 "method": st.get("method"),
                 "path": st.get("path"),
+                "ip": st.get("ip", ""),
+                "ua": st.get("ua", ""),
+                "geo": st.get("geo") or {},
                 "query": st.get("query"),
                 "headers": st.get("headers"),
                 "body": st.get("body"),

@@ -236,7 +236,11 @@
 
       <div class="ig-key">Techniques</div>
       <div class="ig-val">
-        {% if case_techniques %}
+        {% if case_ttp_data %}
+          {% for t in case_ttp_data %}
+            <span class="tag" title="{{ t.tid }} · {{ t.tactic }}">{{ t.label }}</span>
+          {% endfor %}
+        {% elif case_techniques %}
           {% for t in case_techniques %}<span class="tag">{{ t }}</span>{% endfor %}
         {% else %}—{% endif %}
       </div>
@@ -289,7 +293,7 @@
 <div class="card">
   <div class="card-head">
     <div class="card-title">Timeline</div>
-    <div class="card-sub">latest {{ case_timeline|length }} events</div>
+    <div class="card-sub">latest {{ case_timeline|length }} timeline entries</div>
   </div>
   {% if case_timeline %}
   <!-- Filter bar row 1 -->
@@ -379,11 +383,11 @@
 </div>
 
 <!-- MITRE ATT&CK TTP Map -->
-{% if case_techniques %}
+{% if case_ttp_data %}
 <div class="card" id="mitreCard">
   <div class="card-head">
     <div class="card-title">MITRE ATT&amp;CK — TTP Map</div>
-    <div class="card-sub">{{ case_techniques|length }} technique{{ 's' if case_techniques|length != 1 else '' }}</div>
+    <div class="card-sub">{{ case_ttp_data|length }} technique{{ 's' if case_ttp_data|length != 1 else '' }}</div>
   </div>
   <div id="mitreChart" style="padding:16px 20px 8px;"></div>
   <div id="mitreTechList"></div>
@@ -642,84 +646,34 @@
   })();
 
   /* ── MITRE ATT&CK TTP rendering ── */
+  /* Data is pre-computed by the backend (app/stage/ttp.py).           */
+  /* No detection logic lives here — this block only handles rendering. */
   (function(){
-    const MITRE = {
-      enumeration:          { tactic:'Discovery',            tid:'T1046', label:'Network Service Discovery' },
-      brute_force:          { tactic:'Credential Access',    tid:'T1110', label:'Brute Force' },
-      token_abuse:          { tactic:'Credential Access',    tid:'T1528', label:'Steal Application Access Token' },
-      privilege_escalation: { tactic:'Privilege Escalation', tid:'T1078', label:'Valid Accounts' },
-      privileged_access:    { tactic:'Privilege Escalation', tid:'T1078', label:'Valid Accounts (privileged)' },
-      data_exfiltration:    { tactic:'Exfiltration',         tid:'T1041', label:'Exfiltration Over C2 Channel' },
-      malware_upload:       { tactic:'Execution',            tid:'T1190', label:'Exploit Public-Facing Application' },
-      token_probe:          { tactic:'Credential Access',    tid:'T1528', label:'Steal Application Access Token (probe)' },
-    };
-    // rgba colors: [fg, bg, border-bottom]
-    const COLORS = {
-      'Discovery':            ['rgba(122,184,245,1)',  'rgba(122,184,245,.07)', 'rgba(122,184,245,.3)'],
-      'Credential Access':    ['rgba(242,166,166,1)',  'rgba(242,166,166,.07)', 'rgba(242,166,166,.3)'],
-      'Privilege Escalation': ['rgba(255,201,64,1)',   'rgba(255,201,64,.07)',  'rgba(255,201,64,.3)' ],
-      'Exfiltration':         ['rgba(240,176,106,1)',  'rgba(240,176,106,.07)', 'rgba(240,176,106,.3)'],
-      'Execution':            ['rgba(184,169,255,1)',  'rgba(184,169,255,.07)', 'rgba(184,169,255,.3)'],
-      'Unknown':              ['rgba(136,136,136,1)',  'rgba(136,136,136,.07)', 'rgba(136,136,136,.3)'],
-    };
-    // Mirror Python _case_techniques() detection logic
-    const MATCHERS = {
-      enumeration:          r => ['/docs','/openapi.json','/swagger','/redoc','/.env','/config.json','/.well-known/security.txt'].includes(r.path),
-      brute_force:          r => (r.path.includes('auth/login') || r.path.endsWith('/v1/auth/token')) && parseInt(r.status||0) >= 401,
-      token_abuse:          r => r.path.startsWith('/apikeys') || r.path.startsWith('/v1/keys') || r.path.startsWith('/internal/config'),
-      privilege_escalation: r => r.path.startsWith('/admin') || r.path.startsWith('/internal'),
-      privileged_access:    r => r.path.startsWith('/root') || r.path.startsWith('/console/exec'),
-      data_exfiltration:    r => r.path.startsWith('/backup') || r.path.startsWith('/api/v1/reports') || r.path.startsWith('/api/v1/transactions'),
-      malware_upload:       r => r.path.startsWith('/files') || ['/import','/plugins/install','/themes/upload'].includes(r.path),
-      token_probe:          r => r.kind.includes('token_used') || r.kind.includes('unknown_token'),
-    };
-    // Human-readable detection basis (shown when no timeline matches found)
-    const HINTS = {
-      enumeration:          'Recon paths accessed: /docs, /.env, /openapi.json, /swagger, /redoc, /config.json, /.well-known/security.txt',
-      brute_force:          '≥3 requests to /auth/login or /v1/auth/token with HTTP 401 responses — credential stuffing or password spray',
-      token_abuse:          'Paths targeted: /apikeys/*, /v1/keys/*, /internal/config/* — API key enumeration or theft attempt',
-      privilege_escalation: 'Admin/internal paths accessed: /admin/*, /internal/* — lateral movement or privilege abuse',
-      privileged_access:    'Root/exec paths accessed: /root/*, /console/exec — direct shell or root access attempt',
-      data_exfiltration:    'Bulk export paths accessed: /backup/*, /api/v1/reports/*, /api/v1/transactions/* — data staging or theft',
-      malware_upload:       'Upload/install paths accessed: /files/*, /import, /plugins/install, /themes/upload — remote code or backdoor upload',
-      token_probe:          'Events with kind=token_used or kind=unknown_token detected — token replay or probe with invalid credentials',
-    };
-
-    const techniques = {{ case_techniques | tojson }};
+    const ttpData = {{ case_ttp_data | tojson }};
     const chartEl = document.getElementById('mitreChart');
     const listEl  = document.getElementById('mitreTechList');
-    if (!chartEl || !techniques.length) return;
+    if (!chartEl || !ttpData.length) return;
 
-    // ── Collect matching timeline rows per technique (max 6 each) ──
-    const related = {};
-    document.querySelectorAll('#timelineTable tbody tr').forEach(tr => {
-      const r = {
-        path:   tr.dataset.path   || '',
-        method: tr.dataset.method || '',
-        status: tr.dataset.status || '',
-        ip:     tr.dataset.ip     || '',
-        ts:     tr.dataset.ts     || '',
-        kind:   tr.dataset.kind   || '',
-      };
-      techniques.forEach(t => {
-        const fn = MATCHERS[t];
-        if (!fn) return;
-        try { if (!fn(r)) return; } catch(_){ return; }
-        if (!related[t]) related[t] = [];
-        if (related[t].length < 6) related[t].push(r);
-      });
-    });
+    const COLORS = {
+      'Reconnaissance':      ['rgba(122,184,245,1)',  'rgba(122,184,245,.07)', 'rgba(122,184,245,.3)'],
+      'Credential Access':   ['rgba(242,166,166,1)',  'rgba(242,166,166,.07)', 'rgba(242,166,166,.3)'],
+      'Initial Access':      ['rgba(160,220,160,1)',  'rgba(160,220,160,.07)', 'rgba(160,220,160,.3)'],
+      'Privilege Escalation':['rgba(255,201,64,1)',   'rgba(255,201,64,.07)',  'rgba(255,201,64,.3)' ],
+      'Collection':          ['rgba(148,196,242,1)',  'rgba(148,196,242,.07)', 'rgba(148,196,242,.3)'],
+      'Exfiltration':        ['rgba(240,176,106,1)',  'rgba(240,176,106,.07)', 'rgba(240,176,106,.3)'],
+      'Impact':              ['rgba(242,100,100,1)',  'rgba(242,100,100,.07)', 'rgba(242,100,100,.3)'],
+      'Unknown':             ['rgba(136,136,136,1)',  'rgba(136,136,136,.07)', 'rgba(136,136,136,.3)'],
+    };
 
-    // ── Group techniques by tactic ──
+    // ── Group by tactic for bar chart ──
     const byTactic = new Map();
-    techniques.forEach(t => {
-      const tactic = MITRE[t]?.tactic || 'Unknown';
-      if (!byTactic.has(tactic)) byTactic.set(tactic, []);
-      byTactic.get(tactic).push(t);
+    ttpData.forEach(t => {
+      if (!byTactic.has(t.tactic)) byTactic.set(t.tactic, []);
+      byTactic.get(t.tactic).push(t);
     });
 
-    // ── Bar chart — CSS grid guarantees equal-width columns ──
-    const BAR_MAX = 68;
+    // ── Bar chart ──
+    const BAR_MAX  = 68;
     const maxCount = Math.max(...Array.from(byTactic.values()).map(v => v.length), 1);
     const nTactics = byTactic.size;
     let chartHtml = `<div style="display:grid;grid-template-columns:repeat(${nTactics},1fr);gap:10px;padding:4px 4px 0;">`;
@@ -748,28 +702,37 @@
     const stColor = s => { const n=parseInt(s||0); return n>=500?'#f2a6a6':n>=400?'#ffc940':n>=200?'#7ee2b8':'var(--muted)'; };
 
     let listHtml = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:12px;padding:14px 20px 20px;">`;
-    techniques.forEach(t => {
-      const info   = MITRE[t];
-      const tactic = info?.tactic || 'Unknown';
+    ttpData.forEach(t => {
+      const tactic = t.tactic || 'Unknown';
       const [fg, bg, bdr] = COLORS[tactic] || COLORS.Unknown;
-      const tid    = info?.tid || '—';
-      const lbl    = info?.label || t;
-      const evts   = related[t] || [];
+      const evts = t.evidence || [];
 
       // ── Header ──
+      const primaryBadge = t.primary
+        ? `<span style="font-size:0.55rem;font-weight:700;color:${fg};background:${fg.replace('1)','0.12)')};
+                        border:1px solid ${bdr};border-radius:4px;padding:1px 5px;margin-left:5px;
+                        text-transform:uppercase;letter-spacing:0.06em;">Primary</span>`
+        : '';
       let cardHtml = `
         <div style="border:1px solid ${bdr};border-radius:10px;background:${bg};overflow:hidden;">
           <div style="padding:11px 14px 9px;border-bottom:1px solid ${bdr};">
             <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;">
               <div>
-                <div style="font-size:0.6rem;font-weight:700;color:${fg};text-transform:uppercase;letter-spacing:0.07em;margin-bottom:3px;">${tactic}</div>
-                <div style="font-size:0.87rem;font-weight:600;color:var(--text);line-height:1.3;">${lbl}</div>
+                <div style="font-size:0.6rem;font-weight:700;color:${fg};text-transform:uppercase;
+                            letter-spacing:0.07em;margin-bottom:3px;">${tactic}${primaryBadge}</div>
+                <div style="font-size:0.87rem;font-weight:600;color:var(--text);line-height:1.3;">${t.label}</div>
               </div>
               <span style="font-size:0.68rem;font-family:monospace;font-weight:700;color:${fg};
                            background:${fg.replace('1)','0.1)')};border:1px solid ${bdr};
-                           border-radius:5px;padding:2px 7px;white-space:nowrap;flex-shrink:0;">${tid}</span>
+                           border-radius:5px;padding:2px 7px;white-space:nowrap;flex-shrink:0;">${t.tid}</span>
             </div>
-            <div style="font-size:0.65rem;color:var(--muted);font-family:monospace;margin-top:4px;text-transform:uppercase;letter-spacing:0.03em;">${t.replace(/_/g,' ')}</div>
+            <div style="font-size:0.65rem;color:var(--muted);font-family:monospace;margin-top:4px;
+                        text-transform:uppercase;letter-spacing:0.03em;">${t.key.replace(/_/g,' ')}</div>
+          </div>
+          <div style="padding:8px 14px 10px;border-bottom:1px solid ${bdr};">
+            <div style="font-size:0.6rem;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;
+                        color:var(--muted);margin-bottom:4px;">Classification reason</div>
+            <div style="font-size:0.72rem;color:var(--text);line-height:1.5;">${t.reason}</div>
           </div>`;
 
       // ── Evidence section ──
@@ -781,28 +744,30 @@
           const st   = ev.status || '—';
           const tip  = ev.ip ? `${path}  ·  ${ev.ip}` : path;
           rows += `<tr style="border-bottom:1px solid rgba(255,255,255,.04);">
-            <td style="width:46px;padding:3px 5px 3px 0;font-weight:700;color:${fg};white-space:nowrap;overflow:hidden;">${meth}</td>
+            <td style="width:46px;padding:3px 5px 3px 0;font-weight:700;color:${fg};white-space:nowrap;">${meth}</td>
             <td style="padding:3px 5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text);" title="${tip}">${path}</td>
             <td style="width:38px;padding:3px 0 3px 5px;text-align:right;font-weight:600;color:${stColor(st)};white-space:nowrap;">${st}</td>
           </tr>`;
         });
         cardHtml += `
           <div style="padding:9px 14px 11px;">
-            <div style="font-size:0.6rem;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted);margin-bottom:6px;">
+            <div style="font-size:0.6rem;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;
+                        color:var(--muted);margin-bottom:6px;">
               Evidence — ${evts.length} matching request${evts.length>1?'s':''} <span style="font-weight:400;opacity:.6;">(hover path for IP)</span>
             </div>
             <table style="width:100%;table-layout:fixed;border-collapse:collapse;font-size:0.7rem;font-family:monospace;">${rows}</table>
           </div>`;
       } else {
-        // No timeline matches — show detection basis
         cardHtml += `
           <div style="padding:9px 14px 11px;">
             <div style="font-size:0.6rem;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;
-                        color:var(--muted);margin-bottom:5px;">Detection basis</div>
-            <div style="font-size:0.72rem;color:var(--muted);line-height:1.5;font-style:italic;">${HINTS[t] || 'Detected by backend heuristics.'}</div>
+                        color:var(--muted);margin-bottom:5px;">Evidence</div>
+            <div style="font-size:0.72rem;color:var(--muted);line-height:1.5;font-style:italic;">
+              No matching requests in the current timeline window.
+            </div>
             <div style="margin-top:6px;font-size:0.66rem;color:${fg.replace('1)','0.6)')};display:flex;align-items:center;gap:4px;">
               <span style="font-size:0.7rem;">&#9432;</span>
-              Qualifying events may be outside the displayed timeline window (latest 200 entries).
+              Classification is based on session-wide behavioral signals, not individual paths.
             </div>
           </div>`;
       }
