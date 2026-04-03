@@ -459,7 +459,7 @@
             <a class="link mono" href="/actor/{{ l.actor_id }}">{{ l.actor_id[:8] }}</a>
           </td>
           <td class="mono ip-cell" style="font-size:0.82rem;">
-            {% if l.geo_flag %}<span style="margin-right:4px;">{{ l.geo_flag }}</span>{% endif %}
+            {% if l.last_ip %}<span class="flag" title="{{ l.geo_title }}">{{ l.geo_flag_display }}</span>{% endif %}
             {{ l.last_ip or '—' }}
           </td>
           <td class="mono clip" style="font-size:0.75rem;max-width:180px;" title="{{ l.last_ua or '' }}">{{ l.last_ua or '—' }}</td>

@@ -11,10 +11,12 @@ import tempfile
 import sqlite3
 import urllib.request
 from app.tls_config import get_ssl_context
+from app.geoip import close_reader as _close_geoip_reader
 from app.geoip import flag_emoji_from_iso2 as _shared_flag_emoji_from_iso2
 from app.geoip import lookup_country as _lookup_geoip_country
 from app.geoip import normalize_geo_dict as _normalize_geo_dict
 from app.geoip import parse_geo_from_extra_json as _shared_parse_geo_from_extra_json
+from app.geoip import warmup_reader as _warmup_geoip_reader
 from app.stage.threat_level import stage_from_score  # canonical — do not redefine
 from collections import Counter, defaultdict, deque
 from statistics import median
@@ -58,7 +60,6 @@ from app.server_config import RequestTimeoutMiddleware, get_request_timeout
 
 APP_NAME = "noctisapi-panel"
 DB_PATH = os.getenv("HP_DB_PATH", "/data/honeypot.db")
-HP_GEOIP_DB = os.getenv("HP_GEOIP_DB", "/data/GeoLite2-Country.mmdb")
 _hp_host = os.getenv("HP_PUBLIC_HOST", "").strip().rstrip("/")
 HP_PUBLIC_BASE_URL = (
     os.getenv("HP_PUBLIC_BASE_URL") or ("https://" + _hp_host if _hp_host else "")
@@ -451,6 +452,7 @@ def _start_background_tasks():
             _logger.info("startup: applied %d config overrides from DB", len(_overrides))
     finally:
         _conn.close()
+    _warmup_geoip_reader(logger=_logger)
     from app.egress import check_egress_hosts
     check_egress_hosts()
     from app.diagnostics import run_diagnostics
@@ -479,6 +481,7 @@ def _start_background_tasks():
 @app.on_event("shutdown")
 def _stop_background_tasks():
     honeypot_monitor.stop()
+    _close_geoip_reader()
     licensing.set_pro_enabled_provider(None)
     pro_license.set_online_gate(None)
     pro_license.clear_cache()
@@ -833,16 +836,33 @@ def parse_geo_from_extra(extra_json: str):
     return _shared_parse_geo_from_extra_json(extra_json)
 
 
-def _lookup_geo_ui_for_ip(ip: str) -> dict[str, str]:
-    geo = _lookup_geoip_country(ip, mmdb_path=HP_GEOIP_DB, logger=_logger)
-    if not geo:
-        return {"geo_flag": "", "geo_iso2": "", "geo_name": ""}
-    iso = str(geo.get("country_iso2") or "").strip().upper()
+def _decorate_geo_ui(geo: dict[str, str], *, ip: str = "") -> dict[str, str]:
+    flag = str(geo.get("geo_flag") or "").strip()
+    iso = str(geo.get("geo_iso2") or geo.get("geo_country_code") or "").strip().upper()
+    name = str(geo.get("geo_name") or "").strip()
     return {
-        "geo_flag": str(geo.get("flag") or _flag_emoji_from_iso2(iso)),
+        "geo_flag": flag,
+        "geo_flag_display": flag or ("🌐" if ip else ""),
         "geo_iso2": iso,
-        "geo_name": str(geo.get("country_name") or "").strip(),
+        "geo_country_code": iso,
+        "geo_name": name,
+        "geo_title": name or (iso if iso else "Unknown country"),
     }
+
+
+def _lookup_geo_ui_for_ip(ip: str) -> dict[str, str]:
+    geo = _lookup_geoip_country(ip, logger=_logger)
+    if not geo:
+        return _decorate_geo_ui({}, ip=ip)
+    iso = str(geo.get("country_iso2") or "").strip().upper()
+    return _decorate_geo_ui(
+        {
+            "geo_flag": str(geo.get("flag") or _flag_emoji_from_iso2(iso)),
+            "geo_iso2": iso,
+            "geo_name": str(geo.get("country_name") or "").strip(),
+        },
+        ip=ip,
+    )
 
 
 def _resolve_geo_ui(extra_json: str = "", *, ip: str = "", fallback_extra_json: str = "") -> dict[str, str]:
@@ -850,8 +870,8 @@ def _resolve_geo_ui(extra_json: str = "", *, ip: str = "", fallback_extra_json: 
     if not geo.get("geo_iso2") and fallback_extra_json:
         geo = parse_geo_from_extra(fallback_extra_json)
     if not geo.get("geo_iso2") and ip:
-        geo = _lookup_geo_ui_for_ip(ip)
-    return geo
+        return _lookup_geo_ui_for_ip(ip)
+    return _decorate_geo_ui(geo, ip=ip)
 
 
 def _path_ngrams(paths):
@@ -4443,20 +4463,6 @@ def dashboard_alerts(request: Request, limit: int = 200):
 
             # Geo flag from extra_json, fallback to GeoIP
             geo = _resolve_geo_ui(r.get("extra_json") or "", ip=r.get("ip") or "")
-            if not geo.get("geo_iso2") and r.get("ip"):
-                try:
-                    import geoip2.database
-                    if os.path.exists(HP_GEOIP_DB):
-                        reader = geoip2.database.Reader(HP_GEOIP_DB)
-                        try:
-                            resp = reader.country(r["ip"])
-                            iso = (resp.country.iso_code or "").strip().upper()
-                            if iso:
-                                geo = {"geo_iso2": iso, "geo_name": resp.country.name or "", "geo_flag": _flag_emoji_from_iso2(iso)}
-                        finally:
-                            reader.close()
-                except Exception:
-                    pass
             r.update(geo)
 
         # Summary stats (24h window regardless of tier)
@@ -4587,14 +4593,6 @@ def campaign_detail(campaign_id: str, request: Request):
             for row in cur.fetchall():
                 actor_meta[row["actor_id"]] = dict(row)
 
-        geo_reader = None
-        try:
-            import geoip2.database
-            if os.path.exists(HP_GEOIP_DB):
-                geo_reader = geoip2.database.Reader(HP_GEOIP_DB)
-        except Exception:
-            geo_reader = None
-
         for link in links:
             try:
                 link["reasons"] = json.loads(link.get("reasons_json") or "{}")
@@ -4608,27 +4606,10 @@ def campaign_detail(campaign_id: str, request: Request):
                 ip=link.get("last_ip") or "",
                 fallback_extra_json=meta.get("last_geo_extra_json") or "",
             )
-            if not geo.get("geo_iso2") and link.get("last_ip") and geo_reader:
-                try:
-                    resp = geo_reader.country(link["last_ip"])
-                    iso = (resp.country.iso_code or "").strip().upper()
-                    name = (resp.country.name or "").strip()
-                    if iso:
-                        geo["geo_iso2"] = iso
-                        geo["geo_name"] = name
-                        geo["geo_flag"] = _flag_emoji_from_iso2(iso)
-                except Exception:
-                    pass
             link.update(geo)
             shared_stage = link["reasons"].get("shared_stage_flow") or ""
             link["reasons"]["shared_stage_flow"] = _sanitize_stage_flow(shared_stage)
             link["signal_scores"] = _safe_json_loads(link.get("signal_scores_json"), {})
-
-        if geo_reader:
-            try:
-                geo_reader.close()
-            except Exception:
-                pass
         cur.execute(
             "SELECT id, title, status, severity, updated_at FROM cases WHERE campaign_id=? ORDER BY updated_at DESC",
             (campaign_id,),
@@ -4840,14 +4821,6 @@ def actor(actor_id: str, request: Request):
         )
         events = [dict(r) for r in cur.fetchall()]
 
-        geo_reader = None
-        try:
-            import geoip2.database
-            if os.path.exists(HP_GEOIP_DB):
-                geo_reader = geoip2.database.Reader(HP_GEOIP_DB)
-        except Exception:
-            geo_reader = None
-
         icons = {
             "probe": "\N{RIGHT-POINTING MAGNIFYING GLASS}",
             "health": "\N{GREEN HEART}",
@@ -4872,24 +4845,7 @@ def actor(actor_id: str, request: Request):
             else:
                 e["icon"] = icons.get(kind, "\N{BULLET}")
             geo = _resolve_geo_ui(e.get("extra_json") or "", ip=e.get("ip") or "")
-            if not geo.get("geo_iso2") and e.get("ip") and geo_reader:
-                try:
-                    resp = geo_reader.country(e["ip"])
-                    iso = (resp.country.iso_code or "").strip().upper()
-                    name = (resp.country.name or "").strip()
-                    if iso:
-                        geo["geo_iso2"] = iso
-                        geo["geo_name"] = name
-                        geo["geo_flag"] = _flag_emoji_from_iso2(iso)
-                except Exception:
-                    pass
             e.update(geo)
-
-        if geo_reader:
-            try:
-                geo_reader.close()
-            except Exception:
-                pass
 
         cur.execute(
             "SELECT session_id, started_at, stage_max FROM sessions WHERE actor_id=? ORDER BY started_at DESC LIMIT 1",
@@ -5286,7 +5242,7 @@ def _load_replay_data(conn: sqlite3.Connection, session_id: str) -> dict:
     actor_score = actor_row["score"] if actor_row else 0
     actor_err_total = actor_row["err_total"] if actor_row else 0
     if not actor_geo and actor_ip:
-        actor_geo = _lookup_geoip_country(actor_ip, mmdb_path=HP_GEOIP_DB, logger=_logger)
+        actor_geo = _lookup_geoip_country(actor_ip, logger=_logger)
 
     _logger.debug(
         "replay_payload session_id=%s actor_ip=%s actor_geo=%s steps=%d steps_with_ip=%d steps_with_geo=%d",

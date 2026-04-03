@@ -153,7 +153,7 @@
             {% endif %}
           </td>
           <td class="mono ip-cell" style="font-size:0.82rem;">
-            {% if a.geo_flag %}<span class="flag" title="{{ a.geo_name }} ({{ a.geo_iso2 }})">{{ a.geo_flag }}</span> {% endif %}{{ a.last_ip }}
+            {% if a.last_ip %}<span class="flag" title="{{ a.geo_title }}">{{ a.geo_flag_display }}</span> {% endif %}{{ a.last_ip }}
           </td>
           <td class="mono clip" style="font-size:0.78rem;color:var(--muted);">{{ a.last_ua }}</td>
           <td class="mono actors-last-seen" style="font-size:0.8rem;color:var(--muted);" title="{{ a.last_seen_fmt }}">{{ a.last_seen_compact }}</td>

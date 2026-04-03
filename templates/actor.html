@@ -201,7 +201,7 @@
             <td class="mono">{{ e.method }}</td>
             <td class="mono" title="{{ e.path }}">{{ e.path }}</td>
             <td class="mono ip-cell">
-              {% if e.geo_flag %}{{ e.geo_flag }} {% endif %}{{ e.ip or '-' }}
+              {% if e.ip %}<span class="flag" title="{{ e.geo_title }}">{{ e.geo_flag_display }}</span> {% endif %}{{ e.ip or '-' }}
             </td>
             <td class="mono clip" title="{{ e.ua or '' }}">{{ e.ua or '-' }}</td>
             <td class="mono" style="{% if e.status and e.status < 400 %}color:#7ee2b8{% elif e.status and e.status < 500 %}color:#ffc940{% elif e.status %}color:#f2a6a6{% endif %}">{{ e.status or '-' }}</td>

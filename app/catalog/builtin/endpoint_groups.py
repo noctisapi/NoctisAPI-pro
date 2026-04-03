@@ -267,6 +267,7 @@ RECON_OPENAPI = EndpointDefinition(
     sensitivity_level=SensitivityLevel.LOW,
     default_response_profile_id="standard_basic",
     supported_flaw_profile_ids=(),
+    include_in_schema=False,
     tags=("recon",),
     description="OpenAPI spec exposure.",
 )

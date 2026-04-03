@@ -114,6 +114,7 @@ MaxMind GeoLite2 is not included. Download it free from [maxmind.com](https://ww
 ```bash
 mkdir -p /opt/hp-app/data
 # Place GeoLite2-Country.mmdb at: /opt/hp-app/data/GeoLite2-Country.mmdb
+export GEOIP_DB_PATH=/opt/hp-app/data/GeoLite2-Country.mmdb
 ```
 
 Or use the update script:

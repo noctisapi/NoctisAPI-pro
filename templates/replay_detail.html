@@ -256,8 +256,8 @@
       Actor
       <a class="link mono" href="/actor/{{ session.actor_id }}">{{ session.actor_id[:16] }}…</a>
       &middot;
-      {% if actor_geo.flag %}{{ actor_geo.flag }}{% endif %}
-      {{ actor_geo.country_name or actor_geo.country_iso2 or '' }}
+      {% if actor_ip %}<span class="flag">{{ actor_geo.flag or '🌐' }}</span>{% endif %}
+      {{ actor_geo.country_name or actor_geo.country_iso2 or 'Unknown country' }}
       {% if actor_ip %}&middot; <span class="mono">{{ actor_ip }}</span>{% endif %}
     </div>
   </div>
@@ -347,9 +347,9 @@
         <div class="score-gauge">
           <div class="score-gauge-fill" style="width:{{ [actor_score, 200]|min / 200 * 100 }}%;"></div>
         </div>
-        {% if actor_geo.flag or actor_geo.country_name %}
+        {% if actor_ip or actor_geo.flag or actor_geo.country_name %}
         <div class="sb-row"><span class="sb-label">Country</span>
-          <span class="sb-val">{{ actor_geo.flag or '' }} {{ actor_geo.country_name or actor_geo.country_iso2 or '' }}</span></div>
+          <span class="sb-val">{{ actor_geo.flag or '🌐' }} {{ actor_geo.country_name or actor_geo.country_iso2 or 'Unknown country' }}</span></div>
         {% endif %}
         {% if actor_ua %}
         <div class="sb-row" style="flex-direction:column;align-items:flex-start;">

@@ -49,8 +49,10 @@ from app.server_config import RequestTimeoutMiddleware, get_request_timeout
 from app.structured_logging import get_request_id, set_request_id
 from app import siem_logger
 from app import alert_dispatcher
-from app.geoip import flag_emoji_from_iso2 as _shared_flag_emoji_from_iso2
+from app.geoip import close_reader as _close_geoip_reader
 from app.geoip import lookup_country as _lookup_geoip_country
+from app.geoip import normalize_geo_dict as _normalize_geo_dict
+from app.geoip import warmup_reader as _warmup_geoip_reader
 from app.no_cache import NoCacheMiddleware
 
 APP_TITLE = os.getenv("HP_API_TITLE", "Account Service API")
@@ -74,9 +76,6 @@ SAMPLE_FILE_NAME = "sample.bin"
 SAMPLE_FILE_BYTES = b"Sample payload\n"
 SAMPLE_FILE_SHA256 = hashlib.sha256(SAMPLE_FILE_BYTES).hexdigest()
 SAMPLE_JOB_ID = "sample"
-
-# GeoIP (optional). Provide a MaxMind GeoLite2 Country mmdb in this path.
-HP_GEOIP_DB = os.getenv("HP_GEOIP_DB", "/data/GeoLite2-Country.mmdb")
 
 SCANNER_UA_PATTERNS = (
     "sqlmap",
@@ -120,7 +119,6 @@ security = HTTPBearer(auto_error=False)
 
 tags_metadata = [
     {"name": "Health", "description": "Service health checks"},
-    {"name": "Recon", "description": "Reconnaissance and discovery"},
     {"name": "Auth", "description": "Authentication and token issuance"},
     {"name": "Internal", "description": "Internal or admin-only operations"},
     {"name": "DevOps", "description": "CI/CD and automation"},
@@ -240,16 +238,21 @@ def _openapi_operation_for_runtime_endpoint(
 
 
 def _catalog_openapi() -> dict:
-    """Generate OpenAPI schema from the active modular runtime surface."""
+    """Generate OpenAPI schema from the active modular runtime surface.
+
+    Source of truth is exclusively the modular runtime registry.  No legacy
+    tags, hardcoded routes, or fallback to the full FastAPI spec are allowed.
+    """
     from fastapi.openapi.utils import get_openapi
 
+    # Build base with NO tags — tags are derived from runtime groups below.
     base = get_openapi(
         title=app.title,
         version=app.version,
         openapi_version=app.openapi_version,
         description=app.description or "",
         routes=app.routes,
-        tags=app.openapi_tags,
+        tags=[],
         servers=app.servers,
     )
 
@@ -259,7 +262,12 @@ def _catalog_openapi() -> dict:
         registry = provider.registry
         runtime = get_runtime_config()
     except Exception:
-        return base  # fallback: show full schema
+        # Do NOT fall back to the full FastAPI spec: it contains all hardcoded
+        # routes with legacy tags (e.g. "Recon").  Return an empty-paths spec
+        # that is structurally valid but exposes nothing.
+        base["paths"] = {}
+        base.pop("tags", None)
+        return base
 
     base_paths = base.get("paths", {}) if isinstance(base.get("paths"), dict) else {}
     runtime_paths: dict[str, dict[str, Any]] = {}
@@ -277,7 +285,24 @@ def _catalog_openapi() -> dict:
             effective_endpoint=effective_endpoint,
         )
 
+    # Derive tags exclusively from runtime groups referenced by visible endpoints.
+    used_tag_names: set[str] = set()
+    for path_item in runtime_paths.values():
+        for operation in path_item.values():
+            if isinstance(operation, dict):
+                for tag in operation.get("tags", []):
+                    used_tag_names.add(tag)
+
+    runtime_tags: list[dict[str, str]] = []
+    for group in registry.list_groups():
+        if group.name in used_tag_names:
+            entry: dict[str, str] = {"name": group.name}
+            if group.description:
+                entry["description"] = group.description
+            runtime_tags.append(entry)
+
     base["paths"] = runtime_paths
+    base["tags"] = runtime_tags
     return base
 
 
@@ -360,6 +385,7 @@ async def _startup_checks() -> None:
             _logger.info("startup: applied %d config overrides from DB", len(_overrides))
     finally:
         _ss_conn.close()
+    _warmup_geoip_reader(logger=_logger)
     from app.egress import check_egress_hosts
     check_egress_hosts()
     from app.diagnostics import run_diagnostics
@@ -390,6 +416,7 @@ async def _startup_checks() -> None:
 
 @app.on_event("shutdown")
 async def _shutdown_tasks() -> None:
+    _close_geoip_reader()
     from app import license_online as _lo
     mgr = _lo.get_manager()
     if mgr is not None:
@@ -678,12 +705,8 @@ def _is_public_ip(ip_s: str) -> bool:
         return False
 
 
-def _flag_emoji_from_iso2(iso2: str) -> str:
-    return _shared_flag_emoji_from_iso2(iso2)
-
-
 def _geoip_country(ip_s: str) -> Dict[str, Any]:
-    return _lookup_geoip_country(ip_s, mmdb_path=HP_GEOIP_DB, logger=_logger)
+    return _lookup_geoip_country(ip_s, logger=_logger)
 
 
 def _ensure_session_step_metadata_columns(conn: sqlite3.Connection) -> None:
@@ -842,9 +865,10 @@ def _insert_event(
     if isinstance(extra, dict):
         extra_geo = extra.get("geo")
         if isinstance(extra_geo, dict):
-            geo = dict(extra_geo)
+            geo = _normalize_geo_dict(extra_geo)
     if not geo:
-        geo = _geoip_country(ip)
+        lookup_geo = _geoip_country(ip)
+        geo = _normalize_geo_dict(lookup_geo) if lookup_geo else {}
 
     cur = conn.cursor()
     try:
@@ -897,6 +921,11 @@ def _insert_event(
             cur.execute("UPDATE sessions SET stage_max=? WHERE session_id=?", (stage_after, session_id))
 
         extra_payload = dict(extra or {})
+        payload_geo = extra_payload.get("geo")
+        if isinstance(payload_geo, dict):
+            extra_payload["geo"] = _normalize_geo_dict(payload_geo)
+        elif geo:
+            extra_payload["geo"] = dict(geo)
         extra_payload.update(
             {
                 "points_delta": points_awarded,
