@@ -347,9 +347,13 @@
         <div class="score-gauge">
           <div class="score-gauge-fill" style="width:{{ [actor_score, 200]|min / 200 * 100 }}%;"></div>
         </div>
+        {% if actor_ip %}
+        <div class="sb-row"><span class="sb-label">Source IP</span>
+          <span class="sb-val mono" style="font-size:0.82rem;">{{ actor_ip }}</span></div>
+        {% endif %}
         {% if actor_ip or actor_geo.flag or actor_geo.country_name %}
         <div class="sb-row"><span class="sb-label">Country</span>
-          <span class="sb-val">{{ actor_geo.flag or '🌐' }} {{ actor_geo.country_name or actor_geo.country_iso2 or 'Unknown country' }}</span></div>
+          <span class="sb-val">{{ actor_geo.flag or '🌐' }} {{ actor_geo.country_name or actor_geo.country_iso2 or 'unknown country' }}</span></div>
         {% endif %}
         {% if actor_ua %}
         <div class="sb-row" style="flex-direction:column;align-items:flex-start;">

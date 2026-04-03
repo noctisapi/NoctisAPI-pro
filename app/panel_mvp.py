@@ -797,32 +797,6 @@ def fmt_ts_compact(iso: str) -> str:
         return iso
 
 
-def _flag_emoji_from_iso2(iso2: str) -> str:
-    """Convierte un cÃ³digo ISO2 de paÃ­s a emoji bandera"""
-    if not iso2 or len(iso2) != 2:
-        return ""
-    return "".join(chr(0x1F1E6 + ord(c) - ord("A")) for c in iso2.upper())
-
-
-def parse_geo_from_extra(extra_json: str):
-    """
-    Espera algo como:
-      {"geo":{"country_iso2":"US","country_name":"United States","flag":"ðŸ‡ºðŸ‡¸"}, ...}
-    """
-    try:
-        obj = json.loads(extra_json or "{}")
-        geo = obj.get("geo") or {}
-        iso2 = geo.get("country_iso2") or ""
-        flag = geo.get("flag") or _flag_emoji_from_iso2(iso2)
-        return {
-            "geo_flag": flag,
-            "geo_iso2": iso2,
-            "geo_name": (geo.get("country_name") or ""),
-        }
-    except Exception:
-        return {"geo_flag": "", "geo_iso2": "", "geo_name": ""}
-
-
 def _normalize_path(path: str) -> str:
     clean = (path or "/").split("?")[0].strip().lower()
     return clean or "/"
@@ -840,6 +814,8 @@ def _decorate_geo_ui(geo: dict[str, str], *, ip: str = "") -> dict[str, str]:
     flag = str(geo.get("geo_flag") or "").strip()
     iso = str(geo.get("geo_iso2") or geo.get("geo_country_code") or "").strip().upper()
     name = str(geo.get("geo_name") or "").strip()
+    if not flag and iso:
+        flag = _flag_emoji_from_iso2(iso)
     return {
         "geo_flag": flag,
         "geo_flag_display": flag or ("🌐" if ip else ""),
@@ -5377,8 +5353,11 @@ def replay_list(request: Request):
             s["ip"] = (s.get("ip") or "").strip()
             geo = _resolve_geo_ui(s.get("geo_json") or "", ip=s["ip"])
             s["geo_flag"] = geo.get("geo_flag", "")
-            s["geo_country"] = geo.get("geo_iso2", "")
+            s["geo_flag_display"] = geo.get("geo_flag_display", "")
+            s["geo_title"] = geo.get("geo_title", "")
+            s["geo_country"] = geo.get("geo_name", "")
             s["geo_name"] = geo.get("geo_name", "")
+            s["geo_iso2"] = geo.get("geo_iso2", "")
             s["top_kind_color"] = _replay_kind_color(s.get("top_kind") or "probe")
             sessions.append(s)
 

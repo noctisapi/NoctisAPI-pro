@@ -96,8 +96,8 @@
                href="/actor/{{ s.actor_id }}">{{ s.actor_id[:14] }}…</a>
           </td>
           <td class="mono ip-cell" style="font-size:0.9rem;">
-            {% if s.ip %}<span class="flag" title="{{ s.geo_title }}">{{ s.geo_flag_display }}</span>{% endif %}
-            <span class="muted" style="font-size:0.75rem;">{{ s.geo_country or "—" }}</span>
+            {% if s.ip %}<span class="flag" title="{{ s.geo_title }}">{{ s.geo_flag_display }}</span> {{ s.ip }}{% endif %}
+            <span class="muted" style="font-size:0.75rem; display:block;">{{ s.geo_country or "unknown" }}</span>
           </td>
           <td class="mono">{{ s.started_fmt }}</td>
           <td class="rp-dur">
