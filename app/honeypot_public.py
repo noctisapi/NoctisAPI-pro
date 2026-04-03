@@ -1,4 +1,5 @@
 # honeypot_public.py
+import copy
 import logging
 import os
 import sys
@@ -19,6 +20,7 @@ from typing import Optional, Dict, Any, Tuple, List
 _logger = logging.getLogger(__name__)
 
 from fastapi import FastAPI, Request, HTTPException, Depends, Security
+from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.responses import JSONResponse, PlainTextResponse, HTMLResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -47,6 +49,8 @@ from app.server_config import RequestTimeoutMiddleware, get_request_timeout
 from app.structured_logging import get_request_id, set_request_id
 from app import siem_logger
 from app import alert_dispatcher
+from app.geoip import flag_emoji_from_iso2 as _shared_flag_emoji_from_iso2
+from app.geoip import lookup_country as _lookup_geoip_country
 from app.no_cache import NoCacheMiddleware
 
 APP_TITLE = os.getenv("HP_API_TITLE", "Account Service API")
@@ -134,9 +138,9 @@ app = FastAPI(
     title=APP_TITLE,
     version=APP_VERSION,
     openapi_tags=tags_metadata,
-    docs_url="/docs",
-    redoc_url="/redoc",
-    openapi_url="/openapi.json",
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
     servers=[{"url": _static_public_url, "description": "Public API"}] if _static_public_url else None,
 )
 
@@ -171,8 +175,72 @@ app.add_middleware(RequestTimeoutMiddleware, timeout=get_request_timeout())
 # that are currently enabled in the modular runtime config and have
 # include_in_schema=True.  Not cached — runtime config has its own 60s TTL.
 
+def _openapi_tags_for_endpoint(registry, effective_endpoint) -> list[str]:
+    group_names: list[str] = []
+    for group_id in effective_endpoint.group_ids:
+        group = registry.get_group(group_id)
+        if group and group.name:
+            group_names.append(group.name)
+    if group_names:
+        return [group_names[0]]
+    return [effective_endpoint.surface_type.value.replace("_", " ").title()]
+
+
+def _openapi_operation_for_runtime_endpoint(
+    *,
+    base_paths: dict,
+    registry,
+    effective_endpoint,
+) -> dict:
+    method_key = effective_endpoint.method.value.lower()
+    path_item = base_paths.get(effective_endpoint.path_pattern, {})
+    existing_operation = path_item.get(method_key)
+    if isinstance(existing_operation, dict):
+        operation = copy.deepcopy(existing_operation)
+    else:
+        operation = {}
+
+    endpoint_def = registry.get_endpoint(effective_endpoint.endpoint_id)
+    operation.setdefault("operationId", effective_endpoint.endpoint_id)
+    operation.setdefault("summary", (endpoint_def.description if endpoint_def else "") or effective_endpoint.endpoint_id)
+    operation.setdefault("description", endpoint_def.description if endpoint_def else "")
+    operation["tags"] = _openapi_tags_for_endpoint(registry, effective_endpoint)
+
+    if "responses" not in operation or not isinstance(operation["responses"], dict) or not operation["responses"]:
+        status_code = str(effective_endpoint.response.fixed_status or 200)
+        operation["responses"] = {
+            status_code: {
+                "description": "Simulated response",
+                "content": {
+                    "application/json": {
+                        "schema": {"type": "object"}
+                    }
+                },
+            }
+        }
+
+    if "parameters" not in operation:
+        params: list[dict[str, Any]] = []
+        for segment in effective_endpoint.path_pattern.split("/"):
+            if segment.startswith("{") and segment.endswith("}"):
+                name = segment[1:-1].strip()
+                if name:
+                    params.append(
+                        {
+                            "name": name,
+                            "in": "path",
+                            "required": True,
+                            "schema": {"type": "string"},
+                        }
+                    )
+        if params:
+            operation["parameters"] = params
+
+    return operation
+
+
 def _catalog_openapi() -> dict:
-    """Generate OpenAPI schema filtered to the active catalog surface."""
+    """Generate OpenAPI schema from the active modular runtime surface."""
     from fastapi.openapi.utils import get_openapi
 
     base = get_openapi(
@@ -186,34 +254,70 @@ def _catalog_openapi() -> dict:
     )
 
     try:
-        from app.runtime_provider import get_runtime_config
+        from app.runtime_provider import get_provider, get_runtime_config
+        provider = get_provider()
+        registry = provider.registry
         runtime = get_runtime_config()
-        _HTTP_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"}
-        visible = {
-            (ep.method.upper(), ep.path_pattern)
-            for ep in runtime.endpoints.values()
-            if ep.enabled and ep.include_in_schema
-        }
     except Exception:
         return base  # fallback: show full schema
 
-    filtered: dict = {}
-    for path, path_item in base.get("paths", {}).items():
-        ops: dict = {}
-        for key, value in path_item.items():
-            if key.upper() in _HTTP_METHODS:
-                if (key.upper(), path) in visible:
-                    ops[key] = value
-            else:
-                ops[key] = value  # keep non-method keys (e.g. "parameters")
-        if any(k.upper() in _HTTP_METHODS for k in ops):
-            filtered[path] = ops
+    base_paths = base.get("paths", {}) if isinstance(base.get("paths"), dict) else {}
+    runtime_paths: dict[str, dict[str, Any]] = {}
+    for effective_endpoint in sorted(
+        runtime.endpoints.values(),
+        key=lambda item: (item.path_pattern, item.method.value, item.endpoint_id),
+    ):
+        if not effective_endpoint.enabled or not effective_endpoint.include_in_schema:
+            continue
+        path_item = runtime_paths.setdefault(effective_endpoint.path_pattern, {})
+        method_key = effective_endpoint.method.value.lower()
+        path_item[method_key] = _openapi_operation_for_runtime_endpoint(
+            base_paths=base_paths,
+            registry=registry,
+            effective_endpoint=effective_endpoint,
+        )
 
-    base["paths"] = filtered
+    base["paths"] = runtime_paths
     return base
 
 
 app.openapi = _catalog_openapi  # type: ignore[method-assign]
+
+
+@app.get("/openapi.json", include_in_schema=False)
+async def modular_openapi_json(request: Request) -> JSONResponse:
+    root_path = request.scope.get("root_path", "").rstrip("/")
+    if root_path:
+        server_urls = {
+            (server_data.get("url") or "")
+            for server_data in (app.servers or [])
+            if isinstance(server_data, dict)
+        }
+        if app.root_path_in_servers and root_path not in server_urls:
+            app.servers.insert(0, {"url": root_path})
+    return JSONResponse(app.openapi())
+
+
+@app.get("/docs", include_in_schema=False)
+async def modular_swagger_ui(request: Request) -> HTMLResponse:
+    root_path = request.scope.get("root_path", "").rstrip("/")
+    openapi_url = f"{root_path}/openapi.json"
+    return get_swagger_ui_html(
+        openapi_url=openapi_url,
+        title=f"{app.title} - Swagger UI",
+        init_oauth=app.swagger_ui_init_oauth,
+        swagger_ui_parameters=app.swagger_ui_parameters,
+    )
+
+
+@app.get("/redoc", include_in_schema=False)
+async def modular_redoc(request: Request) -> HTMLResponse:
+    root_path = request.scope.get("root_path", "").rstrip("/")
+    openapi_url = f"{root_path}/openapi.json"
+    return get_redoc_html(
+        openapi_url=openapi_url,
+        title=f"{app.title} - ReDoc",
+    )
 
 
 def _warn_if_default_seed() -> None:
@@ -575,41 +679,11 @@ def _is_public_ip(ip_s: str) -> bool:
 
 
 def _flag_emoji_from_iso2(iso2: str) -> str:
-    # ISO2 -> regional indicator symbols
-    iso2 = (iso2 or "").strip().upper()
-    if len(iso2) != 2 or not iso2.isalpha():
-        return ""
-    base = 0x1F1E6
-    return chr(base + (ord(iso2[0]) - ord("A"))) + chr(base + (ord(iso2[1]) - ord("A")))
+    return _shared_flag_emoji_from_iso2(iso2)
 
 
 def _geoip_country(ip_s: str) -> Dict[str, Any]:
-    # Optional, returns {} if no DB or no match
-    if not _is_public_ip(ip_s):
-        return {}
-    if not HP_GEOIP_DB or not os.path.exists(HP_GEOIP_DB):
-        return {}
-
-    try:
-        import geoip2.database  # type: ignore
-    except Exception:
-        return {}
-
-    try:
-        reader = geoip2.database.Reader(HP_GEOIP_DB)
-        try:
-            resp = reader.country(ip_s)
-            iso = (resp.country.iso_code or "").strip().upper()
-            name = (resp.country.name or "").strip()
-            return {
-                "country_iso2": iso,
-                "country_name": name,
-                "flag": _flag_emoji_from_iso2(iso),
-            }
-        finally:
-            reader.close()
-    except Exception:
-        return {}
+    return _lookup_geoip_country(ip_s, mmdb_path=HP_GEOIP_DB, logger=_logger)
 
 
 def _ensure_session_step_metadata_columns(conn: sqlite3.Connection) -> None:
@@ -1775,7 +1849,11 @@ async def log_all_requests(request: Request, call_next):
     exc = None
     skip_log = False
     is_monitor = _is_monitor(request)
-    skip_policy = request.url.path.startswith("/static/")
+    skip_policy = request.url.path.startswith("/static/") or request.url.path in {
+        "/openapi.json",
+        "/docs",
+        "/redoc",
+    }
     modular_policy: Dict[str, Any] = _default_modular_policy(source="ok", error="")
 
     if not skip_policy:

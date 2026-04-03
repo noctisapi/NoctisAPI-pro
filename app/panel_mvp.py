@@ -11,6 +11,10 @@ import tempfile
 import sqlite3
 import urllib.request
 from app.tls_config import get_ssl_context
+from app.geoip import flag_emoji_from_iso2 as _shared_flag_emoji_from_iso2
+from app.geoip import lookup_country as _lookup_geoip_country
+from app.geoip import normalize_geo_dict as _normalize_geo_dict
+from app.geoip import parse_geo_from_extra_json as _shared_parse_geo_from_extra_json
 from app.stage.threat_level import stage_from_score  # canonical — do not redefine
 from collections import Counter, defaultdict, deque
 from statistics import median
@@ -819,6 +823,35 @@ def parse_geo_from_extra(extra_json: str):
 def _normalize_path(path: str) -> str:
     clean = (path or "/").split("?")[0].strip().lower()
     return clean or "/"
+
+
+def _flag_emoji_from_iso2(iso2: str) -> str:
+    return _shared_flag_emoji_from_iso2(iso2)
+
+
+def parse_geo_from_extra(extra_json: str):
+    return _shared_parse_geo_from_extra_json(extra_json)
+
+
+def _lookup_geo_ui_for_ip(ip: str) -> dict[str, str]:
+    geo = _lookup_geoip_country(ip, mmdb_path=HP_GEOIP_DB, logger=_logger)
+    if not geo:
+        return {"geo_flag": "", "geo_iso2": "", "geo_name": ""}
+    iso = str(geo.get("country_iso2") or "").strip().upper()
+    return {
+        "geo_flag": str(geo.get("flag") or _flag_emoji_from_iso2(iso)),
+        "geo_iso2": iso,
+        "geo_name": str(geo.get("country_name") or "").strip(),
+    }
+
+
+def _resolve_geo_ui(extra_json: str = "", *, ip: str = "", fallback_extra_json: str = "") -> dict[str, str]:
+    geo = parse_geo_from_extra(extra_json or "")
+    if not geo.get("geo_iso2") and fallback_extra_json:
+        geo = parse_geo_from_extra(fallback_extra_json)
+    if not geo.get("geo_iso2") and ip:
+        geo = _lookup_geo_ui_for_ip(ip)
+    return geo
 
 
 def _path_ngrams(paths):
@@ -3170,30 +3203,15 @@ def dashboard(request: Request):
             a["last_seen_fmt"] = fmt_ts(a["last_seen"])
             a["last_seen_compact"] = fmt_ts_compact(a["last_seen"])
 
-            geo = parse_geo_from_extra(a.get("last_extra_json") or "")
-            if not geo.get("geo_iso2"):
-                geo = parse_geo_from_extra(a.get("last_geo_extra_json") or "")
-            a.update(geo)
+            a.update(
+                _resolve_geo_ui(
+                    a.get("last_extra_json") or "",
+                    ip=a.get("last_ip") or "",
+                    fallback_extra_json=a.get("last_geo_extra_json") or "",
+                )
+            )
 
             # Si no hay flag pero tenemos IP, intentar resolver la geolocalizaciÃ³n
-            if not a.get("geo_iso2") and a.get("last_ip"):
-                try:
-                    import geoip2.database
-                    if os.path.exists(HP_GEOIP_DB):
-                        reader = geoip2.database.Reader(HP_GEOIP_DB)
-                        try:
-                            resp = reader.country(a["last_ip"])
-                            iso = (resp.country.iso_code or "").strip().upper()
-                            name = (resp.country.name or "").strip()
-                            if iso:
-                                a["geo_iso2"] = iso
-                                a["geo_name"] = name
-                                a["geo_flag"] = _flag_emoji_from_iso2(iso)
-                        finally:
-                            reader.close()
-                except Exception:
-                    pass
-
             a["badges"] = []
             if int(a.get("recon_count") or 0) > 0:
                 a["badges"].append("recon")
@@ -4424,7 +4442,7 @@ def dashboard_alerts(request: Request, limit: int = 200):
             r["scanner"] = ex.get("scanner", False)
 
             # Geo flag from extra_json, fallback to GeoIP
-            geo = parse_geo_from_extra(r.get("extra_json") or "")
+            geo = _resolve_geo_ui(r.get("extra_json") or "", ip=r.get("ip") or "")
             if not geo.get("geo_iso2") and r.get("ip"):
                 try:
                     import geoip2.database
@@ -4585,9 +4603,11 @@ def campaign_detail(campaign_id: str, request: Request):
             meta = actor_meta.get(link["actor_id"], {})
             link["last_ip"] = meta.get("last_ip")
             link["last_ua"] = meta.get("last_ua")
-            geo = parse_geo_from_extra(meta.get("last_extra_json") or "")
-            if not geo.get("geo_iso2"):
-                geo = parse_geo_from_extra(meta.get("last_geo_extra_json") or "")
+            geo = _resolve_geo_ui(
+                meta.get("last_extra_json") or "",
+                ip=link.get("last_ip") or "",
+                fallback_extra_json=meta.get("last_geo_extra_json") or "",
+            )
             if not geo.get("geo_iso2") and link.get("last_ip") and geo_reader:
                 try:
                     resp = geo_reader.country(link["last_ip"])
@@ -4851,7 +4871,7 @@ def actor(actor_id: str, request: Request):
                 e["icon"] = recon_icon
             else:
                 e["icon"] = icons.get(kind, "\N{BULLET}")
-            geo = parse_geo_from_extra(e.get("extra_json") or "")
+            geo = _resolve_geo_ui(e.get("extra_json") or "", ip=e.get("ip") or "")
             if not geo.get("geo_iso2") and e.get("ip") and geo_reader:
                 try:
                     resp = geo_reader.country(e["ip"])
@@ -5155,6 +5175,7 @@ def _load_replay_data(conn: sqlite3.Connection, session_id: str) -> dict:
                 step_geo = {}
         except Exception:
             step_geo = {}
+        step_geo = _normalize_geo_dict(step_geo)
 
         enriched["ip"] = step.get("ip") or ""
         enriched["ua"] = step.get("ua") or ""
@@ -5197,6 +5218,7 @@ def _load_replay_data(conn: sqlite3.Connection, session_id: str) -> dict:
                 geo = json.loads(best_ev.get("geo_json") or "{}")
             except Exception:
                 geo = {}
+            geo = _normalize_geo_dict(geo)
             if not enriched["geo"] and geo:
                 enriched["geo"] = geo
             if not actor_geo and geo:
@@ -5263,6 +5285,8 @@ def _load_replay_data(conn: sqlite3.Connection, session_id: str) -> dict:
     ).fetchone()
     actor_score = actor_row["score"] if actor_row else 0
     actor_err_total = actor_row["err_total"] if actor_row else 0
+    if not actor_geo and actor_ip:
+        actor_geo = _lookup_geoip_country(actor_ip, mmdb_path=HP_GEOIP_DB, logger=_logger)
 
     _logger.debug(
         "replay_payload session_id=%s actor_ip=%s actor_geo=%s steps=%d steps_with_ip=%d steps_with_geo=%d",
@@ -5394,16 +5418,11 @@ def replay_list(request: Request):
                 s["duration_s"] = max(0, int((ended_dt - started_dt).total_seconds()))
             else:
                 s["duration_s"] = None
-            try:
-                geo = json.loads(s.get("geo_json") or "{}")
-                s["geo_flag"] = geo.get("flag", "")
-                s["geo_country"] = geo.get("country_iso2", "")
-                s["geo_name"] = geo.get("country_name", "")
-            except Exception:
-                s["geo_flag"] = ""
-                s["geo_country"] = ""
-                s["geo_name"] = ""
             s["ip"] = (s.get("ip") or "").strip()
+            geo = _resolve_geo_ui(s.get("geo_json") or "", ip=s["ip"])
+            s["geo_flag"] = geo.get("geo_flag", "")
+            s["geo_country"] = geo.get("geo_iso2", "")
+            s["geo_name"] = geo.get("geo_name", "")
             s["top_kind_color"] = _replay_kind_color(s.get("top_kind") or "probe")
             sessions.append(s)
 

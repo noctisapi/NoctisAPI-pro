@@ -20,11 +20,12 @@ from typing import Optional
 
 
 # Middleware-level batch: recon surfaces are read-only; no side effects skipped.
+# `recon_openapi` is intentionally excluded because `/openapi.json` must always
+# reflect the live modular runtime surface, not a factory-generated decoy.
 MIGRATED_ENDPOINT_IDS: frozenset[str] = frozenset(
     {
         "recon_env",
         "recon_config",
-        "recon_openapi",
     }
 )
 
