@@ -168,6 +168,11 @@ class EndpointDefinition(BaseModel, frozen=True):
     tags: tuple[str, ...] = ()
     include_in_schema: bool = True
     description: str = ""
+    # Canonical vulnerability type used by the stage classifier.
+    # Valid values: ENUMERATION, AUTH_BYPASS, WEAK_AUTH, IDOR, DATA_EXPOSURE,
+    #   BULK_EXFIL, PRIV_ESC, DESTRUCTIVE_ACTION, COMMAND_EXECUTION
+    # None = no specific vulnerability; classifier falls back to RECON.
+    vulnerability_type: Optional[str] = None
 
     @field_validator("id")
     @classmethod

@@ -975,7 +975,7 @@ def _case_session_steps(cur: sqlite3.Cursor, actor_ids: list[str], limit: int = 
         f"""
         SELECT ss.id, ss.session_id, ss.seq, ss.ts, ss.method, ss.path, ss.headers_json,
                ss.body_json, ss.response_status, ss.stage_before, ss.stage_after,
-               s.actor_id
+               ss.geo_json, s.actor_id
         FROM session_steps ss
         JOIN sessions s ON s.session_id = ss.session_id
         WHERE s.actor_id IN ({placeholders})
@@ -1038,6 +1038,27 @@ def _case_stage_progression(steps: list[dict]) -> dict:
     }
 
 
+def _geo_from_step_or_event(step: dict, event: Optional[dict]) -> dict:
+    """Extract geo flag/name/iso2 from a session_step row (geo_json column) with
+    fallback to the matched event's extra_json geo block."""
+    geo_raw = step.get("geo_json")
+    if geo_raw:
+        try:
+            geo = json.loads(geo_raw) if isinstance(geo_raw, str) else geo_raw
+            if geo and isinstance(geo, dict):
+                iso2 = geo.get("country_iso2") or ""
+                return {
+                    "geo_flag": geo.get("flag") or _flag_emoji_from_iso2(iso2),
+                    "geo_name": geo.get("country_name") or "",
+                    "geo_iso2": iso2,
+                }
+        except Exception:
+            pass
+    if event:
+        return parse_geo_from_extra(event.get("extra_json") or "")
+    return {"geo_flag": "", "geo_name": "", "geo_iso2": ""}
+
+
 def _case_timeline(steps: list[dict], events: list[dict], limit: int = 200) -> list[dict]:
     items = []
     event_buckets: dict[tuple[str, str, str, str, str], deque[dict]] = defaultdict(deque)
@@ -1068,6 +1089,7 @@ def _case_timeline(steps: list[dict], events: list[dict], limit: int = 200) -> l
         if stage_value is None and matched_event is not None:
             stage_value = _event_stage(matched_event)
 
+        _geo = _geo_from_step_or_event(row, matched_event)
         items.append(
             {
                 "ts": row.get("ts"),
@@ -1082,23 +1104,30 @@ def _case_timeline(steps: list[dict], events: list[dict], limit: int = 200) -> l
                 "kind": matched_event.get("kind") if matched_event else "",
                 "ua": matched_event.get("ua") if matched_event else "",
                 "ip": matched_event.get("ip") if matched_event else "",
+                "geo_flag": _geo["geo_flag"],
+                "geo_name": _geo["geo_name"],
+                "geo_iso2": _geo["geo_iso2"],
             }
         )
 
     for bucket in event_buckets.values():
         for row in bucket:
+            _geo = parse_geo_from_extra(row.get("extra_json") or "")
             items.append(
                 {
                     "ts": row.get("ts"),
                     "type": "event",
                     "actor_id": row.get("actor_id"),
-                "method": row.get("method"),
-                "path": row.get("path"),
+                    "method": row.get("method"),
+                    "path": row.get("path"),
                     "status": row.get("status"),
                     "kind": row.get("kind"),
                     "ua": row.get("ua"),
                     "ip": row.get("ip"),
                     "stage": _event_stage(row),
+                    "geo_flag": _geo["geo_flag"],
+                    "geo_name": _geo["geo_name"],
+                    "geo_iso2": _geo["geo_iso2"],
                 }
             )
     items = [i for i in items if i.get("ts")]

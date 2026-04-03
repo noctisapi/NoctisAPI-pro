@@ -364,7 +364,9 @@
           </td>
           <td class="mono muted" style="font-size:0.78rem;">{{ ev.method or '—' }}</td>
           <td class="mono" style="font-size:0.78rem;">{{ ev.path or '—' }}</td>
-          <td class="mono" style="font-size:0.78rem;">{{ ev.ip or '—' }}</td>
+          <td class="mono" style="font-size:0.78rem;white-space:nowrap;">
+            {% if ev.geo_flag %}<span title="{{ ev.geo_name }}">{{ ev.geo_flag }}</span> {% endif %}{{ ev.ip or '—' }}
+          </td>
           <td class="mono clip" style="font-size:0.72rem;max-width:160px;" title="{{ ev.ua or '' }}">{{ ev.ua or '—' }}</td>
           <td class="ev-stage">{{ ev.stage if ev.stage is not none else '—' }}</td>
           <td>
@@ -739,14 +741,21 @@
       if (evts.length) {
         let rows = '';
         evts.forEach(ev => {
-          const meth = (ev.method||'—').toUpperCase();
-          const path = ev.path || '—';
-          const st   = ev.status || '—';
-          const tip  = ev.ip ? `${path}  ·  ${ev.ip}` : path;
+          const meth    = (ev.method||'—').toUpperCase();
+          const path    = ev.path || '—';
+          const st      = ev.status || '—';
+          const flag    = ev.geo_flag || '';
+          const geoTip  = ev.geo_name ? ` · ${flag} ${ev.geo_name}` : '';
+          const ipPart  = ev.ip ? ` · ${ev.ip}` : '';
+          const tip     = `${path}${ipPart}${geoTip}`;
+          const ipCell  = ev.ip
+            ? `${flag ? flag + ' ' : ''}${ev.ip}`
+            : '—';
           rows += `<tr style="border-bottom:1px solid rgba(255,255,255,.04);">
             <td style="width:46px;padding:3px 5px 3px 0;font-weight:700;color:${fg};white-space:nowrap;">${meth}</td>
             <td style="padding:3px 5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text);" title="${tip}">${path}</td>
             <td style="width:38px;padding:3px 0 3px 5px;text-align:right;font-weight:600;color:${stColor(st)};white-space:nowrap;">${st}</td>
+            <td style="padding:3px 0 3px 8px;white-space:nowrap;font-size:0.68rem;color:var(--muted);">${ipCell}</td>
           </tr>`;
         });
         cardHtml += `

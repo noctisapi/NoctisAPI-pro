@@ -1,168 +1,45 @@
 {% extends "base.html" %}
 {% block content %}
 <style>
-  /* ── Layout ── */
   .mod-shell { display: grid; gap: 12px; }
   .mod-hero, .mod-grid { display: grid; gap: 12px; }
   .mod-hero { grid-template-columns: 1.2fr .8fr; }
   .mod-grid.cols-2 { grid-template-columns: repeat(2, minmax(0,1fr)); }
   .mod-grid.cols-3 { grid-template-columns: repeat(3, minmax(0,1fr)); }
-
-  /* ── Card shell → .card ── */
-  .mod-card {
-    background: var(--panel);
-    border: 1px solid var(--stroke);
-    border-radius: 2px;
-    overflow: hidden;
-  }
-
-  /* ── Card header → .card-head ── */
-  .mod-head {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 12px;
-    padding: 9px 14px;
-    border-bottom: 1px solid var(--stroke);
-    background: rgba(0,0,0,.18);
-  }
-
-  /* ── Card body ── */
+  .mod-card { background: var(--panel); border: 1px solid var(--stroke); border-radius: 2px; overflow: hidden; }
+  .mod-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 9px 14px; border-bottom: 1px solid var(--stroke); background: rgba(0,0,0,.18); }
   .mod-body { padding: 14px; }
-
-  /* ── Eyebrow label → .card-title ── */
-  .eyebrow {
-    font-family: var(--mono);
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.07em;
-    color: var(--muted);
-    margin-bottom: 2px;
-  }
-
-  .hero-title  { margin: 0; font-size: 20px; font-weight: 700; }
+  .eyebrow { font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); margin-bottom: 2px; }
+  .hero-title { margin: 0; font-size: 20px; font-weight: 700; }
   .section-title { margin: 0; font-size: 14px; font-weight: 700; }
-
-  /* ── Summary stat boxes → .kpi-card ── */
-  .summary {
-    padding: 12px 14px;
-    background: var(--panel);
-    border: 1px solid var(--stroke);
-    border-left: 3px solid var(--stroke2);
-    border-radius: 2px;
-  }
-  .summary .label {
-    font-family: var(--mono);
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--muted);
-    margin-bottom: 6px;
-  }
-  .summary .value {
-    font-family: var(--mono);
-    font-size: 24px;
-    font-weight: 700;
-    line-height: 1;
-    color: var(--text);
-    margin-top: 4px;
-  }
-
-  /* ── Pill type colors (base .pill already in style.css) ── */
-  .pill.factory        { border-color: rgba(74,158,110,.4);  color: #7ed4a8; background: rgba(74,158,110,.08); }
-  .pill.handler_factory{ border-color: rgba(56,184,200,.35); color: var(--cyan); background: rgba(56,184,200,.06); }
+  .summary { padding: 12px 14px; background: var(--panel); border: 1px solid var(--stroke); border-left: 3px solid var(--stroke2); border-radius: 2px; }
+  .summary .label { font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 6px; }
+  .summary .value { font-family: var(--mono); font-size: 24px; font-weight: 700; line-height: 1; color: var(--text); margin-top: 4px; }
+  .pill.factory { border-color: rgba(74,158,110,.4); color: #7ed4a8; background: rgba(74,158,110,.08); }
+  .pill.handler_factory { border-color: rgba(56,184,200,.35); color: var(--cyan); background: rgba(56,184,200,.06); }
   .pill.runtime_native { border-color: var(--stroke2); color: var(--muted); }
-
-  /* ── Banner / alert ── */
-  .banner {
-    padding: 8px 12px;
-    border: 1px solid rgba(200,128,32,.4);
-    border-left: 3px solid var(--amber);
-    border-radius: 2px;
-    background: rgba(200,128,32,.06);
-    color: #d4a040;
-    font-family: var(--mono);
-    font-size: 12px;
-    margin-bottom: 10px;
-  }
-  .banner.error {
-    border-color: rgba(192,64,64,.4);
-    border-left-color: var(--red);
-    background: rgba(192,64,64,.07);
-    color: #fca5a5;
-  }
-
-  /* ── Nav quick-links ── */
+  .banner { padding: 8px 12px; border: 1px solid rgba(200,128,32,.4); border-left: 3px solid var(--amber); border-radius: 2px; background: rgba(200,128,32,.06); color: #d4a040; font-family: var(--mono); font-size: 12px; margin-bottom: 10px; }
+  .banner.error { border-color: rgba(192,64,64,.4); border-left-color: var(--red); background: rgba(192,64,64,.07); color: #fca5a5; }
   .nav { display: flex; flex-wrap: wrap; gap: 6px; }
-  .nav a {
-    text-decoration: none;
-    font-family: var(--mono);
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    padding: 4px 10px;
-    border: 1px solid var(--stroke2);
-    border-radius: 2px;
-    color: var(--muted);
-    transition: color .1s, border-color .1s, background .1s;
-  }
+  .nav a { text-decoration: none; font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; padding: 4px 10px; border: 1px solid var(--stroke2); border-radius: 2px; color: var(--muted); transition: color .1s, border-color .1s, background .1s; }
   .nav a:hover { color: var(--accent); border-color: var(--accent); background: rgba(74,158,110,.05); text-decoration: none; }
-
-  /* ── Option / row items ── */
   .options, .rows { display: grid; gap: 8px; }
-  .option, .row {
-    border: 1px solid var(--stroke2);
-    border-radius: 2px;
-    padding: 12px 14px;
-    background: rgba(255,255,255,.02);
-    transition: border-color .1s, background .1s;
-  }
+  .option, .row { border: 1px solid var(--stroke2); border-radius: 2px; padding: 12px 14px; background: rgba(255,255,255,.02); transition: border-color .1s, background .1s; }
   .option.active { border-color: var(--accent); background: rgba(74,158,110,.05); }
   .option.disabled { opacity: .45; }
-
-  /* ── Toolbars ── */
   .top, .toolbar, .preview { display: flex; gap: 8px; flex-wrap: wrap; }
   .top { justify-content: space-between; align-items: flex-start; }
   .preview { margin-top: 8px; align-items: center; }
-
-  /* ── Status / mini text ── */
   .mini { font-family: var(--mono); font-size: 11px; color: var(--muted); }
   .mini.error { color: #fca5a5; }
-
-  /* ── Fields ── */
   .controls { display: grid; gap: 10px; grid-template-columns: repeat(4, minmax(0,1fr)); }
   .field { display: grid; gap: 4px; }
-  .field label {
-    font-family: var(--mono);
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--muted);
-  }
-
-  /* ── Tables → base .table style ── */
+  .field label { font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
   table { width: 100%; border-collapse: collapse; }
-  th, td {
-    text-align: left;
-    padding: 7px 10px;
-    border-bottom: 1px solid var(--stroke);
-    vertical-align: top;
-    font-size: 12px;
-  }
-  th {
-    font-family: var(--mono);
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.07em;
-    color: var(--muted);
-    background: rgba(0,0,0,.2);
-    font-weight: 700;
-  }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--stroke); vertical-align: top; font-size: 12px; }
+  th { font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); background: rgba(0,0,0,.2); font-weight: 700; }
   tr:hover td { background: rgba(255,255,255,.02); }
-
-  @media (max-width: 1100px) {
-    .mod-hero, .mod-grid.cols-2, .mod-grid.cols-3, .controls { grid-template-columns: 1fr; }
-  }
+  @media (max-width: 1100px) { .mod-hero, .mod-grid.cols-2, .mod-grid.cols-3, .controls { grid-template-columns: 1fr; } }
 </style>
 <div class="mod-shell">
 <section class="mod-hero">
@@ -179,33 +56,495 @@
 <section id="runtime" class="mod-card"><div class="mod-head"><div><div class="eyebrow">Runtime</div><h2 class="section-title">Effective runtime config</h2><p class="sub">Simplified snapshot of active endpoints and the actual backend used by each.</p></div></div><div class="mod-body"><div id="runtimeCards" class="mod-grid cols-3" style="margin-bottom:14px;"></div><div style="overflow:auto;"><table><thead><tr><th>Endpoint</th><th>Response</th><th>Security</th><th>Backend</th></tr></thead><tbody id="runtimeRows"></tbody></table></div></div></section>
 <section class="mod-card"><div class="mod-head"><div><div class="eyebrow">Save</div><h2 class="section-title">Apply Configuration</h2><p class="sub">Validated, atomically saved and runtime cache invalidated.</p></div><div class="toolbar"><button class="btn btn-outline" type="button" onclick="resetDraft()">Reset Draft</button><button class="btn btn-primary" type="button" onclick="saveConfig()">Save Configuration</button></div></div><div class="mod-body"><div id="saveStatus" class="mini"></div></div></section></div>
 <script>
-let panelState=null,draft=null,isProModular=false,endpointIndex={},templateIndex={},extensionIndex={},flawIndex={},profileIndex={},groupIndex={}; const clone=(v)=>JSON.parse(JSON.stringify(v)); const esc=(v)=>String(v??"").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&#39;"); const pill=(text,kind="")=>`<span class="pill ${kind}">${esc(text)}</span>`;
-function setStatus(msg,isError=false){const el=document.getElementById("saveStatus");el.textContent=msg||"";el.className=isError?"mini error":"mini";}
-function initIndexes(){endpointIndex={};templateIndex={};extensionIndex={};flawIndex={};profileIndex={};groupIndex={};(panelState.endpoint_groups||[]).forEach(group=>{groupIndex[group.id]=group;(group.endpoints||[]).forEach(ep=>endpointIndex[ep.endpoint_id]=ep);});(panelState.templates||[]).forEach(item=>templateIndex[item.id]=item);(panelState.extensions||[]).forEach(item=>extensionIndex[item.id]=item);(panelState.flaw_profiles||[]).forEach(item=>flawIndex[item.id]=item);(panelState.response_profiles||[]).forEach(item=>profileIndex[item.id]=item);}
-function normaliseDraft(){draft=clone(panelState.instance_config||{});draft.enabled_extension_ids=Array.isArray(draft.enabled_extension_ids)?draft.enabled_extension_ids:[];draft.endpoint_configs=draft.endpoint_configs&&typeof draft.endpoint_configs==="object"?draft.endpoint_configs:{};draft.mutation_config=draft.mutation_config&&typeof draft.mutation_config==="object"?draft.mutation_config:{policy:"none",intensity:0};draft.response_rules=Array.isArray(draft.response_rules)?draft.response_rules:[];}
-function activeEndpointIds(){const ids=new Set();const tmpl=templateIndex[draft.base_template_id];(tmpl?.endpoint_groups||[]).forEach(group=>(group.endpoint_ids||[]).forEach(id=>ids.add(id)));(draft.enabled_extension_ids||[]).forEach(extId=>(extensionIndex[extId]?.endpoint_groups||[]).forEach(group=>(group.endpoint_ids||[]).forEach(id=>ids.add(id))));return Array.from(ids);}
-function activeEndpoints(){return activeEndpointIds().map(id=>endpointIndex[id]).filter(Boolean).sort((a,b)=>`${a.group_names?.[0]||""}:${a.path_pattern}`.localeCompare(`${b.group_names?.[0]||""}:${b.path_pattern}`));}
-function getOverride(id,create=false){let item=draft.endpoint_configs[id];if(!item&&create){item={endpoint_id:id,enabled:true,response_profile_id:null,flaw_profile_id:null,fixed_status:null,latency_ms:null};draft.endpoint_configs[id]=item;}return item||null;}
-function pruneOverride(id){const x=draft.endpoint_configs[id];if(!x)return;if((x.enabled===true||x.enabled==null)&&!x.response_profile_id&&x.flaw_profile_id==null&&x.fixed_status==null&&x.latency_ms==null)delete draft.endpoint_configs[id];}
-function setGlobalDifficulty(v){draft.global_difficulty=v;renderAll();} function setTemplate(id){draft.base_template_id=id;const ok=new Set(templateIndex[id]?.compatible_extension_ids||[]);draft.enabled_extension_ids=(draft.enabled_extension_ids||[]).filter(x=>ok.has(x));renderAll();}
-function toggleExtension(id,checked){const ext=extensionIndex[id], tmpl=templateIndex[draft.base_template_id], compat=new Set(tmpl?.compatible_extension_ids||[]); if(!ext||!compat.has(id)){setStatus("Extension is not compatible with the active template.",true);renderAll();return;} const selected=new Set(draft.enabled_extension_ids||[]); if(checked){for(const other of (ext.incompatible_with||[])){if(selected.has(other)){setStatus(`Cannot enable ${ext.name} together with ${extensionIndex[other]?.name||other}.`,true);renderAll();return;}}selected.add(id);(ext.dependencies||[]).forEach(dep=>selected.add(dep));} else {selected.delete(id);Object.values(extensionIndex).forEach(item=>{if((item.dependencies||[]).includes(id))selected.delete(item.id);});} draft.enabled_extension_ids=Array.from(selected);renderAll();}
-function setEndpointEnabled(id,v){const x=getOverride(id,true);x.enabled=!!v;pruneOverride(id);renderAll();} function setResponseProfile(id,v){const x=getOverride(id,true);x.response_profile_id=v==="__inherit__"?null:v;pruneOverride(id);renderAll();} function setFixedStatus(id,v){const x=getOverride(id,true), raw=String(v||"").trim();x.fixed_status=raw===""?null:Number(raw);pruneOverride(id);} function setLatency(id,v){const x=getOverride(id,true), raw=String(v||"").trim();x.latency_ms=raw===""?null:Number(raw);pruneOverride(id);} function setFlawProfile(id,v){const x=getOverride(id,true);x.flaw_profile_id=v==="__inherit__"?null:(v==="__disabled__"?"":v);pruneOverride(id);renderAll();}
-function setMutationPolicy(v){draft.mutation_config.policy=v||"none";} function setMutationIntensity(v){const raw=String(v||"").trim();draft.mutation_config.intensity=raw===""?0:Number(raw);} function addRule(){draft.response_rules.push({id:`rule_${Date.now()}_${draft.response_rules.length+1}`,enabled:true,match:{endpoint_id:activeEndpoints()[0]?.endpoint_id||null,endpoint_group_id:null,method:null,user_agent_contains:null},action:{richness_delta:null,force_status:null,extra_latency_ms:null}});renderPolicies();} function removeRule(id){draft.response_rules=(draft.response_rules||[]).filter(rule=>rule.id!==id);renderPolicies();}
-function updateRule(id,path,value){const rule=(draft.response_rules||[]).find(item=>item.id===id); if(!rule) return; if(path==="enabled"){rule.enabled=Boolean(value); return;} const target=path.startsWith("match.")?rule.match:rule.action; const key=path.split(".")[1]; if(value==="__none__"||value===""){target[key]=null; return;} target[key]=["richness_delta","force_status","extra_latency_ms"].includes(key)?Number(value):value;}
-function renderOverview(){const runtime=panelState.effective_runtime||{}, stats=runtime.stats||{}; document.getElementById("heroCards").innerHTML=`<div class="summary"><div class="label">Template</div><div class="value">${esc(templateIndex[draft.base_template_id]?.name||draft.base_template_id||"n/a")}</div></div><div class="summary"><div class="label">Runtime Endpoints</div><div class="value">${Number(stats.enabled_endpoints||0)}</div></div><div class="summary"><div class="label">Factory Coverage</div><div class="value">${(runtime.endpoints||[]).filter(x=>x.response_backend==="factory").length}</div></div>`; document.getElementById("overviewTemplate").innerHTML=`<div class="label">Template</div><div class="value" style="font-size:18px">${esc(templateIndex[draft.base_template_id]?.name||draft.base_template_id||"n/a")}</div><div class="mini" style="margin-top:8px">${esc(templateIndex[draft.base_template_id]?.description||"")}</div>`; document.getElementById("overviewExtensions").innerHTML=`<div class="label">Extensions</div><div class="value" style="font-size:18px">${draft.enabled_extension_ids.length}</div><div class="mini" style="margin-top:8px">${draft.enabled_extension_ids.map(id=>extensionIndex[id]?.name||id).join(", ")||"No active extensions"}</div><div class="mini" style="margin-top:8px">Mutation ${esc(draft.mutation_config?.policy||"none")} · ${Number(draft.mutation_config?.intensity||0)}</div>`; document.getElementById("overviewMigration").innerHTML=`<div class="label">Legacy Migration</div><div class="value" style="font-size:18px">${panelState.legacy_migration?.total_legacy_rows||0} rows</div><div class="mini" style="margin-top:8px">${Number((draft.response_rules||[]).length)} rules canonicas · ${esc(panelState.legacy_migration?.note||"")}</div>`; document.getElementById("topBanner").innerHTML=panelState.runtime_build_error?`<div class="banner error">${esc(panelState.runtime_build_error)}</div>`:"";}
-function renderTemplates(){document.getElementById("templateWarning").innerHTML=draft.base_template_id!==panelState.instance_config?.base_template_id?`<div class="banner">Changing the template may disable incompatible extensions and alter inherited defaults.</div>`:""; document.getElementById("templateList").innerHTML=(panelState.templates||[]).map(t=>`<div class="option ${draft.base_template_id===t.id?"active":""}"><div class="top"><div><div style="font-size:18px;font-weight:700">${esc(t.name)}</div><div class="mini" style="margin-top:8px">${esc(t.description||"")}</div></div><label class="pill"><input type="radio" name="template" ${draft.base_template_id===t.id?"checked":""} onchange="setTemplate('${esc(t.id)}')"> Active</label></div><div class="mini" style="margin-top:10px">${t.endpoint_count} endpoints · response ${esc(t.default_response_profile_id)}${t.default_flaw_profile_id?` · flaw ${esc(t.default_flaw_profile_id)}`:""}</div>${(t.endpoint_preview||[]).map(x=>`<div class="preview">${pill(x.method)}<code>${esc(x.path_pattern)}</code></div>`).join("")}</div>`).join("");}
-function renderExtensions(){const compat=new Set(templateIndex[draft.base_template_id]?.compatible_extension_ids||[]); document.getElementById("extensionList").innerHTML=(panelState.extensions||[]).map(ext=>`<div class="option ${(draft.enabled_extension_ids||[]).includes(ext.id)?"active":""} ${compat.has(ext.id)?"":"disabled"}"><div class="top"><div><div style="font-size:18px;font-weight:700">${esc(ext.name)}</div><div class="mini" style="margin-top:8px">${esc(ext.description||"")}</div></div><label class="pill"><input type="checkbox" ${(draft.enabled_extension_ids||[]).includes(ext.id)?"checked":""} ${compat.has(ext.id)?"":"disabled"} onchange="toggleExtension('${esc(ext.id)}', this.checked)"> Enabled</label></div><div class="mini" style="margin-top:10px">Adds ${ext.endpoint_count} endpoints</div><div class="mini">Dependencies: ${(ext.dependencies||[]).map(id=>extensionIndex[id]?.name||id).join(", ")||"none"}</div><div class="mini">Incompatibles: ${(ext.incompatible_with||[]).map(id=>extensionIndex[id]?.name||id).join(", ")||"none"}</div></div>`).join("");}
-function renderEndpoints(){const filter=String(document.getElementById("endpointFilter")?.value||"").trim().toLowerCase(); document.getElementById("endpointList").innerHTML=activeEndpoints().filter(ep=>!filter||`${ep.endpoint_id} ${ep.path_pattern} ${ep.group_names?.join(" ")||""}`.toLowerCase().includes(filter)).map(ep=>{const o=getOverride(ep.endpoint_id,false), enabled=o?.enabled??true; return `<div class="row"><div class="top"><div><div style="font-size:16px;font-weight:700">${esc(ep.endpoint_id)}</div><div class="mini" style="margin-top:6px">${esc(ep.description||"")}</div><div class="preview">${pill(ep.method)}<code>${esc(ep.path_pattern)}</code></div></div><div class="toolbar">${pill(ep.operation_type)}${pill(ep.surface_type)}${pill(ep.resource_type)}${pill(ep.response_backend, ep.response_backend)}</div></div><div class="mini">Groups: ${esc((ep.group_names||[]).join(", "))||"n/a"} · Runtime: ${ep.runtime_enabled?"active":"inactive"}</div><label class="mini" style="margin-top:10px;display:block;"><input type="checkbox" ${enabled?"checked":""} onchange="setEndpointEnabled('${esc(ep.endpoint_id)}', this.checked)"> Endpoint enabled</label></div>`;}).join("")||`<div class="mini">No active endpoints match the current filter.</div>`;}
-function renderResponses(){document.getElementById("globalDifficulty").value=draft.global_difficulty||"medium"; document.getElementById("responseList").innerHTML=activeEndpoints().map(ep=>{const o=getOverride(ep.endpoint_id,false); return `<div class="row"><div class="top"><div><div style="font-size:15px;font-weight:700">${esc(ep.endpoint_id)}</div><div class="preview">${pill(ep.method)}<code>${esc(ep.path_pattern)}</code></div></div><div>${pill(ep.runtime_response_profile_id||"inherit")}</div></div><div class="controls"><div class="field"><label>Response profile</label><select class="input" onchange="setResponseProfile('${esc(ep.endpoint_id)}', this.value)"><option value="__inherit__">Inherited</option>${(panelState.response_profiles||[]).map(p=>`<option value="${esc(p.id)}" ${o?.response_profile_id===p.id?"selected":""}>${esc(p.name)}</option>`).join("")}</select></div><div class="field"><label>Status override</label><input class="input" type="number" min="100" max="599" value="${o?.fixed_status??""}" placeholder="inherit" onchange="setFixedStatus('${esc(ep.endpoint_id)}', this.value)"></div><div class="field"><label>Latency override</label><input class="input" type="number" min="0" value="${o?.latency_ms??""}" placeholder="inherit" onchange="setLatency('${esc(ep.endpoint_id)}', this.value)"></div><div class="field"><label>Backend</label><div style="padding-top:10px">${pill(ep.response_backend, ep.response_backend)}</div></div></div></div>`;}).join("")||`<div class="mini">No active endpoints.</div>`;}
-function renderPolicies(){if(!isProModular){document.getElementById("addRuleBtn").style.display="none";document.getElementById("mutationGrid").style.display="none";document.getElementById("rulesList").innerHTML=`<div class="upgrade-nudge"><span class="upgrade-nudge-icon">🔒</span> <strong>Pro edition required.</strong> Mutation policy and response rules require a Pro license.<a class="upgrade-nudge-link" href="/dashboard"> View license →</a></div>`;return;}document.getElementById("addRuleBtn").style.display="";document.getElementById("mutationGrid").style.display="";document.getElementById("mutationPolicy").value=draft.mutation_config?.policy||"none"; document.getElementById("mutationIntensity").value=Number(draft.mutation_config?.intensity||0); const groups=(panelState.endpoint_groups||[]).map(group=>({id:group.id,name:group.name})); document.getElementById("rulesList").innerHTML=(draft.response_rules||[]).map((rule,idx)=>`<div class="row"><div class="top"><div><div style="font-size:15px;font-weight:700">${esc(rule.id||`rule_${idx+1}`)}</div><div class="mini" style="margin-top:6px">Rule matching by endpoint_id or endpoint_group_id.</div></div><button class="btn btn-outline" type="button" onclick="removeRule('${esc(rule.id)}')">Remove</button></div><div class="mod-grid cols-3"><div class="field"><label>Endpoint</label><select class="input" onchange="updateRule('${esc(rule.id)}','match.endpoint_id', this.value)"><option value="__none__">Any from group</option>${activeEndpoints().map(ep=>`<option value="${esc(ep.endpoint_id)}" ${rule.match?.endpoint_id===ep.endpoint_id?"selected":""}>${esc(ep.endpoint_id)}</option>`).join("")}</select></div><div class="field"><label>Group</label><select class="input" onchange="updateRule('${esc(rule.id)}','match.endpoint_group_id', this.value)"><option value="__none__">No group filter</option>${groups.map(group=>`<option value="${esc(group.id)}" ${rule.match?.endpoint_group_id===group.id?"selected":""}>${esc(group.name)}</option>`).join("")}</select></div><div class="field"><label>Method</label><select class="input" onchange="updateRule('${esc(rule.id)}','match.method', this.value)"><option value="__none__">Any</option><option value="GET" ${rule.match?.method==="GET"?"selected":""}>GET</option><option value="POST" ${rule.match?.method==="POST"?"selected":""}>POST</option><option value="PATCH" ${rule.match?.method==="PATCH"?"selected":""}>PATCH</option><option value="PUT" ${rule.match?.method==="PUT"?"selected":""}>PUT</option><option value="DELETE" ${rule.match?.method==="DELETE"?"selected":""}>DELETE</option></select></div></div><div class="mod-grid cols-3" style="margin-top:12px;"><div class="field"><label>User-Agent contains</label><input class="input" value="${esc(rule.match?.user_agent_contains||"")}" onchange="updateRule('${esc(rule.id)}','match.user_agent_contains', this.value)"></div><div class="field"><label>Richness delta</label><input class="input" type="number" min="-2" max="2" value="${rule.action?.richness_delta??""}" onchange="updateRule('${esc(rule.id)}','action.richness_delta', this.value)"></div><div class="field"><label>Force status</label><input class="input" type="number" min="100" max="599" value="${rule.action?.force_status??""}" onchange="updateRule('${esc(rule.id)}','action.force_status', this.value)"></div></div><div class="mod-grid cols-2" style="margin-top:12px;"><div class="field"><label>Extra latency ms</label><input class="input" type="number" min="0" max="5000" value="${rule.action?.extra_latency_ms??""}" onchange="updateRule('${esc(rule.id)}','action.extra_latency_ms', this.value)"></div><label class="mini" style="display:flex;align-items:end;"><input type="checkbox" ${rule.enabled!==false?"checked":""} onchange="updateRule('${esc(rule.id)}','enabled', this.checked)"> Rule enabled</label></div></div>`).join("")||`<div class="mini">No rules defined.</div>`;}
-function renderSecurity(){if(!isProModular){document.getElementById("securityList").innerHTML=`<div class="upgrade-nudge"><span class="upgrade-nudge-icon">🔒</span> <strong>Pro edition required.</strong> Flaw profiles per endpoint require a Pro license.<a class="upgrade-nudge-link" href="/dashboard"> View license →</a></div>`;return;}document.getElementById("securityList").innerHTML=activeEndpoints().map(ep=>{const o=getOverride(ep.endpoint_id,false), selected=o?.flaw_profile_id; const current=selected&&selected!==""?selected:ep.runtime_flaw_profile_id; const desc=current&&flawIndex[current]?flawIndex[current].description:"The endpoint inherits the flaw from the template, or has no flaw if not applicable."; return `<div class="row"><div class="top"><div><div style="font-size:15px;font-weight:700">${esc(ep.endpoint_id)}</div><div class="mini" style="margin-top:6px">${esc(ep.operation_type)} · ${esc(ep.surface_type)}</div></div><div>${current?pill(current):pill("no flaw")}</div></div><div class="mod-grid cols-2"><div class="field"><label>Flaw profile</label><select class="input" onchange="setFlawProfile('${esc(ep.endpoint_id)}', this.value)"><option value="__inherit__" ${selected==null?"selected":""}>Inherited</option><option value="__disabled__" ${selected===""?"selected":""}>Disable flaw</option>${(ep.supported_flaw_profile_ids||[]).map(id=>`<option value="${esc(id)}" ${selected===id?"selected":""}>${esc(flawIndex[id]?.name||id)}</option>`).join("")}</select></div><div class="field"><label>Impact</label><div class="mini" style="padding-top:10px">${esc(desc)}</div></div></div></div>`;}).join("")||`<div class="mini">No active endpoints to configure flaws.</div>`;}
-function renderRuntime(){const runtime=panelState.effective_runtime||{}, stats=runtime.stats||{}; document.getElementById("runtimeCards").innerHTML=`<div class="summary"><div class="label">Template</div><div class="value">${esc(runtime.template_id||"n/a")}</div></div><div class="summary"><div class="label">Enabled Endpoints</div><div class="value">${Number(stats.enabled_endpoints||0)}</div></div><div class="summary"><div class="label">Factory / Runtime</div><div class="value">${(runtime.endpoints||[]).filter(x=>x.response_backend==="factory").length} / ${(runtime.endpoints||[]).filter(x=>x.response_backend!=="factory").length}</div></div>`; document.getElementById("runtimeRows").innerHTML=(runtime.endpoints||[]).map(ep=>`<tr><td><div style="font-weight:700">${esc(ep.endpoint_id)}</div><div class="mini">${esc(ep.method)} ${esc(ep.path_pattern)}</div><div class="mini">${esc((ep.group_names||[]).join(", "))}</div></td><td><div>${esc(ep.response_profile_id||"n/a")}</div><div class="mini">difficulty ${esc(ep.difficulty||"n/a")}${ep.fixed_status?` · status ${ep.fixed_status}`:""}</div></td><td><div>${esc(ep.flaw_profile_id||"none")}</div><div class="mini">${esc(ep.operation_type)} · ${esc(ep.resource_type)}</div></td><td>${pill(ep.response_backend, ep.response_backend)}</td></tr>`).join("");}
-function renderNav(){const navLinks=[{h:"#overview",l:"Overview"},{h:"#templates",l:"Templates"},{h:"#extensions",l:"Extensions"},{h:"#endpoints",l:"Endpoints"},{h:"#responses",l:"Responses"},...(isProModular?[{h:"#policies",l:"Policies"},{h:"#security",l:"Security"}]:[]),{h:"#runtime",l:"Runtime"}];document.getElementById("modNav").innerHTML=navLinks.map(n=>`<a href="${n.h}">${esc(n.l)}</a>`).join("");}
-function renderAll(){renderNav();renderOverview();renderTemplates();renderExtensions();renderEndpoints();renderResponses();renderPolicies();renderSecurity();renderRuntime();}
-function buildPayload(){const endpointConfigs={}; Object.entries(draft.endpoint_configs||{}).forEach(([id,cfg])=>{endpointConfigs[id]={endpoint_id:id,enabled:cfg.enabled!==false,response_profile_id:cfg.response_profile_id||null,flaw_profile_id:isProModular?cfg.flaw_profile_id:null,fixed_status:cfg.fixed_status==null||cfg.fixed_status===""?null:Number(cfg.fixed_status),latency_ms:cfg.latency_ms==null||cfg.latency_ms===""?null:Number(cfg.latency_ms)}}); const rules=isProModular?(draft.response_rules||[]).map(rule=>({id:rule.id,enabled:rule.enabled!==false,match:{endpoint_id:rule.match?.endpoint_id||null,endpoint_group_id:rule.match?.endpoint_group_id||null,method:rule.match?.method||null,user_agent_contains:rule.match?.user_agent_contains||null},action:{richness_delta:rule.action?.richness_delta==null||rule.action?.richness_delta===""?null:Number(rule.action.richness_delta),force_status:rule.action?.force_status==null||rule.action?.force_status===""?null:Number(rule.action.force_status),extra_latency_ms:rule.action?.extra_latency_ms==null||rule.action?.extra_latency_ms===""?null:Number(rule.action.extra_latency_ms)}})): []; const mutation_config=isProModular?{policy:draft.mutation_config?.policy||"none",intensity:Number(draft.mutation_config?.intensity||0)}:{policy:"none",intensity:0}; return {base_template_id:draft.base_template_id,enabled_extension_ids:draft.enabled_extension_ids||[],global_difficulty:draft.global_difficulty||"medium",endpoint_configs:endpointConfigs,mutation_config,response_rules:rules};}
-async function saveConfig(){setStatus("Saving configuration..."); try{const resp=await fetch("/dashboard/api-modular/instance-config/save",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(buildPayload())}); const data=await resp.json(); if(!resp.ok) throw new Error(data.detail||"save_failed"); setStatus("Configuration saved and runtime cache invalidated."); await loadState();}catch(err){setStatus(err.message||"save_failed",true);}}
-function resetDraft(){normaliseDraft(); setStatus("Draft restored from persisted configuration."); renderAll();}
-async function loadState(){setStatus(""); const resp=await fetch("/dashboard/api-modular/state-v2"); panelState=await resp.json(); isProModular=!!panelState.pro_modular_enabled; initIndexes(); normaliseDraft(); renderAll();}
+let panelState = null;
+let draft = null;
+let isProModular = false;
+let endpointIndex = {};
+let templateIndex = {};
+let extensionIndex = {};
+let flawIndex = {};
+let profileIndex = {};
+let groupIndex = {};
+let derivedState = { activeEndpointIds: [], activeEndpoints: [], runtimeFactoryCount: 0, runtimeOtherCount: 0 };
+let secondaryRenderToken = 0;
+let lastLoadMetrics = null;
+const clone = (value) => JSON.parse(JSON.stringify(value));
+const esc = (value) => String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;");
+const pill = (text, kind = "") => `<span class="pill ${kind}">${esc(text)}</span>`;
+const PERF_DEBUG = (() => {
+  try {
+    return new URLSearchParams(window.location.search).has("perf") || window.localStorage.getItem("hp.api_modular.perf") === "1";
+  } catch (_err) {
+    return false;
+  }
+})();
+
+function round2(value) {
+  return Math.round(Number(value || 0) * 100) / 100;
+}
+
+function sumMetrics(metrics) {
+  return round2(Object.values(metrics || {}).reduce((acc, value) => acc + Number(value || 0), 0));
+}
+
+function setStatus(message, isError = false) {
+  const el = document.getElementById("saveStatus");
+  el.textContent = message || "";
+  el.className = isError ? "mini error" : "mini";
+}
+
+function measureStep(bucket, key, fn) {
+  const started = performance.now();
+  const result = fn();
+  bucket[key] = round2(performance.now() - started);
+  return result;
+}
+
+function publishPerf(stage, metrics) {
+  window.__apiModularPerf = Object.assign(window.__apiModularPerf || { request_order: ["state-v2"] }, { [stage]: metrics });
+  if (PERF_DEBUG) {
+    console.info("[api-modular]", stage, metrics);
+    if (metrics && metrics.section_ms) {
+      console.table(metrics.section_ms);
+    }
+  }
+}
+
+function initIndexes() {
+  endpointIndex = {};
+  templateIndex = {};
+  extensionIndex = {};
+  flawIndex = {};
+  profileIndex = {};
+  groupIndex = {};
+  (panelState.endpoint_groups || []).forEach(group => {
+    groupIndex[group.id] = group;
+    (group.endpoints || []).forEach(ep => {
+      endpointIndex[ep.endpoint_id] = ep;
+    });
+  });
+  (panelState.templates || []).forEach(item => templateIndex[item.id] = item);
+  (panelState.extensions || []).forEach(item => extensionIndex[item.id] = item);
+  (panelState.flaw_profiles || []).forEach(item => flawIndex[item.id] = item);
+  (panelState.response_profiles || []).forEach(item => profileIndex[item.id] = item);
+}
+
+function normaliseDraft() {
+  draft = clone(panelState.instance_config || {});
+  draft.enabled_extension_ids = Array.isArray(draft.enabled_extension_ids) ? draft.enabled_extension_ids : [];
+  draft.endpoint_configs = draft.endpoint_configs && typeof draft.endpoint_configs === "object" ? draft.endpoint_configs : {};
+  draft.mutation_config = draft.mutation_config && typeof draft.mutation_config === "object" ? draft.mutation_config : { policy: "none", intensity: 0 };
+  draft.response_rules = Array.isArray(draft.response_rules) ? draft.response_rules : [];
+}
+
+function recomputeDerived() {
+  const ids = new Set();
+  const template = templateIndex[draft.base_template_id];
+  (template?.endpoint_groups || []).forEach(group => (group.endpoint_ids || []).forEach(id => ids.add(id)));
+  (draft.enabled_extension_ids || []).forEach(extId => {
+    (extensionIndex[extId]?.endpoint_groups || []).forEach(group => (group.endpoint_ids || []).forEach(id => ids.add(id)));
+  });
+  const active = Array.from(ids)
+    .map(id => endpointIndex[id])
+    .filter(Boolean)
+    .sort((a, b) => `${a.group_names?.[0] || ""}:${a.path_pattern}`.localeCompare(`${b.group_names?.[0] || ""}:${b.path_pattern}`));
+  const runtimeEndpoints = panelState.effective_runtime?.endpoints || [];
+  derivedState = {
+    activeEndpointIds: Array.from(ids),
+    activeEndpoints: active,
+    runtimeFactoryCount: runtimeEndpoints.filter(item => item.response_backend === "factory").length,
+    runtimeOtherCount: runtimeEndpoints.filter(item => item.response_backend !== "factory").length,
+  };
+}
+
+function activeEndpoints() {
+  return derivedState.activeEndpoints || [];
+}
+
+function getOverride(id, create = false) {
+  let item = draft.endpoint_configs[id];
+  if (!item && create) {
+    item = { endpoint_id: id, enabled: true, response_profile_id: null, flaw_profile_id: null, fixed_status: null, latency_ms: null };
+    draft.endpoint_configs[id] = item;
+  }
+  return item || null;
+}
+
+function pruneOverride(id) {
+  const item = draft.endpoint_configs[id];
+  if (!item) {
+    return;
+  }
+  if ((item.enabled === true || item.enabled == null) && !item.response_profile_id && item.flaw_profile_id == null && item.fixed_status == null && item.latency_ms == null) {
+    delete draft.endpoint_configs[id];
+  }
+}
+
+function rerenderModel() {
+  recomputeDerived();
+  renderCore();
+  scheduleSecondaryRender();
+}
+
+function setGlobalDifficulty(value) {
+  draft.global_difficulty = value;
+}
+
+function setTemplate(id) {
+  draft.base_template_id = id;
+  const ok = new Set(templateIndex[id]?.compatible_extension_ids || []);
+  draft.enabled_extension_ids = (draft.enabled_extension_ids || []).filter(item => ok.has(item));
+  rerenderModel();
+}
+
+function toggleExtension(id, checked) {
+  const ext = extensionIndex[id];
+  const template = templateIndex[draft.base_template_id];
+  const compat = new Set(template?.compatible_extension_ids || []);
+  if (!ext || !compat.has(id)) {
+    setStatus("Extension is not compatible with the active template.", true);
+    renderCore();
+    return;
+  }
+  const selected = new Set(draft.enabled_extension_ids || []);
+  if (checked) {
+    for (const other of (ext.incompatible_with || [])) {
+      if (selected.has(other)) {
+        setStatus(`Cannot enable ${ext.name} together with ${extensionIndex[other]?.name || other}.`, true);
+        renderCore();
+        return;
+      }
+    }
+    selected.add(id);
+    (ext.dependencies || []).forEach(dep => selected.add(dep));
+  } else {
+    selected.delete(id);
+    Object.values(extensionIndex).forEach(item => {
+      if ((item.dependencies || []).includes(id)) {
+        selected.delete(item.id);
+      }
+    });
+  }
+  draft.enabled_extension_ids = Array.from(selected);
+  rerenderModel();
+}
+
+function setEndpointEnabled(id, value) {
+  const item = getOverride(id, true);
+  item.enabled = !!value;
+  pruneOverride(id);
+  renderEndpoints();
+}
+
+function setResponseProfile(id, value) {
+  const item = getOverride(id, true);
+  item.response_profile_id = value === "__inherit__" ? null : value;
+  pruneOverride(id);
+}
+
+function setFixedStatus(id, value) {
+  const item = getOverride(id, true);
+  const raw = String(value || "").trim();
+  item.fixed_status = raw === "" ? null : Number(raw);
+  pruneOverride(id);
+}
+
+function setLatency(id, value) {
+  const item = getOverride(id, true);
+  const raw = String(value || "").trim();
+  item.latency_ms = raw === "" ? null : Number(raw);
+  pruneOverride(id);
+}
+
+function setFlawProfile(id, value) {
+  const item = getOverride(id, true);
+  item.flaw_profile_id = value === "__inherit__" ? null : (value === "__disabled__" ? "" : value);
+  pruneOverride(id);
+  renderSecurity();
+}
+
+function setMutationPolicy(value) {
+  draft.mutation_config.policy = value || "none";
+}
+
+function setMutationIntensity(value) {
+  const raw = String(value || "").trim();
+  draft.mutation_config.intensity = raw === "" ? 0 : Number(raw);
+}
+
+function addRule() {
+  draft.response_rules.push({
+    id: `rule_${Date.now()}_${draft.response_rules.length + 1}`,
+    enabled: true,
+    match: { endpoint_id: activeEndpoints()[0]?.endpoint_id || null, endpoint_group_id: null, method: null, user_agent_contains: null },
+    action: { richness_delta: null, force_status: null, extra_latency_ms: null }
+  });
+  renderPolicies();
+}
+
+function removeRule(id) {
+  draft.response_rules = (draft.response_rules || []).filter(rule => rule.id !== id);
+  renderPolicies();
+}
+
+function updateRule(id, path, value) {
+  const rule = (draft.response_rules || []).find(item => item.id === id);
+  if (!rule) {
+    return;
+  }
+  if (path === "enabled") {
+    rule.enabled = Boolean(value);
+    return;
+  }
+  const target = path.startsWith("match.") ? rule.match : rule.action;
+  const key = path.split(".")[1];
+  if (value === "__none__" || value === "") {
+    target[key] = null;
+    return;
+  }
+  target[key] = ["richness_delta", "force_status", "extra_latency_ms"].includes(key) ? Number(value) : value;
+}
+
+function renderOverview() {
+  const runtime = panelState.effective_runtime || {};
+  const stats = runtime.stats || {};
+  document.getElementById("heroCards").innerHTML = `<div class="summary"><div class="label">Template</div><div class="value">${esc(templateIndex[draft.base_template_id]?.name || draft.base_template_id || "n/a")}</div></div><div class="summary"><div class="label">Runtime Endpoints</div><div class="value">${Number(stats.enabled_endpoints || 0)}</div></div><div class="summary"><div class="label">Factory Coverage</div><div class="value">${derivedState.runtimeFactoryCount}</div></div>`;
+  document.getElementById("overviewTemplate").innerHTML = `<div class="label">Template</div><div class="value" style="font-size:18px">${esc(templateIndex[draft.base_template_id]?.name || draft.base_template_id || "n/a")}</div><div class="mini" style="margin-top:8px">${esc(templateIndex[draft.base_template_id]?.description || "")}</div>`;
+  document.getElementById("overviewExtensions").innerHTML = `<div class="label">Extensions</div><div class="value" style="font-size:18px">${draft.enabled_extension_ids.length}</div><div class="mini" style="margin-top:8px">${draft.enabled_extension_ids.map(id => extensionIndex[id]?.name || id).join(", ") || "No active extensions"}</div><div class="mini" style="margin-top:8px">Mutation ${esc(draft.mutation_config?.policy || "none")} - ${Number(draft.mutation_config?.intensity || 0)}</div>`;
+  document.getElementById("overviewMigration").innerHTML = `<div class="label">Legacy Migration</div><div class="value" style="font-size:18px">${panelState.legacy_migration?.total_legacy_rows || 0} rows</div><div class="mini" style="margin-top:8px">${Number((draft.response_rules || []).length)} canonical rules - ${esc(panelState.legacy_migration?.note || "")}</div>`;
+  document.getElementById("topBanner").innerHTML = panelState.runtime_build_error ? `<div class="banner error">${esc(panelState.runtime_build_error)}</div>` : "";
+}
+
+function renderTemplates() {
+  document.getElementById("templateWarning").innerHTML = draft.base_template_id !== panelState.instance_config?.base_template_id ? `<div class="banner">Changing the template may disable incompatible extensions and alter inherited defaults.</div>` : "";
+  document.getElementById("templateList").innerHTML = (panelState.templates || []).map(t => `<div class="option ${draft.base_template_id === t.id ? "active" : ""}"><div class="top"><div><div style="font-size:18px;font-weight:700">${esc(t.name)}</div><div class="mini" style="margin-top:8px">${esc(t.description || "")}</div></div><label class="pill"><input type="radio" name="template" ${draft.base_template_id === t.id ? "checked" : ""} onchange="setTemplate('${esc(t.id)}')"> Active</label></div><div class="mini" style="margin-top:10px">${t.endpoint_count} endpoints - response ${esc(t.default_response_profile_id)}${t.default_flaw_profile_id ? ` - flaw ${esc(t.default_flaw_profile_id)}` : ""}</div>${(t.endpoint_preview || []).map(x => `<div class="preview">${pill(x.method)}<code>${esc(x.path_pattern)}</code></div>`).join("")}</div>`).join("");
+}
+
+function renderExtensions() {
+  const compat = new Set(templateIndex[draft.base_template_id]?.compatible_extension_ids || []);
+  document.getElementById("extensionList").innerHTML = (panelState.extensions || []).map(ext => `<div class="option ${(draft.enabled_extension_ids || []).includes(ext.id) ? "active" : ""} ${compat.has(ext.id) ? "" : "disabled"}"><div class="top"><div><div style="font-size:18px;font-weight:700">${esc(ext.name)}</div><div class="mini" style="margin-top:8px">${esc(ext.description || "")}</div></div><label class="pill"><input type="checkbox" ${(draft.enabled_extension_ids || []).includes(ext.id) ? "checked" : ""} ${compat.has(ext.id) ? "" : "disabled"} onchange="toggleExtension('${esc(ext.id)}', this.checked)"> Enabled</label></div><div class="mini" style="margin-top:10px">Adds ${ext.endpoint_count} endpoints</div><div class="mini">Dependencies: ${(ext.dependencies || []).map(id => extensionIndex[id]?.name || id).join(", ") || "none"}</div><div class="mini">Incompatibles: ${(ext.incompatible_with || []).map(id => extensionIndex[id]?.name || id).join(", ") || "none"}</div></div>`).join("");
+}
+
+function renderEndpoints() {
+  const filter = String(document.getElementById("endpointFilter")?.value || "").trim().toLowerCase();
+  document.getElementById("endpointList").innerHTML = activeEndpoints().filter(ep => !filter || `${ep.endpoint_id} ${ep.path_pattern} ${ep.group_names?.join(" ") || ""}`.toLowerCase().includes(filter)).map(ep => {
+    const override = getOverride(ep.endpoint_id, false);
+    const enabled = override?.enabled ?? true;
+    return `<div class="row"><div class="top"><div><div style="font-size:16px;font-weight:700">${esc(ep.endpoint_id)}</div><div class="mini" style="margin-top:6px">${esc(ep.description || "")}</div><div class="preview">${pill(ep.method)}<code>${esc(ep.path_pattern)}</code></div></div><div class="toolbar">${pill(ep.operation_type)}${pill(ep.surface_type)}${pill(ep.resource_type)}${pill(ep.response_backend, ep.response_backend)}</div></div><div class="mini">Groups: ${esc((ep.group_names || []).join(", ")) || "n/a"} - Runtime: ${ep.runtime_enabled ? "active" : "inactive"}</div><label class="mini" style="margin-top:10px;display:block;"><input type="checkbox" ${enabled ? "checked" : ""} onchange="setEndpointEnabled('${esc(ep.endpoint_id)}', this.checked)"> Endpoint enabled</label></div>`;
+  }).join("") || `<div class="mini">No active endpoints match the current filter.</div>`;
+}
+
+function renderResponses() {
+  document.getElementById("globalDifficulty").value = draft.global_difficulty || "medium";
+  document.getElementById("responseList").innerHTML = activeEndpoints().map(ep => {
+    const override = getOverride(ep.endpoint_id, false);
+    return `<div class="row"><div class="top"><div><div style="font-size:15px;font-weight:700">${esc(ep.endpoint_id)}</div><div class="preview">${pill(ep.method)}<code>${esc(ep.path_pattern)}</code></div></div><div>${pill(ep.runtime_response_profile_id || "inherit")}</div></div><div class="controls"><div class="field"><label>Response profile</label><select class="input" onchange="setResponseProfile('${esc(ep.endpoint_id)}', this.value)"><option value="__inherit__">Inherited</option>${(panelState.response_profiles || []).map(p => `<option value="${esc(p.id)}" ${override?.response_profile_id === p.id ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</select></div><div class="field"><label>Status override</label><input class="input" type="number" min="100" max="599" value="${override?.fixed_status ?? ""}" placeholder="inherit" onchange="setFixedStatus('${esc(ep.endpoint_id)}', this.value)"></div><div class="field"><label>Latency override</label><input class="input" type="number" min="0" value="${override?.latency_ms ?? ""}" placeholder="inherit" onchange="setLatency('${esc(ep.endpoint_id)}', this.value)"></div><div class="field"><label>Backend</label><div style="padding-top:10px">${pill(ep.response_backend, ep.response_backend)}</div></div></div></div>`;
+  }).join("") || `<div class="mini">No active endpoints.</div>`;
+}
+
+function renderPolicies() {
+  if (!isProModular) {
+    document.getElementById("addRuleBtn").style.display = "none";
+    document.getElementById("mutationGrid").style.display = "none";
+    document.getElementById("rulesList").innerHTML = `<div class="upgrade-nudge"><span class="upgrade-nudge-icon">Locked</span> <strong>Pro edition required.</strong> Mutation policy and response rules require a Pro license.<a class="upgrade-nudge-link" href="/dashboard"> View license -></a></div>`;
+    return;
+  }
+  document.getElementById("addRuleBtn").style.display = "";
+  document.getElementById("mutationGrid").style.display = "";
+  document.getElementById("mutationPolicy").value = draft.mutation_config?.policy || "none";
+  document.getElementById("mutationIntensity").value = Number(draft.mutation_config?.intensity || 0);
+  const groups = (panelState.endpoint_groups || []).map(group => ({ id: group.id, name: group.name }));
+  const endpoints = activeEndpoints();
+  document.getElementById("rulesList").innerHTML = (draft.response_rules || []).map((rule, idx) => `<div class="row"><div class="top"><div><div style="font-size:15px;font-weight:700">${esc(rule.id || `rule_${idx + 1}`)}</div><div class="mini" style="margin-top:6px">Rule matching by endpoint_id or endpoint_group_id.</div></div><button class="btn btn-outline" type="button" onclick="removeRule('${esc(rule.id)}')">Remove</button></div><div class="mod-grid cols-3"><div class="field"><label>Endpoint</label><select class="input" onchange="updateRule('${esc(rule.id)}','match.endpoint_id', this.value)"><option value="__none__">Any from group</option>${endpoints.map(ep => `<option value="${esc(ep.endpoint_id)}" ${rule.match?.endpoint_id === ep.endpoint_id ? "selected" : ""}>${esc(ep.endpoint_id)}</option>`).join("")}</select></div><div class="field"><label>Group</label><select class="input" onchange="updateRule('${esc(rule.id)}','match.endpoint_group_id', this.value)"><option value="__none__">No group filter</option>${groups.map(group => `<option value="${esc(group.id)}" ${rule.match?.endpoint_group_id === group.id ? "selected" : ""}>${esc(group.name)}</option>`).join("")}</select></div><div class="field"><label>Method</label><select class="input" onchange="updateRule('${esc(rule.id)}','match.method', this.value)"><option value="__none__">Any</option><option value="GET" ${rule.match?.method === "GET" ? "selected" : ""}>GET</option><option value="POST" ${rule.match?.method === "POST" ? "selected" : ""}>POST</option><option value="PATCH" ${rule.match?.method === "PATCH" ? "selected" : ""}>PATCH</option><option value="PUT" ${rule.match?.method === "PUT" ? "selected" : ""}>PUT</option><option value="DELETE" ${rule.match?.method === "DELETE" ? "selected" : ""}>DELETE</option></select></div></div><div class="mod-grid cols-3" style="margin-top:12px;"><div class="field"><label>User-Agent contains</label><input class="input" value="${esc(rule.match?.user_agent_contains || "")}" onchange="updateRule('${esc(rule.id)}','match.user_agent_contains', this.value)"></div><div class="field"><label>Richness delta</label><input class="input" type="number" min="-2" max="2" value="${rule.action?.richness_delta ?? ""}" onchange="updateRule('${esc(rule.id)}','action.richness_delta', this.value)"></div><div class="field"><label>Force status</label><input class="input" type="number" min="100" max="599" value="${rule.action?.force_status ?? ""}" onchange="updateRule('${esc(rule.id)}','action.force_status', this.value)"></div></div><div class="mod-grid cols-2" style="margin-top:12px;"><div class="field"><label>Extra latency ms</label><input class="input" type="number" min="0" max="5000" value="${rule.action?.extra_latency_ms ?? ""}" onchange="updateRule('${esc(rule.id)}','action.extra_latency_ms', this.value)"></div><label class="mini" style="display:flex;align-items:end;"><input type="checkbox" ${rule.enabled !== false ? "checked" : ""} onchange="updateRule('${esc(rule.id)}','enabled', this.checked)"> Rule enabled</label></div></div>`).join("") || `<div class="mini">No rules defined.</div>`;
+}
+
+function renderSecurity() {
+  if (!isProModular) {
+    document.getElementById("securityList").innerHTML = `<div class="upgrade-nudge"><span class="upgrade-nudge-icon">Locked</span> <strong>Pro edition required.</strong> Flaw profiles per endpoint require a Pro license.<a class="upgrade-nudge-link" href="/dashboard"> View license -></a></div>`;
+    return;
+  }
+  document.getElementById("securityList").innerHTML = activeEndpoints().map(ep => {
+    const override = getOverride(ep.endpoint_id, false);
+    const selected = override?.flaw_profile_id;
+    const current = selected && selected !== "" ? selected : ep.runtime_flaw_profile_id;
+    const desc = current && flawIndex[current] ? flawIndex[current].description : "The endpoint inherits the flaw from the template, or has no flaw if not applicable.";
+    return `<div class="row"><div class="top"><div><div style="font-size:15px;font-weight:700">${esc(ep.endpoint_id)}</div><div class="mini" style="margin-top:6px">${esc(ep.operation_type)} - ${esc(ep.surface_type)}</div></div><div>${current ? pill(current) : pill("no flaw")}</div></div><div class="mod-grid cols-2"><div class="field"><label>Flaw profile</label><select class="input" onchange="setFlawProfile('${esc(ep.endpoint_id)}', this.value)"><option value="__inherit__" ${selected == null ? "selected" : ""}>Inherited</option><option value="__disabled__" ${selected === "" ? "selected" : ""}>Disable flaw</option>${(ep.supported_flaw_profile_ids || []).map(id => `<option value="${esc(id)}" ${selected === id ? "selected" : ""}>${esc(flawIndex[id]?.name || id)}</option>`).join("")}</select></div><div class="field"><label>Impact</label><div class="mini" style="padding-top:10px">${esc(desc)}</div></div></div></div>`;
+  }).join("") || `<div class="mini">No active endpoints to configure flaws.</div>`;
+}
+
+function renderRuntime() {
+  const runtime = panelState.effective_runtime || {};
+  const stats = runtime.stats || {};
+  document.getElementById("runtimeCards").innerHTML = `<div class="summary"><div class="label">Template</div><div class="value">${esc(runtime.template_id || "n/a")}</div></div><div class="summary"><div class="label">Enabled Endpoints</div><div class="value">${Number(stats.enabled_endpoints || 0)}</div></div><div class="summary"><div class="label">Factory / Runtime</div><div class="value">${derivedState.runtimeFactoryCount} / ${derivedState.runtimeOtherCount}</div></div>`;
+  document.getElementById("runtimeRows").innerHTML = (runtime.endpoints || []).map(ep => `<tr><td><div style="font-weight:700">${esc(ep.endpoint_id)}</div><div class="mini">${esc(ep.method)} ${esc(ep.path_pattern)}</div><div class="mini">${esc((ep.group_names || []).join(", "))}</div></td><td><div>${esc(ep.response_profile_id || "n/a")}</div><div class="mini">difficulty ${esc(ep.difficulty || "n/a")}${ep.fixed_status ? ` - status ${ep.fixed_status}` : ""}</div></td><td><div>${esc(ep.flaw_profile_id || "none")}</div><div class="mini">${esc(ep.operation_type)} - ${esc(ep.resource_type)}</div></td><td>${pill(ep.response_backend, ep.response_backend)}</td></tr>`).join("");
+}
+
+function renderNav() {
+  const navLinks = [{ h: "#overview", l: "Overview" }, { h: "#templates", l: "Templates" }, { h: "#extensions", l: "Extensions" }, { h: "#endpoints", l: "Endpoints" }, { h: "#responses", l: "Responses" }, ...(isProModular ? [{ h: "#policies", l: "Policies" }, { h: "#security", l: "Security" }] : []), { h: "#runtime", l: "Runtime" }];
+  document.getElementById("modNav").innerHTML = navLinks.map(item => `<a href="${item.h}">${esc(item.l)}</a>`).join("");
+}
+
+function renderCore() {
+  const sectionMs = {};
+  measureStep(sectionMs, "nav_ms", renderNav);
+  measureStep(sectionMs, "overview_ms", renderOverview);
+  measureStep(sectionMs, "templates_ms", renderTemplates);
+  measureStep(sectionMs, "extensions_ms", renderExtensions);
+  const metrics = { section_ms: sectionMs, total_ms: sumMetrics(sectionMs) };
+  publishPerf("render_core", metrics);
+  return metrics;
+}
+
+function renderSecondary() {
+  const sectionMs = {};
+  measureStep(sectionMs, "endpoints_ms", renderEndpoints);
+  measureStep(sectionMs, "responses_ms", renderResponses);
+  measureStep(sectionMs, "policies_ms", renderPolicies);
+  measureStep(sectionMs, "security_ms", renderSecurity);
+  measureStep(sectionMs, "runtime_ms", renderRuntime);
+  const metrics = { section_ms: sectionMs, total_ms: sumMetrics(sectionMs) };
+  publishPerf("render_secondary", metrics);
+  return metrics;
+}
+
+function showDeferredPlaceholders() {
+  document.getElementById("endpointList").innerHTML = `<div class="mini">Loading endpoint controls...</div>`;
+  document.getElementById("responseList").innerHTML = `<div class="mini">Loading response controls...</div>`;
+  document.getElementById("rulesList").innerHTML = `<div class="mini">Loading policy controls...</div>`;
+  document.getElementById("securityList").innerHTML = `<div class="mini">Loading security controls...</div>`;
+  document.getElementById("runtimeCards").innerHTML = `<div class="mini">Loading runtime snapshot...</div>`;
+  document.getElementById("runtimeRows").innerHTML = `<tr><td colspan="4"><div class="mini">Loading runtime snapshot...</div></td></tr>`;
+}
+
+function scheduleSecondaryRender() {
+  const token = ++secondaryRenderToken;
+  return new Promise(resolve => {
+    const run = () => {
+      if (token !== secondaryRenderToken) {
+        resolve(null);
+        return;
+      }
+      resolve(renderSecondary());
+    };
+    if (window.requestAnimationFrame) {
+      window.requestAnimationFrame(() => window.setTimeout(run, 0));
+    } else {
+      window.setTimeout(run, 0);
+    }
+  });
+}
+
+function buildPayload() {
+  const endpointConfigs = {};
+  Object.entries(draft.endpoint_configs || {}).forEach(([id, cfg]) => {
+    endpointConfigs[id] = {
+      endpoint_id: id,
+      enabled: cfg.enabled !== false,
+      response_profile_id: cfg.response_profile_id || null,
+      flaw_profile_id: isProModular ? cfg.flaw_profile_id : null,
+      fixed_status: cfg.fixed_status == null || cfg.fixed_status === "" ? null : Number(cfg.fixed_status),
+      latency_ms: cfg.latency_ms == null || cfg.latency_ms === "" ? null : Number(cfg.latency_ms),
+    };
+  });
+  const rules = isProModular ? (draft.response_rules || []).map(rule => ({
+    id: rule.id,
+    enabled: rule.enabled !== false,
+    match: {
+      endpoint_id: rule.match?.endpoint_id || null,
+      endpoint_group_id: rule.match?.endpoint_group_id || null,
+      method: rule.match?.method || null,
+      user_agent_contains: rule.match?.user_agent_contains || null,
+    },
+    action: {
+      richness_delta: rule.action?.richness_delta == null || rule.action?.richness_delta === "" ? null : Number(rule.action.richness_delta),
+      force_status: rule.action?.force_status == null || rule.action?.force_status === "" ? null : Number(rule.action.force_status),
+      extra_latency_ms: rule.action?.extra_latency_ms == null || rule.action?.extra_latency_ms === "" ? null : Number(rule.action.extra_latency_ms),
+    }
+  })) : [];
+  const mutationConfig = isProModular ? { policy: draft.mutation_config?.policy || "none", intensity: Number(draft.mutation_config?.intensity || 0) } : { policy: "none", intensity: 0 };
+  return {
+    base_template_id: draft.base_template_id,
+    enabled_extension_ids: draft.enabled_extension_ids || [],
+    global_difficulty: draft.global_difficulty || "medium",
+    endpoint_configs: endpointConfigs,
+    mutation_config: mutationConfig,
+    response_rules: rules,
+  };
+}
+
+async function saveConfig() {
+  setStatus("Saving configuration...");
+  try {
+    const resp = await fetch("/dashboard/api-modular/instance-config/save", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(buildPayload())
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      throw new Error(data.detail || "save_failed");
+    }
+    setStatus("Configuration saved and runtime cache invalidated.");
+    await loadState();
+  } catch (err) {
+    setStatus(err.message || "save_failed", true);
+  }
+}
+
+function resetDraft() {
+  normaliseDraft();
+  recomputeDerived();
+  setStatus("Draft restored from persisted configuration.");
+  renderCore();
+  scheduleSecondaryRender();
+}
+
+async function loadState() {
+  const loadStarted = performance.now();
+  setStatus("");
+  showDeferredPlaceholders();
+  try {
+    const resp = await fetch("/dashboard/api-modular/state-v2", { cache: "no-store" });
+    const requestMs = round2(performance.now() - loadStarted);
+    const raw = await resp.text();
+    if (!resp.ok) {
+      throw new Error(raw || "load_failed");
+    }
+    const parseStarted = performance.now();
+    panelState = JSON.parse(raw || "{}");
+    const parseMs = round2(performance.now() - parseStarted);
+    isProModular = !!panelState.pro_modular_enabled;
+    initIndexes();
+    normaliseDraft();
+    recomputeDerived();
+    const coreMetrics = renderCore();
+    const firstUsefulRenderMs = round2(performance.now() - loadStarted);
+    const secondaryMetrics = await scheduleSecondaryRender();
+    const interactiveMs = round2(performance.now() - loadStarted);
+    lastLoadMetrics = {
+      request_count: 1,
+      request_order: ["state-v2"],
+      request_ms: requestMs,
+      json_parse_ms: parseMs,
+      first_useful_render_ms: firstUsefulRenderMs,
+      interactive_ms: interactiveMs,
+      payload_bytes: Number(resp.headers.get("X-Api-Modular-Payload-Bytes") || new Blob([raw]).size),
+      backend_total_ms: Number(resp.headers.get("X-Api-Modular-Total-Ms") || 0),
+      backend_db_queries: Number(resp.headers.get("X-Api-Modular-DB-Queries") || 0),
+      render_core_ms: coreMetrics.total_ms,
+      render_secondary_ms: secondaryMetrics ? secondaryMetrics.total_ms : 0,
+      server_timing: resp.headers.get("Server-Timing") || "",
+    };
+    publishPerf("load", lastLoadMetrics);
+    if (PERF_DEBUG) {
+      setStatus(`Load ${lastLoadMetrics.first_useful_render_ms} ms first render / ${lastLoadMetrics.interactive_ms} ms interactive / backend ${lastLoadMetrics.backend_total_ms} ms`, false);
+    }
+  } catch (err) {
+    setStatus(err.message || "load_failed", true);
+    throw err;
+  }
+}
+
 loadState();
 </script>
 {% endblock %}

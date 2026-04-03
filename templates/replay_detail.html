@@ -256,9 +256,9 @@
       Actor
       <a class="link mono" href="/actor/{{ session.actor_id }}">{{ session.actor_id[:16] }}…</a>
       &middot;
-      {% if actor_geo.flag %}{{ actor_geo.flag }}{% endif %}
-      {{ actor_geo.country_name or actor_geo.country_iso2 or '' }}
-      {% if actor_ip %}&middot; <span class="mono">{{ actor_ip }}</span>{% endif %}
+      {% if actor_geo.flag %}{{ actor_geo.flag }} {% endif %}
+      {{ actor_geo.country_name or actor_geo.country_iso2 or 'unknown' }}
+      &middot; <span class="mono">{{ actor_ip or 'unknown' }}</span>
     </div>
   </div>
   <div class="kpis">
@@ -347,14 +347,14 @@
         <div class="score-gauge">
           <div class="score-gauge-fill" style="width:{{ [actor_score, 200]|min / 200 * 100 }}%;"></div>
         </div>
-        {% if actor_geo.flag or actor_geo.country_name %}
+        <div class="sb-row"><span class="sb-label">Source IP</span>
+          <span class="sb-val mono">{{ actor_ip or 'unknown' }}</span></div>
         <div class="sb-row"><span class="sb-label">Country</span>
-          <span class="sb-val">{{ actor_geo.flag or '' }} {{ actor_geo.country_name or actor_geo.country_iso2 or '' }}</span></div>
-        {% endif %}
+          <span class="sb-val">{{ actor_geo.flag or '' }} {{ actor_geo.country_name or actor_geo.country_iso2 or 'unknown' }}</span></div>
         {% if actor_ua %}
         <div class="sb-row" style="flex-direction:column;align-items:flex-start;">
           <span class="sb-label" style="margin-bottom:3px;">User-Agent</span>
-          <span class="mono" style="font-size:0.72rem;color:var(--muted);word-break:break-all;line-height:1.4;">{{ actor_ua[:120] }}{% if actor_ua|length > 120 %}…{% endif %}</span>
+            <span class="mono" style="font-size:0.72rem;color:var(--muted);word-break:break-all;line-height:1.4;">{{ actor_ua[:120] }}{% if actor_ua|length > 120 %}…{% endif %}</span>
         </div>
         {% endif %}
         <div class="sb-row"><span class="sb-label">Errors total</span>

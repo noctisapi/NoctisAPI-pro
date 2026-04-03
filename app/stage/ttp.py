@@ -534,10 +534,45 @@ _EVIDENCE_MATCHERS: dict[str, object] = {
 }
 
 
+def _geo_from_row(row: dict) -> tuple[str, str]:
+    """Return (flag_emoji, country_name) from a step or event row.
+
+    Steps store geo in geo_json column: {"country_iso2","country_name","flag"}.
+    Events store geo in extra_json under the "geo" key.
+    """
+    # Step: geo_json column
+    geo_raw = row.get("geo_json")
+    if geo_raw:
+        try:
+            geo = json.loads(geo_raw) if isinstance(geo_raw, str) else geo_raw
+            if isinstance(geo, dict):
+                return geo.get("flag") or "", geo.get("country_name") or ""
+        except Exception:
+            pass
+    # Event: extra_json → geo
+    extra_raw = row.get("extra_json")
+    if extra_raw:
+        try:
+            extra = _parse_extra(extra_raw)
+            geo = extra.get("geo") or {}
+            if isinstance(geo, dict):
+                iso2 = geo.get("country_iso2") or ""
+                flag = geo.get("flag") or ""
+                if not flag and iso2 and len(iso2) == 2:
+                    flag = "".join(
+                        chr(0x1F1E6 + ord(c) - ord("A")) for c in iso2.upper()
+                    )
+                return flag, geo.get("country_name") or ""
+        except Exception:
+            pass
+    return "", ""
+
+
 def _collect_evidence(key: str, steps: list[dict], events: list[dict], max_rows: int = 6) -> list[dict]:
     """Return up to max_rows matching requests as evidence for a technique key.
 
     Evidence is for display only — it never drives TTP classification.
+    Each row includes geo_flag and geo_name for flag rendering in the UI.
     """
     matcher = _EVIDENCE_MATCHERS.get(key)
     if matcher is None:
@@ -550,13 +585,16 @@ def _collect_evidence(key: str, steps: list[dict], events: list[dict], max_rows:
             break
         try:
             if matcher(row):
+                geo_flag, geo_name = _geo_from_row(row)
                 results.append({
-                    "method": str(row.get("method") or "—").upper(),
-                    "path":   str(row.get("path") or "—"),
-                    "status": str(_row_status(row) or "—"),
-                    "ip":     str(row.get("ip") or ""),
-                    "ts":     str(row.get("ts") or ""),
-                    "kind":   str(row.get("kind") or ""),
+                    "method":   str(row.get("method") or "—").upper(),
+                    "path":     str(row.get("path") or "—"),
+                    "status":   str(_row_status(row) or "—"),
+                    "ip":       str(row.get("ip") or ""),
+                    "geo_flag": geo_flag,
+                    "geo_name": geo_name,
+                    "ts":       str(row.get("ts") or ""),
+                    "kind":     str(row.get("kind") or ""),
                 })
         except Exception:
             pass

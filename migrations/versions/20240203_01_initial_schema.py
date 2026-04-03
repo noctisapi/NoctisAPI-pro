@@ -116,7 +116,10 @@ SCHEMA_STATEMENTS = [
       response_status INTEGER,
       response_json TEXT,
       stage_before INTEGER,
-      stage_after INTEGER
+      stage_after INTEGER,
+      ip TEXT,
+      ua TEXT,
+      geo_json TEXT
     )
     """,
     """

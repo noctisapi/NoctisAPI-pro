@@ -74,7 +74,7 @@
         <tr>
           <th data-type="text" style="width:140px;">Session</th>
           <th data-type="text" style="width:140px;">Actor</th>
-          <th data-type="text" style="width:60px;">Geo</th>
+          <th data-type="text" style="width:190px;">Source</th>
           <th data-type="date">Started</th>
           <th data-type="text">Duration</th>
           <th data-type="number" style="width:80px;">Steps</th>
@@ -95,9 +95,12 @@
             <a class="link mono" style="font-size:0.8rem;"
                href="/actor/{{ s.actor_id }}">{{ s.actor_id[:14] }}…</a>
           </td>
-          <td class="mono ip-cell" style="font-size:0.9rem;">
-            {% if s.geo_flag %}{{ s.geo_flag }}{% endif %}
-            <span class="muted" style="font-size:0.75rem;">{{ s.geo_country }}</span>
+          <td class="mono ip-cell" style="font-size:0.82rem;">
+            <div>{{ s.ip or 'unknown' }}</div>
+            <div class="muted" style="font-size:0.75rem;">
+              {% if s.geo_flag %}{{ s.geo_flag }} {% endif %}
+              {{ s.geo_name or s.geo_country or 'unknown' }}
+            </div>
           </td>
           <td class="mono">{{ s.started_fmt }}</td>
           <td class="rp-dur">

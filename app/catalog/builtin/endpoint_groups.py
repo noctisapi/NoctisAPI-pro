@@ -30,6 +30,7 @@ AUTH_LOGIN = EndpointDefinition(
     supported_flaw_profile_ids=("broken_auth_basic", "excessive_data_basic", "sqli_hint_basic"),
     tags=("T1110", "credential_access"),
     description="Fake login endpoint. Returns a bearer token on any credentials.",
+    vulnerability_type="AUTH_BYPASS",
 )
 
 AUTH_REGISTER = EndpointDefinition(
@@ -43,6 +44,7 @@ AUTH_REGISTER = EndpointDefinition(
     default_response_profile_id="standard_medium",
     supported_flaw_profile_ids=("excessive_data_basic",),
     description="Registration endpoint. Records actor interest in account creation.",
+    vulnerability_type="ENUMERATION",
 )
 
 AUTH_MFA = EndpointDefinition(
@@ -57,6 +59,7 @@ AUTH_MFA = EndpointDefinition(
     supported_flaw_profile_ids=("broken_auth_basic",),
     tags=("T1078", "credential_bypass"),
     description="MFA bypass trap. Accepts any OTP code.",
+    vulnerability_type="WEAK_AUTH",
 )
 
 AUTH_PASSWORD_RESET = EndpointDefinition(
@@ -70,6 +73,7 @@ AUTH_PASSWORD_RESET = EndpointDefinition(
     default_response_profile_id="standard_medium",
     supported_flaw_profile_ids=(),
     description="Password reset request endpoint.",
+    vulnerability_type="ENUMERATION",
 )
 
 GROUP_AUTH_FLOWS = EndpointGroupDefinition(
@@ -92,6 +96,7 @@ USERS_LIST = EndpointDefinition(
     default_response_profile_id="standard_medium",
     supported_flaw_profile_ids=("idor_basic", "excessive_data_basic", "sqli_hint_basic"),
     description="User list. Returns paginated fake users.",
+    vulnerability_type="ENUMERATION",
 )
 
 USERS_GET = EndpointDefinition(
@@ -106,6 +111,7 @@ USERS_GET = EndpointDefinition(
     supported_flaw_profile_ids=("idor_basic", "idor_advanced", "excessive_data_basic"),
     tags=("T1530",),
     description="Get user by ID. Primary IDOR trap.",
+    vulnerability_type="IDOR",
 )
 
 USERS_UPDATE = EndpointDefinition(
@@ -119,6 +125,7 @@ USERS_UPDATE = EndpointDefinition(
     default_response_profile_id="standard_medium",
     supported_flaw_profile_ids=("idor_basic", "idor_advanced"),
     description="Update user profile. IDOR allows updating other users.",
+    vulnerability_type="IDOR",
 )
 
 GROUP_USER_MANAGEMENT = EndpointGroupDefinition(
@@ -140,6 +147,7 @@ ORDERS_LIST = EndpointDefinition(
     default_response_profile_id="standard_medium",
     supported_flaw_profile_ids=("idor_basic", "excessive_data_basic"),
     description="Order list endpoint.",
+    vulnerability_type="DATA_EXPOSURE",
 )
 
 ORDERS_GET = EndpointDefinition(
@@ -154,6 +162,7 @@ ORDERS_GET = EndpointDefinition(
     supported_flaw_profile_ids=("idor_basic", "idor_advanced", "excessive_data_basic"),
     tags=("T1530",),
     description="Get order by ID. Classic IDOR target.",
+    vulnerability_type="IDOR",
 )
 
 ORDERS_CREATE = EndpointDefinition(
@@ -167,6 +176,7 @@ ORDERS_CREATE = EndpointDefinition(
     default_response_profile_id="standard_medium",
     supported_flaw_profile_ids=(),
     description="Create order endpoint.",
+    vulnerability_type="DATA_EXPOSURE",
 )
 
 GROUP_ORDER_MANAGEMENT = EndpointGroupDefinition(
@@ -189,6 +199,7 @@ ADMIN_HOME = EndpointDefinition(
     supported_flaw_profile_ids=("broken_auth_basic",),
     tags=("T1078", "admin_access"),
     description="Admin home page trap.",
+    vulnerability_type="PRIV_ESC",
 )
 
 ADMIN_USERS_LIST = EndpointDefinition(
@@ -203,6 +214,7 @@ ADMIN_USERS_LIST = EndpointDefinition(
     supported_flaw_profile_ids=("broken_auth_basic", "excessive_data_basic"),
     tags=("T1087", "user_enumeration"),
     description="Admin user enumeration endpoint.",
+    vulnerability_type="PRIV_ESC",
 )
 
 ADMIN_AUDIT_LOG = EndpointDefinition(
@@ -217,6 +229,7 @@ ADMIN_AUDIT_LOG = EndpointDefinition(
     supported_flaw_profile_ids=("broken_auth_basic",),
     tags=("T1005", "audit_access"),
     description="Admin audit log. Attracts actors looking for logged activity.",
+    vulnerability_type="DATA_EXPOSURE",
 )
 
 GROUP_ADMIN_PANEL = EndpointGroupDefinition(
@@ -240,6 +253,7 @@ RECON_ENV = EndpointDefinition(
     include_in_schema=False,
     tags=("T1552", "credential_exposure", "recon"),
     description="Exposed .env file. Returns fake credentials.",
+    vulnerability_type="DATA_EXPOSURE",
 )
 
 RECON_CONFIG = EndpointDefinition(
@@ -255,6 +269,7 @@ RECON_CONFIG = EndpointDefinition(
     include_in_schema=False,
     tags=("T1552", "config_exposure", "recon"),
     description="Exposed config file.",
+    vulnerability_type="DATA_EXPOSURE",
 )
 
 RECON_OPENAPI = EndpointDefinition(
@@ -269,6 +284,7 @@ RECON_OPENAPI = EndpointDefinition(
     supported_flaw_profile_ids=(),
     tags=("recon",),
     description="OpenAPI spec exposure.",
+    vulnerability_type="ENUMERATION",
 )
 
 GROUP_RECON = EndpointGroupDefinition(
@@ -292,6 +308,7 @@ SECRETS_ADMIN = EndpointDefinition(
     include_in_schema=False,
     tags=("T1552", "T1078", "secret_access"),
     description="Admin secrets endpoint. Critical trap — very high score.",
+    vulnerability_type="DATA_EXPOSURE",
 )
 
 BACKUP_LIST = EndpointDefinition(
@@ -307,6 +324,7 @@ BACKUP_LIST = EndpointDefinition(
     include_in_schema=False,
     tags=("T1530", "data_exfiltration"),
     description="Backup listing. Attracts data exfiltration attempts.",
+    vulnerability_type="ENUMERATION",
 )
 
 BACKUP_DOWNLOAD = EndpointDefinition(
@@ -322,6 +340,7 @@ BACKUP_DOWNLOAD = EndpointDefinition(
     include_in_schema=False,
     tags=("T1530", "data_exfiltration"),
     description="Backup download trap. Highest scoring non-root endpoint.",
+    vulnerability_type="BULK_EXFIL",
 )
 
 GROUP_CRITICAL_TRAPS = EndpointGroupDefinition(
@@ -344,6 +363,7 @@ FILES_UPLOAD = EndpointDefinition(
     supported_flaw_profile_ids=(),
     tags=("T1105", "file_upload"),
     description="File upload trap.",
+    vulnerability_type="COMMAND_EXECUTION",
 )
 
 FILES_DOWNLOAD = EndpointDefinition(
@@ -358,6 +378,7 @@ FILES_DOWNLOAD = EndpointDefinition(
     supported_flaw_profile_ids=("path_traversal_basic",),
     tags=("T1005", "T1083"),
     description="File download. Path traversal trap.",
+    vulnerability_type="DATA_EXPOSURE",
 )
 
 GROUP_FILE_SERVER = EndpointGroupDefinition(
@@ -380,6 +401,7 @@ WEBHOOKS_GITHUB = EndpointDefinition(
     supported_flaw_profile_ids=("broken_auth_basic",),
     tags=("T1195", "supply_chain", "devops"),
     description="GitHub webhook receiver.",
+    vulnerability_type="COMMAND_EXECUTION",
 )
 
 WEBHOOKS_GITLAB = EndpointDefinition(
@@ -394,6 +416,7 @@ WEBHOOKS_GITLAB = EndpointDefinition(
     supported_flaw_profile_ids=("broken_auth_basic",),
     tags=("T1195", "supply_chain", "devops"),
     description="GitLab webhook receiver.",
+    vulnerability_type="COMMAND_EXECUTION",
 )
 
 GROUP_WEBHOOKS = EndpointGroupDefinition(

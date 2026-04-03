@@ -314,6 +314,7 @@ def build_effective_runtime_config(
             extension_ids=extension_ids,
             group_ids=endpoint_groups.get(endpoint_id, ()),
             has_instance_override=endpoint_config is not None,
+            vulnerability_type=endpoint_def.vulnerability_type,
         )
 
     effective_rules: list[EffectiveResponseRule] = []

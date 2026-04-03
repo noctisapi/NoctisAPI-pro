@@ -100,6 +100,7 @@ class EffectiveEndpoint:
     extension_ids: tuple[str, ...]
     group_ids: tuple[str, ...] = ()
     has_instance_override: bool = False
+    vulnerability_type: Optional[str] = None
 
 
 @dataclass

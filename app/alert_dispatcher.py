@@ -26,6 +26,8 @@ import threading
 import time
 from typing import List, Optional
 
+from app.stage.threat_level import STAGE_LABELS, stage_label as _stage_label_fn
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -107,22 +109,9 @@ def _webhook_format() -> str:
 # ---------------------------------------------------------------------------
 # Payload builders
 # ---------------------------------------------------------------------------
-_STAGE_LABELS = {0: "0–Idle", 1: "1–Curious", 2: "2–Exploring", 3: "3–Probing",
-                 4: "4–Targeting", 5: "5–Aggressive", 6: "6–Exploiting",
-                 7: "7–Persistent", 8: "8–Critical"}
-
-
+# _STAGE_LABELS and _stage_label now delegate to app.stage.threat_level.
 def _stage_label(score: int) -> str:
-    if score < 10:   stage = 0
-    elif score < 20: stage = 1
-    elif score < 32: stage = 2
-    elif score < 48: stage = 3
-    elif score < 68: stage = 4
-    elif score < 92: stage = 5
-    elif score < 120: stage = 6
-    elif score < 155: stage = 7
-    else:             stage = 8
-    return _STAGE_LABELS.get(stage, str(stage))
+    return _stage_label_fn(score)
 
 
 def _severity_emoji(kind: str, score_delta: int) -> str:

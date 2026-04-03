@@ -9,6 +9,8 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
+from app.stage.threat_level import stage_from_score  # canonical — do not redefine
+
 
 PRO_STATE_TABLE = "campaign_pro_state"
 PRO_STATUS_VERIFIED = "verified"
@@ -235,26 +237,7 @@ def classify_behavior_pattern(
 # ---------------------------------------------------------------------------
 # Scoring utilities
 # ---------------------------------------------------------------------------
-
-def stage_from_score(score: int) -> int:
-    if score < 10:
-        return 0
-    if score < 20:
-        return 1
-    if score < 32:
-        return 2
-    if score < 48:
-        return 3
-    if score < 68:
-        return 4
-    if score < 92:
-        return 5
-    if score < 120:
-        return 6
-    if score < 155:
-        return 7
-    return 8
-
+# stage_from_score imported from app.stage.threat_level at top of file.
 
 def canonical_json_bytes(obj: Any) -> bytes:
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
