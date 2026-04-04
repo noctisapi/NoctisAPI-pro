@@ -53,6 +53,7 @@ from app.geoip import close_reader as _close_geoip_reader
 from app.geoip import lookup_country as _lookup_geoip_country
 from app.geoip import normalize_geo_dict as _normalize_geo_dict
 from app.geoip import warmup_reader as _warmup_geoip_reader
+from app.fake_data import fake_merchant_name, fake_person_identity
 from app.no_cache import NoCacheMiddleware
 
 APP_TITLE = os.getenv("HP_API_TITLE", "Account Service API")
@@ -2403,11 +2404,12 @@ def _fake_users(actor_id: str, limit: int = 20, offset: int = 0) -> List[Dict[st
     users = []
     for _ in range(limit):
         uid = f"u_{rng.randint(10000, 99999)}"
+        identity = fake_person_identity(rng)
         users.append(
             {
                 "id": uid,
-                "email": f"user{rng.randint(100, 999)}@example.com",
-                "name": f"User {rng.randint(100, 999)}",
+                "email": identity["email"],
+                "name": identity["name"],
                 "status": rng.choice(["active", "pending", "locked"]),
                 "created_at": _utc_now_iso(),
             }
@@ -2441,7 +2443,7 @@ def _fake_transactions(actor_id: str, limit: int = 20, offset: int = 0) -> List[
                 "amount": round(rng.uniform(4.0, 1200.0), 2),
                 "currency": rng.choice(["USD", "EUR", "GBP"]),
                 "status": rng.choice(["settled", "pending", "rejected"]),
-                "merchant": rng.choice(["Acme Corp", "Globex", "Initrode", "Umbrella"]),
+                "merchant": fake_merchant_name(rng),
                 "timestamp": _utc_now_iso(),
             }
         )

@@ -28,6 +28,7 @@ from datetime import datetime, time as dt_time, timezone, timedelta
 from typing import Any, Optional
 
 from app.catalog.types import Difficulty, OperationType, ResourceType
+from app.fake_data import fake_person_identity
 
 
 # ── Seeding ───────────────────────────────────────────────────────────────────
@@ -53,9 +54,7 @@ def _fake_uuid(rng: random.Random) -> str:
 
 
 def _fake_email(rng: random.Random) -> str:
-    names = ["alice", "bob", "charlie", "dana", "eve", "frank", "grace", "henry"]
-    domains = ["example.com", "corp.internal", "acme.io", "testorg.net"]
-    return f"{rng.choice(names)}{rng.randint(1, 99)}@{rng.choice(domains)}"
+    return fake_person_identity(rng)["email"]
 
 
 def _fake_jwt(rng: random.Random) -> str:
@@ -113,15 +112,17 @@ def _fake_ip(rng: random.Random) -> str:
 
 def _user_object(rng: random.Random, difficulty: Difficulty, user_id: Optional[str] = None) -> dict:
     uid = user_id or _fake_id(rng, "usr_")
+    identity = fake_person_identity(rng)
     base = {
         "id": uid,
-        "email": _fake_email(rng),
+        "name": identity["name"],
+        "email": identity["email"],
         "role": rng.choice(["user", "admin", "moderator"]),
     }
     if difficulty == Difficulty.BASIC:
         return base
     base.update({
-        "username": _fake_id(rng, "", 8),
+        "username": identity["username"],
         "status": rng.choice(["active", "suspended", "pending"]),
         "created_at": _fake_iso_ts(rng, 365),
         "updated_at": _fake_iso_ts(rng, 30),

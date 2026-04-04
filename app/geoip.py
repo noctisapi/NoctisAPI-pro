@@ -17,6 +17,10 @@ _reader_path = ""
 _warned_keys: set[str] = set()
 
 
+class _GeoIPUnavailable(Exception):
+    """Reader not ready — raised so lru_cache does NOT store the miss."""
+
+
 def _warn_once(key: str, message: str, *, logger: Optional[logging.Logger] = None) -> None:
     if key in _warned_keys:
         return
@@ -162,7 +166,9 @@ def close_reader() -> None:
 def _lookup_country_cached(ip_s: str, mmdb_path: str) -> tuple[str, str]:
     reader = _load_reader(mmdb_path)
     if reader is None:
-        return ("", "")
+        # Raise so lru_cache does NOT store this miss — next call will retry
+        # once the reader becomes available (e.g. after volume mount).
+        raise _GeoIPUnavailable(mmdb_path)
     try:
         response = reader.country(ip_s)
         iso2 = str(response.country.iso_code or "").strip().upper()
@@ -183,7 +189,10 @@ def get_country_code(
     resolved_path = get_geoip_db_path(mmdb_path)
     if not warmup_reader(resolved_path, logger=logger):
         return None
-    iso2, _name = _lookup_country_cached(ip, resolved_path)
+    try:
+        iso2, _ = _lookup_country_cached(ip, resolved_path)
+    except _GeoIPUnavailable:
+        return None
     return iso2 or None
 
 
@@ -197,7 +206,10 @@ def lookup_country(
     if not iso2:
         return {}
     resolved_path = get_geoip_db_path(mmdb_path)
-    cached_iso2, cached_name = _lookup_country_cached(ip_s, resolved_path)
+    try:
+        cached_iso2, cached_name = _lookup_country_cached(ip_s, resolved_path)
+    except _GeoIPUnavailable:
+        return {}
     normalized = normalize_geo_dict(
         {
             "country_iso2": cached_iso2,
