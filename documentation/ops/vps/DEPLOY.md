@@ -75,7 +75,7 @@ nano .env.prod
 | `HONEYPOT_MONITOR_UA` | `HealthCheck/1.0,curl/` | Monitor user-agent list |
 | `HP_DB_PATH` | `/data/honeypot.db` | Container volume path |
 | `DATABASE_URL` | `sqlite+pysqlite:////data/honeypot.db` | Container volume path |
-| `HP_GEOIP_DB` | `/app/data/GeoLite2-Country.mmdb` | Container path |
+| `HP_ASN_RESOLVER_URL` | `https://ipwho.is/{ip}` | HTTP geo/asn resolver template; must contain `{ip}` |
 | `HP_LICENSE_MODE` | `offline` | Licensing mode |
 | `INSTANCE_ID_PATH` | `/var/lib/myapp/instance_id` | PRO licensing persistence |
 | `HP_OFFLINE_LICENSE_PATH` | `/var/lib/myapp/license.json` | PRO license file path |
@@ -107,22 +107,14 @@ See [`docs/siem_integration.md`](../../../docs/siem_integration.md) for Filebeat
 
 ---
 
-## 5. GeoIP database (for country flags)
+## 5. Geo resolver (for country flags)
 
-MaxMind GeoLite2 is not included. Download it free from [maxmind.com](https://www.maxmind.com/en/geolite2/signup):
+The app resolves country data through an HTTP ASN resolver. By default it uses `https://ipwho.is/{ip}`; override it if you run your own service.
 
 ```bash
 mkdir -p /opt/hp-app/data
-# Place GeoLite2-Country.mmdb at: /opt/hp-app/data/GeoLite2-Country.mmdb
-export GEOIP_DB_PATH=/opt/hp-app/data/GeoLite2-Country.mmdb
-```
-
-Or use the update script:
-
-```bash
-export MAXMIND_ACCOUNT_ID=...
-export MAXMIND_LICENSE_KEY=...
-bash ops/geoip/update_geoip.sh
+# Optional override:
+export HP_ASN_RESOLVER_URL=https://ipwho.is/{ip}
 ```
 
 ---
@@ -184,7 +176,6 @@ git pull
 docker build -t ghcr.io/0x-unkwn0wn/noctisapi-pro:latest .
 docker compose --env-file .env.prod -f compose/docker-compose.prod.yml up -d --force-recreate
 ```
-
 ---
 
 ## 11. Data retention (optional)
@@ -221,3 +212,4 @@ An old container is still running. Run `docker compose ... down` first.
 docker build -t ghcr.io/0x-unkwn0wn/noctisapi-pro:latest .
 docker compose --env-file .env.prod -f compose/docker-compose.prod.yml up -d --force-recreate
 ```
+

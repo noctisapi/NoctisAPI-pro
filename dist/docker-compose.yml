@@ -7,7 +7,7 @@ services:
   migrate:
     image: ${HP_IMAGE:-noctisapi/noctisapi-pro}:${APP_VERSION:-latest}
     user: "0:0"
-    command: ["sh", "-c", "chown -R 10001:0 /data /var/lib/myapp && alembic upgrade head && python scripts/download_geoip.py"]
+    command: ["sh", "-c", "chown -R 10001:0 /data /var/lib/myapp && alembic upgrade head"]
     env_file:
       - .env
     volumes:

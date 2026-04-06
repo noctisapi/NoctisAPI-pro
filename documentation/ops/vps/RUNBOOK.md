@@ -86,15 +86,12 @@ Traefik handles certificates automatically via ACME HTTP-01.
    - `docker compose -f compose/docker-compose.prod.yml --env-file .env.prod run --rm --user 0:0 app sh -c "chown -R 10001:0 /data /var/lib/myapp"`
    - then re-run `bash /opt/hp-app/ops/vps/deploy.sh`
 
-## Phase 5.1: GeoIP database (flags)
-MaxMind GeoLite2 is not committed to git. Download it on the server:
-1. Export credentials:
-   - `export MAXMIND_ACCOUNT_ID=...`
-   - `export MAXMIND_LICENSE_KEY=...`
-2. Run:
-   - `bash /opt/hp-app/ops/geoip/update_geoip.sh`
-3. Ensure `.env.prod` uses:
-   - `HP_GEOIP_DB=/app/data/GeoLite2-Country.mmdb`
+## Phase 5.1: Geo resolver (country flags)
+Geo enrichment now uses an HTTP ASN resolver. Configure it in `.env.prod` if you need to override the default service:
+1. Set the resolver URL (optional):
+   - `HP_ASN_RESOLVER_URL=https://ipwho.is/{ip}`
+2. Restart the stack:
+   - `docker compose --env-file /opt/hp-app/.env.prod -f /opt/hp-app/docker-compose.prod.yml restart app admin`
 
 ## Phase 5.2: Data Retention (TTL)
 1. Copy retention cron:

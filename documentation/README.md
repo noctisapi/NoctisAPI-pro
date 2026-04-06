@@ -165,7 +165,7 @@ Steps:
    - `LOG_LEVEL=info`
    - `HP_PUBLIC_BASE_URL=<https://public-domain>` (used in download URLs exposed by the NoctisAPI honeypot API)
    - `HP_PUBLIC_HOST=<public-domain>` (Traefik routing)
-   - `HP_GEOIP_DB=/app/data/GeoLite2-Country.mmdb`
+   - `HP_ASN_RESOLVER_URL=https://ipwho.is/{ip}`
    - `HP_SEED=<long random secret>` (stable seed for actor ids + secrets)
    - `HP_ACTOR_UA_MODE=family` (optional, controls actor identity logic)
    - `HONEYPOT_PUBLIC_BASE_URL=https://<public-domain>`

@@ -126,7 +126,7 @@ docker compose --env-file .env -f compose/docker-compose.prod.yml up -d
 
 The first run:
 1. Applies database migrations
-2. Downloads the GeoIP database (if `MAXMIND_ACCOUNT_ID` is set)
+2. Initializes live geo resolution through the configured ASN resolver
 3. Starts the public API on port 8000 (behind Traefik on 443)
 4. Starts the admin panel on port 9001 (localhost only)
 
