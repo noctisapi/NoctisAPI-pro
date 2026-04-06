@@ -646,6 +646,7 @@ All checks share the `EGRESS_CONNECT_TIMEOUT` setting (default 5 s).
 | `BUILD_TIME` | *(unset)* | Build timestamp injected by CI, surfaced in `/version`. |
 | `HP_DB_PATH` | `/data/honeypot.db` | SQLite database path inside the container. |
 | `HP_SEED` | *(required)* | Long random secret used to seed actor identity hashing. Must remain stable across restarts. |
+| `HP_BACKUP_TOKEN_MIN_STAGE` | `1` | Threat level required before `/v1/keys` emits the backup-token lure. |
 | `HP_PUBLIC_BASE_URL` | `http://127.0.0.1:8080` | Internal address of the public API (used by the admin panel to fetch the OpenAPI catalogue). Use the Docker service name: `http://app:8000`. |
 
 ### 7.8 Licensing / PRO
@@ -726,6 +727,7 @@ EGRESS_CONNECT_TIMEOUT=5
 
 # ── Application secrets ────────────────────────────────────────────────────
 HP_SEED=<generate with: python -c "import secrets; print(secrets.token_hex(32))">
+HP_BACKUP_TOKEN_MIN_STAGE=1
 LICENSE_KEY=sk_live_...
 PRO_BACKEND_URL=https://pro-backend.example.com
 LICENSING_URL=https://license.noctisapi.com

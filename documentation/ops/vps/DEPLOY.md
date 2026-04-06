@@ -76,6 +76,7 @@ nano .env.prod
 | `HP_DB_PATH` | `/data/honeypot.db` | Container volume path |
 | `DATABASE_URL` | `sqlite+pysqlite:////data/honeypot.db` | Container volume path |
 | `HP_ASN_RESOLVER_URL` | `https://ipwho.is/{ip}` | HTTP geo/asn resolver template; must contain `{ip}` |
+| `HP_BACKUP_TOKEN_MIN_STAGE` | `1` | Threat level required before `/v1/keys` emits `backup_token` |
 | `HP_LICENSE_MODE` | `offline` | Licensing mode |
 | `INSTANCE_ID_PATH` | `/var/lib/myapp/instance_id` | PRO licensing persistence |
 | `HP_OFFLINE_LICENSE_PATH` | `/var/lib/myapp/license.json` | PRO license file path |

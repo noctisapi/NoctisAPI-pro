@@ -57,6 +57,7 @@ This runbook covers:
     - `HP_SEED=<long random secret>` (stable actor IDs + secrets)
     - `HP_REQUIRE_SEED=1` (optional, fail startup if HP_SEED is missing/placeholder)
     - `HP_ACTOR_UA_MODE=family` (recommended; `ip` or `full` also supported)
+    - `HP_BACKUP_TOKEN_MIN_STAGE=1` (threat level required before `/v1/keys` emits `backup_token`)
     - `PRO_BACKEND_URL=https://pro-backend.example.com` (required for PRO validation)
     - `LICENSE_KEY=sk_live_...` (end-user input)
     - `LICENSING_URL=https://license.noctisapi.com` (alternate backend)

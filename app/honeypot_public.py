@@ -59,6 +59,18 @@ from app.no_cache import NoCacheMiddleware
 APP_TITLE = os.getenv("HP_API_TITLE", "Account Service API")
 APP_VERSION = os.getenv("HP_API_VERSION", "1.0.0")
 
+
+def _env_int(name: str, default: int, min_value: int, max_value: int) -> int:
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return max(min_value, min(max_value, value))
+
+
 DB_PATH = os.getenv("HP_DB_PATH", "/data/honeypot.db")
 HP_SEED = os.getenv("HP_SEED", "CHANGE_ME_LONG_RANDOM_SEED")
 HP_REQUIRE_SEED = (os.getenv("HP_REQUIRE_SEED", "") or "").strip().lower() in ("1", "true", "yes")
@@ -69,6 +81,7 @@ HP_PUBLIC_BASE_URL = (
     or ("https://" + _hp_host if _hp_host else "http://127.0.0.1:8080")
 ).rstrip("/")
 HP_ACTOR_UA_MODE = os.getenv("HP_ACTOR_UA_MODE", "family").strip().lower()
+HP_BACKUP_TOKEN_MIN_STAGE = _env_int("HP_BACKUP_TOKEN_MIN_STAGE", 1, 0, 8)
 # Monitor bypass requires a secret; if unset the bypass is disabled entirely.
 _HP_MONITOR_SECRET = os.getenv("HP_MONITOR_SECRET", "").strip()
 
@@ -2357,7 +2370,7 @@ async def list_keys(request: Request, token: str = Depends(require_bearer)):
             api_key = _get_or_create_secret(conn, actor_id, "api_key", "ak_live")
 
             backup_token = None
-            if stage >= 3:
+            if stage >= HP_BACKUP_TOKEN_MIN_STAGE:
                 backup_token = _get_or_create_secret(conn, actor_id, "backup_token", "bkp")
 
             _bump_actor(conn, actor_id, score_delta=_score_for("keys_issued"))
