@@ -49,6 +49,9 @@ Thumbs.db
 # Tests (local only, not shipped in the public image)
 tests/
 
+# Internal probes (local only)
+scripts/probe_actor_flow.py
+
 # Build / cache
 build/
 # dist/ is intentionally tracked — customer-facing deploy files

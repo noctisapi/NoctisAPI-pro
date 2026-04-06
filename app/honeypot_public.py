@@ -71,6 +71,13 @@ def _env_int(name: str, default: int, min_value: int, max_value: int) -> int:
     return max(min_value, min(max_value, value))
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    raw = (os.getenv(name) or "").strip().lower()
+    if not raw:
+        return bool(default)
+    return raw in ("1", "true", "yes", "on")
+
+
 DB_PATH = os.getenv("HP_DB_PATH", "/data/honeypot.db")
 HP_SEED = os.getenv("HP_SEED", "CHANGE_ME_LONG_RANDOM_SEED")
 HP_REQUIRE_SEED = (os.getenv("HP_REQUIRE_SEED", "") or "").strip().lower() in ("1", "true", "yes")
@@ -82,6 +89,8 @@ HP_PUBLIC_BASE_URL = (
 ).rstrip("/")
 HP_ACTOR_UA_MODE = os.getenv("HP_ACTOR_UA_MODE", "family").strip().lower()
 HP_BACKUP_TOKEN_MIN_STAGE = _env_int("HP_BACKUP_TOKEN_MIN_STAGE", 1, 0, 8)
+HP_REPLAY_CAPTURE_RESPONSE_BODY = _env_bool("HP_REPLAY_CAPTURE_RESPONSE_BODY", True)
+HP_REPLAY_RESPONSE_BODY_MAX_BYTES = _env_int("HP_REPLAY_RESPONSE_BODY_MAX_BYTES", 32768, 0, 262144)
 # Monitor bypass requires a secret; if unset the bypass is disabled entirely.
 _HP_MONITOR_SECRET = os.getenv("HP_MONITOR_SECRET", "").strip()
 
@@ -851,6 +860,7 @@ def _insert_event(
     kind: str,
     status: int,
     body: bytes = b"",
+    response_json: Optional[str] = None,
     token: Optional[str] = None,
     extra: Optional[Dict[str, Any]] = None,
     points_delta: Optional[int] = None,
@@ -1035,7 +1045,7 @@ def _insert_event(
                 headers_json,
                 body_json,
                 int(status),
-                None,
+                response_json,
                 stage_before,
                 stage_after,
                 ip,
@@ -1684,6 +1694,52 @@ def _load_text_from_response(response: Any, body: Any = None) -> Optional[str]:
     return raw
 
 
+def _rebuild_response_with_body(response: Any, body: bytes) -> Any:
+    headers = {k: v for k, v in response.headers.items() if k.lower() != "content-length"}
+    return Response(
+        status_code=int(getattr(response, "status_code", 200) or 200),
+        content=body,
+        headers=headers,
+        media_type=getattr(response, "media_type", None),
+        background=getattr(response, "background", None),
+    )
+
+
+async def _capture_replay_response_body(response: Any) -> Tuple[Any, Optional[str]]:
+    """Capture small JSON/text responses for Replay without breaking ASGI delivery."""
+    if not HP_REPLAY_CAPTURE_RESPONSE_BODY or HP_REPLAY_RESPONSE_BODY_MAX_BYTES <= 0:
+        return response, None
+    status_code = int(getattr(response, "status_code", 0) or 0)
+    if status_code in (204, 304):
+        return response, None
+
+    ctype = _response_content_type(response)
+    if "json" not in ctype and "text/plain" not in ctype:
+        return response, None
+
+    had_iterator = getattr(response, "body", None) is None and getattr(response, "body_iterator", None) is not None
+    try:
+        raw_body = await _read_response_body(response)
+    except Exception:
+        return response, None
+
+    if had_iterator:
+        response = _rebuild_response_with_body(response, raw_body)
+
+    if not raw_body or len(raw_body) > HP_REPLAY_RESPONSE_BODY_MAX_BYTES:
+        return response, None
+
+    if "json" in ctype:
+        body_json = _load_json_from_response(response, raw_body)
+        if body_json is not None:
+            return response, json.dumps(body_json, ensure_ascii=False)
+
+    body_text = _response_body_to_text(raw_body)
+    if body_text:
+        return response, json.dumps(body_text, ensure_ascii=False)
+    return response, None
+
+
 def _mutate_text_payload(payload: str, *, response_mode: str, richness_level: int) -> str:
     text = str(payload or "")
     mode = str(response_mode or "normal").strip().lower()
@@ -2102,12 +2158,17 @@ async def log_all_requests(request: Request, call_next):
                 from app.response_bridge import enrich_extra_json  # lazy import
                 _event_extra = enrich_extra_json(request, _event_extra, status_code, latency_ms)
 
+                response_body_json = None
+                if response is not None:
+                    response, response_body_json = await _capture_replay_response_body(response)
+
                 inserted_event_id = _insert_event(
                     conn,
                     req=request,
                     kind=kind,
                     status=status_code,
                     body=body,
+                    response_json=response_body_json,
                     token=token,
                     points_delta=hp_event.get("points") if hp_event else None,
                     trap_flags=hp_event.get("trap_flags") if hp_event else None,

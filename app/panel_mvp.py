@@ -5487,6 +5487,7 @@ def api_replay_session(session_id: str):
                 "headers": st.get("headers"),
                 "body": st.get("body"),
                 "response_status": st.get("response_status"),
+                "response_body": st.get("response_body"),
                 "stage_before": st.get("stage_before"),
                 "stage_after": st.get("stage_after"),
                 "kind": st.get("kind"),
