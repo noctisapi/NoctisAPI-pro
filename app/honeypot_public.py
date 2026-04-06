@@ -2365,7 +2365,8 @@ async def list_keys(request: Request, token: str = Depends(require_bearer)):
             row = _token_lookup(conn, token)
             actor_id = str(row["actor_id"])
             score = _actor_score(conn, actor_id)
-            stage = _stage_from_actor_score(score)
+            score_delta = _score_for("keys_issued")
+            stage = _stage_from_actor_score(score + score_delta)
 
             api_key = _get_or_create_secret(conn, actor_id, "api_key", "ak_live")
 
@@ -2373,7 +2374,7 @@ async def list_keys(request: Request, token: str = Depends(require_bearer)):
             if stage >= HP_BACKUP_TOKEN_MIN_STAGE:
                 backup_token = _get_or_create_secret(conn, actor_id, "backup_token", "bkp")
 
-            _bump_actor(conn, actor_id, score_delta=_score_for("keys_issued"))
+            _bump_actor(conn, actor_id, score_delta=score_delta)
             conn.commit()
     finally:
         conn.close()
