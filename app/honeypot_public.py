@@ -258,6 +258,16 @@ def _openapi_operation_for_runtime_endpoint(
         if params:
             operation["parameters"] = params
 
+    if custom_api_templates.is_custom_endpoint_id(effective_endpoint.endpoint_id):
+        endpoint_spec = custom_api_templates.endpoint_spec_for_endpoint(DB_PATH, effective_endpoint.endpoint_id) or {}
+        auth_mode = str((endpoint_spec.get("auth") or {}).get("mode") or "none")
+        if auth_mode == "bearer_required":
+            operation["security"] = [{"BearerAuth": []}]
+            operation.setdefault("responses", {}).setdefault("401", {"description": "Unauthorized"})
+        elif auth_mode == "api_key_required":
+            operation["security"] = [{"ApiKeyAuth": []}]
+            operation.setdefault("responses", {}).setdefault("401", {"description": "Unauthorized"})
+
     return operation
 
 
@@ -326,6 +336,16 @@ def _catalog_openapi() -> dict:
 
     base["paths"] = runtime_paths
     base["tags"] = runtime_tags
+    security_schemes: dict[str, dict[str, Any]] = {}
+    for path_item in runtime_paths.values():
+        for operation in path_item.values():
+            for requirement in operation.get("security") or []:
+                if "BearerAuth" in requirement:
+                    security_schemes["BearerAuth"] = {"type": "http", "scheme": "bearer"}
+                if "ApiKeyAuth" in requirement:
+                    security_schemes["ApiKeyAuth"] = {"type": "apiKey", "in": "header", "name": "X-API-Key"}
+    if security_schemes:
+        base.setdefault("components", {}).setdefault("securitySchemes", {}).update(security_schemes)
     return base
 
 
@@ -1811,15 +1831,25 @@ async def _try_custom_template_response(request: Request) -> Optional[Response]:
     if endpoint is None or not custom_api_templates.is_custom_endpoint_id(endpoint.endpoint_id):
         return None
 
-    response_spec = custom_api_templates.response_for_endpoint(DB_PATH, endpoint.endpoint_id)
-    if not response_spec:
+    endpoint_spec = custom_api_templates.endpoint_spec_for_endpoint(DB_PATH, endpoint.endpoint_id)
+    if not endpoint_spec:
         return None
+    response_spec = endpoint_spec.get("response") or {}
 
     context = {
         "request_id": getattr(request.state, "request_id", ""),
         "actor_id": _actor_id_from_request(request),
         "path": custom_api_templates.extract_path_params(endpoint.path_pattern, request.url.path),
+        "issued": {},
     }
+    try:
+        request.state.response_backend = "custom_template"
+    except Exception:
+        pass
+    auth_response = _custom_template_auth_response(request, endpoint_spec.get("auth") or {}, context=context)
+    if auth_response is not None:
+        return auth_response
+
     body = custom_api_templates.render_body(response_spec.get("body"), context=context)
     headers = {
         str(key): str(value)
@@ -1829,16 +1859,122 @@ async def _try_custom_template_response(request: Request) -> Optional[Response]:
     status_code = int(response_spec.get("status") or 200)
     content_type = str(response_spec.get("content_type") or "application/json").lower()
 
-    try:
-        request.state.response_backend = "custom_template"
-    except Exception:
-        pass
-
     if request.method.upper() == "HEAD":
         return Response(status_code=status_code, headers=headers)
     if content_type == "text/plain":
         return PlainTextResponse(status_code=status_code, content=str(body if body is not None else ""), headers=headers)
     return JSONResponse(status_code=status_code, content=body, headers=headers)
+
+
+def _custom_template_failure_response(
+    request: Request,
+    auth_spec: dict[str, Any],
+    *,
+    context: dict[str, Any],
+) -> Response:
+    status_code = int(auth_spec.get("fail_status") or 401)
+    content_type = str(auth_spec.get("fail_content_type") or "application/json").lower()
+    headers = {
+        str(key): str(value)
+        for key, value in dict(auth_spec.get("fail_headers") or {}).items()
+        if str(key or "").strip()
+    }
+    body = custom_api_templates.render_body(auth_spec.get("fail_body", {"detail": "Unauthorized"}), context=context)
+    if request.method.upper() == "HEAD":
+        return Response(status_code=status_code, headers=headers)
+    if content_type == "text/plain":
+        return PlainTextResponse(status_code=status_code, content=str(body if body is not None else ""), headers=headers)
+    return JSONResponse(status_code=status_code, content=body, headers=headers)
+
+
+def _custom_template_auth_response(
+    request: Request,
+    auth_spec: dict[str, Any],
+    *,
+    context: dict[str, Any],
+) -> Optional[Response]:
+    mode = str(auth_spec.get("mode") or "none").strip().lower()
+    if mode == "none":
+        return None
+    if _is_monitor(request):
+        issued = context.setdefault("issued", {})
+        if mode == "token_issuer":
+            issued["bearer_token"] = _extract_bearer_token(request) or "monitor-token"
+        elif mode == "api_key_issuer":
+            issued["api_key"] = request.headers.get("x-api-key") or "ak_live_monitor"
+        return None
+
+    actor_id = _actor_id_from_request(request)
+    if mode == "token_issuer":
+        conn = _db()
+        try:
+            _ensure_schema(conn)
+            score = _actor_score(conn, actor_id)
+            stage = _stage_from_actor_score(score)
+            token = _mint_token()
+            conn.execute(
+                """
+                INSERT INTO tokens(actor_id, token, created_ts, stage, gift_type, used_count, last_used_ts)
+                VALUES(?,?,?,?,?,?,?)
+                """,
+                (actor_id, token, _utc_now_iso(), int(stage), "custom_api", 0, None),
+            )
+            conn.commit()
+            context.setdefault("issued", {})["bearer_token"] = token
+            _set_hp_event(request, kind="token_issued", points=_score_for("token_issued"))
+            return None
+        finally:
+            conn.close()
+
+    if mode == "api_key_issuer":
+        conn = _db()
+        try:
+            _ensure_schema(conn)
+            api_key = _get_or_create_secret(conn, actor_id, "api_key", "ak_live")
+            conn.commit()
+            context.setdefault("issued", {})["api_key"] = api_key
+            _set_hp_event(request, kind="keys_issued", points=_score_for("keys_issued"))
+            return None
+        finally:
+            conn.close()
+
+    if mode == "bearer_required":
+        token = _extract_bearer_token(request)
+        if not token:
+            _set_hp_event(request, kind="unknown_token", points=_score_for("unknown_token"))
+            return _custom_template_failure_response(request, auth_spec, context=context)
+        conn = _db()
+        try:
+            _ensure_schema(conn)
+            if not _token_is_valid(conn, token):
+                _set_hp_event(request, kind="unknown_token", points=_score_for("unknown_token"))
+                return _custom_template_failure_response(request, auth_spec, context=context)
+            _token_mark_used(conn, token)
+            conn.commit()
+            context.setdefault("issued", {})["bearer_token"] = token
+            _set_hp_event(request, kind="token_used", points=_score_for("token_used"))
+            return None
+        finally:
+            conn.close()
+
+    if mode == "api_key_required":
+        api_key = (request.headers.get("x-api-key") or "").strip()[:200]
+        if not api_key:
+            _set_hp_event(request, kind="unknown_token", points=_score_for("unknown_token"))
+            return _custom_template_failure_response(request, auth_spec, context=context)
+        conn = _db()
+        try:
+            _ensure_schema(conn)
+            if not _issued_is_valid(conn, "api_key", api_key):
+                _set_hp_event(request, kind="unknown_token", points=_score_for("unknown_token"))
+                return _custom_template_failure_response(request, auth_spec, context=context)
+            context.setdefault("issued", {})["api_key"] = api_key
+            _set_hp_event(request, kind="token_used", points=_score_for("token_used"))
+            return None
+        finally:
+            conn.close()
+
+    return None
 
 
 def _short_error(exc: Exception) -> str:

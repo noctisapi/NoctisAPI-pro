@@ -47,6 +47,13 @@ _ALLOWED_CONTENT_TYPES = {
     "application/json",
     "text/plain",
 }
+_AUTH_MODES = {
+    "none",
+    "bearer_required",
+    "api_key_required",
+    "token_issuer",
+    "api_key_issuer",
+}
 _SENSITIVE_HEADERS = {
     "authorization",
     "cookie",
@@ -158,6 +165,50 @@ def _normalize_headers(raw: Any) -> dict[str, str]:
     return headers
 
 
+def _normalize_auth(raw: Any) -> dict[str, Any]:
+    if raw in (None, ""):
+        raw = {}
+    if isinstance(raw, str):
+        raw = {"mode": raw}
+    if not isinstance(raw, dict):
+        raise CustomTemplateError("auth_invalid")
+
+    mode = str(raw.get("mode") or "none").strip().lower()
+    if mode not in _AUTH_MODES:
+        raise CustomTemplateError("auth_mode_invalid")
+
+    try:
+        fail_status = int(raw.get("fail_status") or 401)
+    except Exception:
+        raise CustomTemplateError("auth_fail_status_invalid")
+    if not (100 <= fail_status <= 599):
+        raise CustomTemplateError("auth_fail_status_invalid")
+
+    fail_content_type = _normalize_content_type(raw.get("fail_content_type") or "application/json")
+    fail_body = raw.get("fail_body", {"detail": "Unauthorized"})
+    if fail_content_type == "application/json":
+        if not isinstance(fail_body, (dict, list, str, int, float, bool)) and fail_body is not None:
+            raise CustomTemplateError("auth_fail_body_invalid")
+        if _json_size(fail_body) > MAX_BODY_BYTES:
+            raise CustomTemplateError("auth_fail_body_too_large")
+    else:
+        fail_body = str(fail_body if fail_body is not None else "")
+        if len(fail_body.encode("utf-8")) > MAX_BODY_BYTES:
+            raise CustomTemplateError("auth_fail_body_too_large")
+
+    fail_headers = _normalize_headers(raw.get("fail_headers"))
+    if mode == "bearer_required" and fail_status == 401:
+        fail_headers.setdefault("WWW-Authenticate", "Bearer")
+
+    return {
+        "mode": mode,
+        "fail_status": fail_status,
+        "fail_content_type": fail_content_type,
+        "fail_headers": fail_headers,
+        "fail_body": fail_body,
+    }
+
+
 def _operation_for(method: str, path: str) -> OperationType:
     if method == "GET":
         return OperationType.OBJECT_READ if _PATH_PARAM_RE.search(path) else OperationType.COLLECTION_LIST
@@ -245,6 +296,7 @@ def normalize_template_payload(raw: dict[str, Any], *, existing_template_id: Opt
                 "path": path,
                 "description": str(item.get("description") or "").strip()[:MAX_DESCRIPTION_CHARS],
                 "enabled": bool(item.get("enabled", True)),
+                "auth": _normalize_auth(item.get("auth")),
                 "response": {
                     "status": status,
                     "content_type": content_type,
@@ -484,6 +536,17 @@ def response_for_endpoint(db_path: str, endpoint_id: str) -> Optional[dict[str, 
     return None
 
 
+def endpoint_spec_for_endpoint(db_path: str, endpoint_id: str) -> Optional[dict[str, Any]]:
+    endpoint_id = str(endpoint_id or "").strip()
+    if not endpoint_id:
+        return None
+    for template in load_templates_from_db(db_path):
+        for item in template.get("endpoints") or []:
+            if item.get("id") == endpoint_id and bool(item.get("enabled", True)):
+                return copy.deepcopy(item)
+    return None
+
+
 def extract_path_params(path_pattern: str, actual_path: str) -> dict[str, str]:
     pattern_parts = str(path_pattern or "").rstrip("/").split("/")
     path_parts = str(actual_path or "").rstrip("/").split("/")
@@ -505,6 +568,8 @@ def _render_string(value: str, *, context: dict[str, Any]) -> str:
             return utc_now_iso()
         if token in {"request_id", "actor_id"}:
             return str(context.get(token) or "")
+        if token.startswith("issued."):
+            return str((context.get("issued") or {}).get(token.split(".", 1)[1], ""))
         if token.startswith("path."):
             return str((context.get("path") or {}).get(token.split(".", 1)[1], ""))
         return match.group(0)
