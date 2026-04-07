@@ -3070,6 +3070,7 @@ def dashboard_api_modular_save_instance_config(payload: dict = Body(default={}))
     finally:
         conn.close()
 
+    reset_provider()
     invalidate_runtime_cache()
     endpoint_groups, _groups_by_id = _api_modular_group_maps(registry)
     return {

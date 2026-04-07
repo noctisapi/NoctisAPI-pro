@@ -12,7 +12,8 @@ PUBLIC INTERFACE (what the rest of the codebase imports):
   get_provider()                         → RuntimeConfigProvider (for testing / DI)
 
 DESIGN DECISIONS:
-  - Catalog loaded once at first access, then cached forever (immutable).
+  - Built-in catalog entries are immutable. DB-backed custom templates are
+    reloaded when their SQLite fingerprint changes.
   - EffectiveRuntimeConfig cached with TTL (default 60s, env HP_RUNTIME_CACHE_TTL).
   - All errors are caught; fallback to safe default InstanceConfig on DB failure.
   - Thread-safe via threading.Lock (held < 5ms for DB reads).
@@ -31,6 +32,7 @@ import threading
 import time
 from typing import Optional
 
+from app import custom_api_templates
 from app.catalog.builtin.loader import build_default_registry
 from app.catalog.registry import CatalogRegistry, CatalogValidationError
 from app.instance_config.models import InstanceConfig
@@ -63,7 +65,7 @@ class RuntimeConfigProvider:
     """Owns the EffectiveRuntimeConfig lifecycle.
 
     Lifecycle:
-      1. Catalog is loaded once at __init__ time (all in-memory, no I/O).
+      1. Catalog is loaded at __init__ time and refreshed when custom templates change.
          If catalog load fails, a CatalogValidationError is raised immediately
          (this is a programmer error, not a runtime error — fail fast).
 
@@ -89,8 +91,8 @@ class RuntimeConfigProvider:
         self._cached: Optional[EffectiveRuntimeConfig] = None
         self._cached_at: float = 0.0
 
-        # Load catalog once. Raises CatalogValidationError on bad catalog (programmer error).
-        self._registry: CatalogRegistry = build_default_registry(custom_db_path=self._db_path)
+        self._registry_version: str = ""
+        self._registry: CatalogRegistry = self._load_registry()
         logger.debug(
             "RuntimeConfigProvider initialized: catalog=%s, ttl=%ds, db=%s",
             self._registry.summary(),
@@ -104,6 +106,7 @@ class RuntimeConfigProvider:
         """Return current EffectiveRuntimeConfig, rebuilding if TTL expired."""
         now = time.monotonic()
         with self._lock:
+            self._reload_registry_if_needed()
             if self._cached is not None and (now - self._cached_at) < self._cache_ttl:
                 return self._cached
             config = self._build_config()
@@ -145,6 +148,28 @@ class RuntimeConfigProvider:
                     "RuntimeConfigProvider: BuildError even with default config: %s", exc2
                 )
                 raise
+
+    def _load_registry(self) -> CatalogRegistry:
+        """Load the built-in + DB-backed custom catalog."""
+        registry = build_default_registry(custom_db_path=self._db_path)
+        self._registry_version = custom_api_templates.catalog_version(self._db_path)
+        return registry
+
+    def _reload_registry_if_needed(self) -> None:
+        """Reload catalog when custom templates changed in another process."""
+        current_version = custom_api_templates.catalog_version(self._db_path)
+        if current_version == self._registry_version:
+            return
+        try:
+            self._registry = self._load_registry()
+            self._cached = None
+            self._cached_at = 0.0
+            logger.info("RuntimeConfigProvider: custom API catalog reloaded")
+        except CatalogValidationError as exc:
+            logger.warning(
+                "RuntimeConfigProvider: keeping previous catalog after custom catalog reload failed: %s",
+                exc,
+            )
 
     def _load_instance_config(self) -> InstanceConfig:
         """Load InstanceConfig from DB via LegacyConfigAdapter.

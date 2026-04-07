@@ -282,9 +282,8 @@ def _catalog_openapi() -> dict:
 
     try:
         from app.runtime_provider import get_provider, get_runtime_config
-        provider = get_provider()
-        registry = provider.registry
         runtime = get_runtime_config()
+        registry = get_provider().registry
     except Exception:
         # Do NOT fall back to the full FastAPI spec: it contains all hardcoded
         # routes with legacy tags (e.g. "Recon").  Return an empty-paths spec

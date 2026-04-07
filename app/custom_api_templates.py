@@ -375,6 +375,49 @@ def load_templates_from_db(db_path: str) -> list[dict[str, Any]]:
         return []
 
 
+def catalog_version(db_path: str) -> str:
+    """Return a cheap DB-backed version for the custom template catalog.
+
+    Runtime providers live in separate processes from the admin panel in the
+    production stack. They use this fingerprint to detect that custom templates
+    changed in SQLite and reload their in-memory catalog without a restart.
+    """
+    if not db_path:
+        return ""
+    try:
+        conn = _connect(db_path)
+        try:
+            exists = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                (TABLE_NAME,),
+            ).fetchone()
+            if not exists:
+                return "missing"
+            rows = conn.execute(
+                f"""
+                SELECT template_id, updated_at, enabled, LENGTH(payload_json) AS payload_len
+                FROM {TABLE_NAME}
+                ORDER BY template_id ASC
+                """
+            ).fetchall()
+            return json.dumps(
+                [
+                    [
+                        str(row["template_id"] or ""),
+                        str(row["updated_at"] or ""),
+                        int(row["enabled"] or 0),
+                        int(row["payload_len"] or 0),
+                    ]
+                    for row in rows
+                ],
+                separators=(",", ":"),
+            )
+        finally:
+            conn.close()
+    except Exception:
+        return "unavailable"
+
+
 def register_custom_templates(registry: CatalogRegistry, *, db_path: str) -> None:
     for template in load_templates_from_db(db_path):
         try:
