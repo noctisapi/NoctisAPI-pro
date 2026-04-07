@@ -181,6 +181,7 @@
 <section id="runtime" class="mod-card"><div class="mod-head"><div><div class="eyebrow">Runtime</div><h2 class="section-title">Effective runtime config</h2><p class="sub">Simplified snapshot of active endpoints and the actual backend used by each.</p></div></div><div class="mod-body"><div id="runtimeCards" class="mod-grid cols-3" style="margin-bottom:14px;"></div><div style="overflow:auto;"><table><thead><tr><th>Endpoint</th><th>Response</th><th>Security</th><th>Backend</th></tr></thead><tbody id="runtimeRows"></tbody></table></div></div></section>
 <section class="mod-card"><div class="mod-head"><div><div class="eyebrow">Save</div><h2 class="section-title">Apply Configuration</h2><p class="sub">Validated, atomically saved and runtime cache invalidated.</p></div><div class="toolbar"><button class="btn btn-outline" type="button" onclick="resetDraft()">Reset Draft</button><button class="btn btn-primary" type="button" onclick="saveConfig()">Save Configuration</button></div></div><div class="mod-body"><div id="saveStatus" class="mini"></div></div></section></div>
 <script>
+{% raw %}
 let panelState=null,draft=null,customEditorDraft=null,isProModular=false,endpointIndex={},templateIndex={},extensionIndex={},flawIndex={},profileIndex={},groupIndex={}; const clone=(v)=>JSON.parse(JSON.stringify(v)); const esc=(v)=>String(v??"").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&#39;"); const pill=(text,kind="")=>`<span class="pill ${kind}">${esc(text)}</span>`;
 function setStatus(msg,isError=false){const el=document.getElementById("saveStatus");el.textContent=msg||"";el.className=isError?"mini error":"mini";}
 function initIndexes(){endpointIndex={};templateIndex={};extensionIndex={};flawIndex={};profileIndex={};groupIndex={};(panelState.endpoint_groups||[]).forEach(group=>{groupIndex[group.id]=group;(group.endpoints||[]).forEach(ep=>endpointIndex[ep.endpoint_id]=ep);});(panelState.templates||[]).forEach(item=>templateIndex[item.id]=item);(panelState.extensions||[]).forEach(item=>extensionIndex[item.id]=item);(panelState.flaw_profiles||[]).forEach(item=>flawIndex[item.id]=item);(panelState.response_profiles||[]).forEach(item=>profileIndex[item.id]=item);}
@@ -222,5 +223,6 @@ async function saveConfig(){setStatus("Saving configuration..."); try{const resp
 function resetDraft(){normaliseDraft(); setStatus("Draft restored from persisted configuration."); renderAll();}
 async function loadState(){setStatus(""); const resp=await fetch("/dashboard/api-modular/state-v2"); panelState=await resp.json(); isProModular=!!panelState.pro_modular_enabled; initIndexes(); normaliseDraft(); renderAll();}
 loadState();
+{% endraw %}
 </script>
 {% endblock %}
