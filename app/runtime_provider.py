@@ -90,7 +90,7 @@ class RuntimeConfigProvider:
         self._cached_at: float = 0.0
 
         # Load catalog once. Raises CatalogValidationError on bad catalog (programmer error).
-        self._registry: CatalogRegistry = build_default_registry()
+        self._registry: CatalogRegistry = build_default_registry(custom_db_path=self._db_path)
         logger.debug(
             "RuntimeConfigProvider initialized: catalog=%s, ttl=%ds, db=%s",
             self._registry.summary(),

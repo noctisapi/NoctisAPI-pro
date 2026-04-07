@@ -37,6 +37,7 @@ from app import pro_license
 from app import pro_ops
 from app import license_runtime
 from app import api_modular
+from app import custom_api_templates
 from app import license_online
 from app.catalog.builtin.loader import build_default_registry
 from app.catalog.registry import CatalogRegistry
@@ -53,7 +54,7 @@ from app.instance_config.models import (
 from app.response_factory.factory import is_supported as factory_supports_endpoint
 from app.response_factory.migration import is_handler_migrated_endpoint, is_migrated_endpoint
 from app.runtime.builder import BuildError, build_effective_runtime_config
-from app.runtime_provider import get_provider, invalidate_runtime_cache
+from app.runtime_provider import get_provider, invalidate_runtime_cache, reset_provider
 from honey_licensing.client import compute_client_identity
 from honey_licensing.offline_license import LicenseVerifier, load_public_key_pem
 from app.server_config import RequestTimeoutMiddleware, get_request_timeout
@@ -2250,7 +2251,7 @@ def _api_modular_registry() -> CatalogRegistry:
     try:
         return get_provider().registry
     except Exception:
-        return build_default_registry()
+        return build_default_registry(custom_db_path=DB_PATH)
 
 
 def _api_modular_group_maps(registry: CatalogRegistry) -> tuple[dict[str, list[dict]], dict[str, dict]]:
@@ -2425,7 +2426,9 @@ def _serialize_endpoint_definition(
     groups = endpoint_groups.get(endpoint.id, [])
     override = instance_config.endpoint_configs.get(endpoint.id) if instance_config else None
     effective = effective_runtime.get_endpoint(endpoint.id) if effective_runtime else None
-    if effective and is_migrated_endpoint(endpoint.id) and factory_supports_endpoint(effective):
+    if custom_api_templates.is_custom_endpoint_id(endpoint.id):
+        backend = "custom_template"
+    elif effective and is_migrated_endpoint(endpoint.id) and factory_supports_endpoint(effective):
         backend = "factory"
     elif effective and is_handler_migrated_endpoint(endpoint.id) and factory_supports_endpoint(effective):
         backend = "handler_factory"
@@ -2475,6 +2478,7 @@ def _serialize_template(template, *, registry: CatalogRegistry, groups_by_id: di
             for endpoint in endpoints[:8]
         ],
         "endpoint_count": len(endpoints),
+        "custom_template": str(template.id).startswith(custom_api_templates.CUSTOM_PREFIX),
     }
 
 
@@ -2529,7 +2533,9 @@ def _serialize_runtime_snapshot(
     endpoints = []
     for endpoint in sorted(runtime_config.endpoints.values(), key=lambda item: (item.path_pattern, item.method.value)):
         groups = endpoint_groups.get(endpoint.endpoint_id, [])
-        if is_migrated_endpoint(endpoint.endpoint_id) and factory_supports_endpoint(endpoint):
+        if custom_api_templates.is_custom_endpoint_id(endpoint.endpoint_id):
+            backend = "custom_template"
+        elif is_migrated_endpoint(endpoint.endpoint_id) and factory_supports_endpoint(endpoint):
             backend = "factory"
         elif is_handler_migrated_endpoint(endpoint.endpoint_id) and factory_supports_endpoint(endpoint):
             backend = "handler_factory"
@@ -2614,6 +2620,7 @@ def _build_api_modular_v2_state(
         pass
     try:
         ensure_schema(conn)
+        custom_api_templates.ensure_tables(conn)
         from app.legacy_config_adapter import LegacyConfigAdapter
 
         current_instance = _timed_call(
@@ -2701,6 +2708,7 @@ def _build_api_modular_v2_state(
                 _serialize_flaw_profile(flaw)
                 for flaw in registry.list_flaw_profiles()
             ],
+            "custom_templates": custom_api_templates.list_templates(conn),
             "endpoint_groups": serialized_groups,
             "instance_config": json.loads(current_instance.to_json()),
             "effective_runtime": runtime_snapshot,
@@ -2929,6 +2937,61 @@ def dashboard_api_modular_catalog():
         perf=perf,
         total_started=total_started,
     )
+
+
+@app.post("/dashboard/api-modular/custom-template/save", response_class=JSONResponse)
+def dashboard_api_modular_save_custom_template(payload: dict = Body(default={})):
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="invalid_payload")
+    conn = db()
+    try:
+        ensure_schema(conn)
+        try:
+            normalized = custom_api_templates.normalize_template_payload(payload)
+            custom_api_templates.validate_template_against_registry(normalized, _api_modular_registry())
+            saved = custom_api_templates.save_template(conn, payload)
+        except custom_api_templates.CustomTemplateError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"custom_template_invalid:{exc}")
+    finally:
+        conn.close()
+
+    reset_provider()
+    invalidate_runtime_cache()
+    return {"saved": True, "template": saved}
+
+
+@app.post("/dashboard/api-modular/custom-template/delete", response_class=JSONResponse)
+def dashboard_api_modular_delete_custom_template(payload: dict = Body(default={})):
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="invalid_payload")
+    template_id = str(payload.get("template_id") or payload.get("id") or "").strip()
+    if not template_id:
+        raise HTTPException(status_code=400, detail="template_id_required")
+
+    conn = db()
+    try:
+        ensure_schema(conn)
+        custom_api_templates.ensure_tables(conn)
+        deleted = custom_api_templates.delete_template(conn, template_id)
+        from app.system_settings import ensure_settings_table
+
+        ensure_settings_table(conn)
+        current = _load_saved_panel_instance_config(conn)
+        if current and current.base_template_id == template_id:
+            fallback = InstanceConfig.default()
+            _upsert_system_setting(conn, "instance_config", fallback.to_json())
+            _upsert_system_setting(conn, "hp_base_template", fallback.base_template_id)
+            _upsert_system_setting(conn, "hp_enabled_extensions", "[]")
+            _upsert_system_setting(conn, "hp_global_difficulty", fallback.global_difficulty.value)
+            conn.commit()
+    finally:
+        conn.close()
+
+    reset_provider()
+    invalidate_runtime_cache()
+    return {"deleted": bool(deleted), "template_id": template_id}
 
 
 @app.post("/dashboard/api-modular/instance-config/save", response_class=JSONResponse)

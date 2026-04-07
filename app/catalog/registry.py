@@ -80,7 +80,8 @@ class CatalogRegistry:
             )
         # Unique (method, path) — no silent ambiguity
         path_key = (endpoint.method.value, endpoint.path_pattern)
-        if path_key in self._path_index:
+        allow_path_conflict = endpoint.id.startswith("custom_")
+        if path_key in self._path_index and not allow_path_conflict:
             existing = self._path_index[path_key]
             raise CatalogValidationError(
                 f"Path conflict: {endpoint.method.value} {endpoint.path_pattern!r} "
@@ -100,7 +101,8 @@ class CatalogRegistry:
                     f"Endpoint '{endpoint.id}' references unknown flaw_profile '{fid}'"
                 )
         self._endpoints[endpoint.id] = endpoint
-        self._path_index[path_key] = endpoint.id
+        if path_key not in self._path_index or not allow_path_conflict:
+            self._path_index[path_key] = endpoint.id
 
     def register_group(self, group: EndpointGroupDefinition) -> None:
         if group.id in self._groups:

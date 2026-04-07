@@ -22,7 +22,7 @@ from app.catalog.builtin.templates import ALL_TEMPLATES
 from app.catalog.registry import CatalogRegistry
 
 
-def build_default_registry() -> CatalogRegistry:
+def build_default_registry(*, custom_db_path: str | None = None) -> CatalogRegistry:
     """Build and validate the default catalog registry.
 
     Raises CatalogValidationError if any definition is invalid or
@@ -47,6 +47,11 @@ def build_default_registry() -> CatalogRegistry:
 
     for template in ALL_TEMPLATES:
         registry.register_template(template)
+
+    if custom_db_path:
+        from app.custom_api_templates import register_custom_templates
+
+        register_custom_templates(registry, db_path=custom_db_path)
 
     registry.validate_all()
     return registry

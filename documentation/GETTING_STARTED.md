@@ -219,7 +219,7 @@ Each row in the Actors view shows:
 | **Score** | Cumulative suspicion score. 0–9 = noise, 10–30 = curious, 30+ = active probe, 100+ = aggressive |
 | **Last Seen** | Last request timestamp |
 | **Events** | Total number of requests from this actor |
-| **Flags** | Trap flags triggered (recon, secrets, auth, upload, exploit) |
+| **Flags** | Signal flags observed for the actor (recon, secrets, auth, upload, exploit) |
 
 ### Event scoring reference
 
@@ -229,7 +229,7 @@ Each row in the Actors view shows:
 | Attempted auth / posted credentials | 5–8 |
 | Requested internal config or feature flags | 5 |
 | Attempted console command execution | 5 |
-| Attempted file upload via trap | 15 |
+| Attempted file upload | 15 |
 | Attempted root shell access | 20 |
 
 ### Session replay (Pro)

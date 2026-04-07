@@ -28,8 +28,8 @@ AUTH_LOGIN = EndpointDefinition(
     sensitivity_level=SensitivityLevel.MEDIUM,
     default_response_profile_id="standard_medium",
     supported_flaw_profile_ids=("broken_auth_basic", "excessive_data_basic", "sqli_hint_basic"),
-    tags=("T1110", "credential_access"),
-    description="Fake login endpoint. Returns a bearer token on any credentials.",
+    tags=("auth", "credentials"),
+    description="Login endpoint. Returns a bearer token when authentication is accepted.",
 )
 
 AUTH_REGISTER = EndpointDefinition(
@@ -55,8 +55,8 @@ AUTH_MFA = EndpointDefinition(
     sensitivity_level=SensitivityLevel.MEDIUM,
     default_response_profile_id="standard_medium",
     supported_flaw_profile_ids=("broken_auth_basic",),
-    tags=("T1078", "credential_bypass"),
-    description="MFA bypass trap. Accepts any OTP code.",
+    tags=("auth", "mfa"),
+    description="MFA verification endpoint.",
 )
 
 AUTH_PASSWORD_RESET = EndpointDefinition(
@@ -91,7 +91,7 @@ USERS_LIST = EndpointDefinition(
     sensitivity_level=SensitivityLevel.MEDIUM,
     default_response_profile_id="standard_medium",
     supported_flaw_profile_ids=("idor_basic", "excessive_data_basic", "sqli_hint_basic"),
-    description="User list. Returns paginated fake users.",
+    description="User list. Returns paginated users.",
 )
 
 USERS_GET = EndpointDefinition(
@@ -104,8 +104,8 @@ USERS_GET = EndpointDefinition(
     sensitivity_level=SensitivityLevel.MEDIUM,
     default_response_profile_id="standard_medium",
     supported_flaw_profile_ids=("idor_basic", "idor_advanced", "excessive_data_basic"),
-    tags=("T1530",),
-    description="Get user by ID. Primary IDOR trap.",
+    tags=("users",),
+    description="Get user by ID.",
 )
 
 USERS_UPDATE = EndpointDefinition(
@@ -118,7 +118,7 @@ USERS_UPDATE = EndpointDefinition(
     sensitivity_level=SensitivityLevel.MEDIUM,
     default_response_profile_id="standard_medium",
     supported_flaw_profile_ids=("idor_basic", "idor_advanced"),
-    description="Update user profile. IDOR allows updating other users.",
+    description="Update user profile.",
 )
 
 GROUP_USER_MANAGEMENT = EndpointGroupDefinition(
@@ -152,8 +152,8 @@ ORDERS_GET = EndpointDefinition(
     sensitivity_level=SensitivityLevel.MEDIUM,
     default_response_profile_id="standard_medium",
     supported_flaw_profile_ids=("idor_basic", "idor_advanced", "excessive_data_basic"),
-    tags=("T1530",),
-    description="Get order by ID. Classic IDOR target.",
+    tags=("orders",),
+    description="Get order by ID.",
 )
 
 ORDERS_CREATE = EndpointDefinition(
@@ -187,8 +187,8 @@ ADMIN_HOME = EndpointDefinition(
     sensitivity_level=SensitivityLevel.HIGH,
     default_response_profile_id="standard_medium",
     supported_flaw_profile_ids=("broken_auth_basic",),
-    tags=("T1078", "admin_access"),
-    description="Admin home page trap.",
+    tags=("admin",),
+    description="Admin home page endpoint.",
 )
 
 ADMIN_USERS_LIST = EndpointDefinition(
@@ -201,8 +201,8 @@ ADMIN_USERS_LIST = EndpointDefinition(
     sensitivity_level=SensitivityLevel.HIGH,
     default_response_profile_id="standard_medium",
     supported_flaw_profile_ids=("broken_auth_basic", "excessive_data_basic"),
-    tags=("T1087", "user_enumeration"),
-    description="Admin user enumeration endpoint.",
+    tags=("admin", "users"),
+    description="Admin users endpoint.",
 )
 
 ADMIN_AUDIT_LOG = EndpointDefinition(
@@ -215,8 +215,8 @@ ADMIN_AUDIT_LOG = EndpointDefinition(
     sensitivity_level=SensitivityLevel.HIGH,
     default_response_profile_id="standard_medium",
     supported_flaw_profile_ids=("broken_auth_basic",),
-    tags=("T1005", "audit_access"),
-    description="Admin audit log. Attracts actors looking for logged activity.",
+    tags=("admin", "audit"),
+    description="Admin audit log endpoint.",
 )
 
 GROUP_ADMIN_PANEL = EndpointGroupDefinition(
@@ -238,8 +238,8 @@ RECON_ENV = EndpointDefinition(
     default_response_profile_id="standard_basic",
     supported_flaw_profile_ids=(),
     include_in_schema=False,
-    tags=("T1552", "credential_exposure", "recon"),
-    description="Exposed .env file. Returns fake credentials.",
+    tags=("config",),
+    description="Environment configuration endpoint.",
 )
 
 RECON_CONFIG = EndpointDefinition(
@@ -253,8 +253,8 @@ RECON_CONFIG = EndpointDefinition(
     default_response_profile_id="standard_basic",
     supported_flaw_profile_ids=(),
     include_in_schema=False,
-    tags=("T1552", "config_exposure", "recon"),
-    description="Exposed config file.",
+    tags=("config",),
+    description="Configuration file endpoint.",
 )
 
 RECON_OPENAPI = EndpointDefinition(
@@ -268,8 +268,8 @@ RECON_OPENAPI = EndpointDefinition(
     default_response_profile_id="standard_basic",
     supported_flaw_profile_ids=(),
     include_in_schema=False,
-    tags=("recon",),
-    description="OpenAPI spec exposure.",
+    tags=("openapi",),
+    description="OpenAPI specification endpoint.",
 )
 
 GROUP_RECON = EndpointGroupDefinition(
@@ -278,7 +278,7 @@ GROUP_RECON = EndpointGroupDefinition(
     endpoint_ids=("recon_env", "recon_config", "recon_openapi"),
 )
 
-# ── Critical traps (high-value honeypot targets) ──────────────────────────────
+# ── High-value internal endpoints ─────────────────────────────────────────────
 
 SECRETS_ADMIN = EndpointDefinition(
     id="secrets_admin",
@@ -291,8 +291,8 @@ SECRETS_ADMIN = EndpointDefinition(
     default_response_profile_id="standard_advanced",
     supported_flaw_profile_ids=("broken_auth_basic", "excessive_data_basic"),
     include_in_schema=False,
-    tags=("T1552", "T1078", "secret_access"),
-    description="Admin secrets endpoint. Critical trap — very high score.",
+    tags=("admin", "secrets"),
+    description="Admin secrets endpoint.",
 )
 
 BACKUP_LIST = EndpointDefinition(
@@ -306,8 +306,8 @@ BACKUP_LIST = EndpointDefinition(
     default_response_profile_id="standard_advanced",
     supported_flaw_profile_ids=("broken_auth_basic",),
     include_in_schema=False,
-    tags=("T1530", "data_exfiltration"),
-    description="Backup listing. Attracts data exfiltration attempts.",
+    tags=("backup",),
+    description="Backup listing endpoint.",
 )
 
 BACKUP_DOWNLOAD = EndpointDefinition(
@@ -321,13 +321,13 @@ BACKUP_DOWNLOAD = EndpointDefinition(
     default_response_profile_id="standard_advanced",
     supported_flaw_profile_ids=("broken_auth_basic", "path_traversal_basic"),
     include_in_schema=False,
-    tags=("T1530", "data_exfiltration"),
-    description="Backup download trap. Highest scoring non-root endpoint.",
+    tags=("backup",),
+    description="Backup download endpoint.",
 )
 
 GROUP_CRITICAL_TRAPS = EndpointGroupDefinition(
     id="critical_traps",
-    name="Critical Traps",
+    name="Critical Internal Endpoints",
     endpoint_ids=("secrets_admin", "backup_list", "backup_download"),
 )
 
@@ -343,8 +343,8 @@ FILES_UPLOAD = EndpointDefinition(
     sensitivity_level=SensitivityLevel.HIGH,
     default_response_profile_id="standard_medium",
     supported_flaw_profile_ids=(),
-    tags=("T1105", "file_upload"),
-    description="File upload trap.",
+    tags=("files",),
+    description="File upload endpoint.",
 )
 
 FILES_DOWNLOAD = EndpointDefinition(
@@ -357,8 +357,8 @@ FILES_DOWNLOAD = EndpointDefinition(
     sensitivity_level=SensitivityLevel.HIGH,
     default_response_profile_id="standard_medium",
     supported_flaw_profile_ids=("path_traversal_basic",),
-    tags=("T1005", "T1083"),
-    description="File download. Path traversal trap.",
+    tags=("files",),
+    description="File download endpoint.",
 )
 
 GROUP_FILE_SERVER = EndpointGroupDefinition(
@@ -379,7 +379,7 @@ WEBHOOKS_GITHUB = EndpointDefinition(
     sensitivity_level=SensitivityLevel.HIGH,
     default_response_profile_id="standard_medium",
     supported_flaw_profile_ids=("broken_auth_basic",),
-    tags=("T1195", "supply_chain", "devops"),
+    tags=("webhooks", "devops"),
     description="GitHub webhook receiver.",
 )
 
@@ -393,7 +393,7 @@ WEBHOOKS_GITLAB = EndpointDefinition(
     sensitivity_level=SensitivityLevel.HIGH,
     default_response_profile_id="standard_medium",
     supported_flaw_profile_ids=("broken_auth_basic",),
-    tags=("T1195", "supply_chain", "devops"),
+    tags=("webhooks", "devops"),
     description="GitLab webhook receiver.",
 )
 

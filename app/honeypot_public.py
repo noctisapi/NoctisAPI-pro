@@ -49,6 +49,7 @@ from app.server_config import RequestTimeoutMiddleware, get_request_timeout
 from app.structured_logging import get_request_id, set_request_id
 from app import siem_logger
 from app import alert_dispatcher
+from app import custom_api_templates
 from app.geoip import close_reader as _close_geoip_reader
 from app.geoip import lookup_country as _lookup_geoip_country
 from app.geoip import normalize_geo_dict as _normalize_geo_dict
@@ -1804,6 +1805,43 @@ def _default_modular_policy(*, source: str = "ok", error: str = "") -> Dict[str,
     }
 
 
+async def _try_custom_template_response(request: Request) -> Optional[Response]:
+    from app.runtime_provider import resolve_effective_endpoint
+
+    endpoint = resolve_effective_endpoint(request.method, request.url.path)
+    if endpoint is None or not custom_api_templates.is_custom_endpoint_id(endpoint.endpoint_id):
+        return None
+
+    response_spec = custom_api_templates.response_for_endpoint(DB_PATH, endpoint.endpoint_id)
+    if not response_spec:
+        return None
+
+    context = {
+        "request_id": getattr(request.state, "request_id", ""),
+        "actor_id": _actor_id_from_request(request),
+        "path": custom_api_templates.extract_path_params(endpoint.path_pattern, request.url.path),
+    }
+    body = custom_api_templates.render_body(response_spec.get("body"), context=context)
+    headers = {
+        str(key): str(value)
+        for key, value in dict(response_spec.get("headers") or {}).items()
+        if str(key or "").strip()
+    }
+    status_code = int(response_spec.get("status") or 200)
+    content_type = str(response_spec.get("content_type") or "application/json").lower()
+
+    try:
+        request.state.response_backend = "custom_template"
+    except Exception:
+        pass
+
+    if request.method.upper() == "HEAD":
+        return Response(status_code=status_code, headers=headers)
+    if content_type == "text/plain":
+        return PlainTextResponse(status_code=status_code, content=str(body if body is not None else ""), headers=headers)
+    return JSONResponse(status_code=status_code, content=body, headers=headers)
+
+
 def _short_error(exc: Exception) -> str:
     msg = f"{exc.__class__.__name__}:{str(exc or '').strip()}"
     return msg[:120] if msg else "policy_resolve_failed"
@@ -1988,33 +2026,39 @@ async def log_all_requests(request: Request, call_next):
                 headers=debug_headers,
             )
         else:
-            # ResponseFactory middleware interception stays opt-in via match_type.
-            _has_explicit_legacy_config = (modular_policy.get("endpoint_match_type") or "default") != "default"
-            _factory_resp = None
-            if not _has_explicit_legacy_config:
-                from app.response_bridge import try_factory_response  # lazy import
-                _factory_resp = await try_factory_response(request, actor_id=_actor_id_from_request(request))
-            if _factory_resp is not None:
-                response = _factory_resp
-                try:
-                    request.state.response_backend = "factory"
-                except Exception:
-                    pass
+            response = None
+            if not skip_policy:
+                response = await _try_custom_template_response(request)
+            if response is not None:
+                pass
             else:
-                try:
-                    request.state.response_backend = "runtime_native"
-                except Exception:
-                    pass
-                response = await call_next(request)
-                # Re-read response_backend: a handler-assisted factory response sets
-                # "handler_factory" so we must not re-mutate its body.
-                _backend_after = str(getattr(request.state, "response_backend", "runtime_native") or "runtime_native")
-                if (
-                    not skip_policy
-                    and _backend_after == "runtime_native"
-                    and _route_is_registered(request.url.path, request.method)
-                ):
-                    response = await _apply_modular_response_policy(request, response, modular_policy)
+                # ResponseFactory middleware interception stays opt-in via match_type.
+                _has_explicit_legacy_config = (modular_policy.get("endpoint_match_type") or "default") != "default"
+                _factory_resp = None
+                if not _has_explicit_legacy_config:
+                    from app.response_bridge import try_factory_response  # lazy import
+                    _factory_resp = await try_factory_response(request, actor_id=_actor_id_from_request(request))
+                if _factory_resp is not None:
+                    response = _factory_resp
+                    try:
+                        request.state.response_backend = "factory"
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        request.state.response_backend = "runtime_native"
+                    except Exception:
+                        pass
+                    response = await call_next(request)
+                    # Re-read response_backend: a handler-assisted factory response sets
+                    # "handler_factory" so we must not re-mutate its body.
+                    _backend_after = str(getattr(request.state, "response_backend", "runtime_native") or "runtime_native")
+                    if (
+                        not skip_policy
+                        and _backend_after == "runtime_native"
+                        and _route_is_registered(request.url.path, request.method)
+                    ):
+                        response = await _apply_modular_response_policy(request, response, modular_policy)
     except Exception as e:
         exc = e
         raise
@@ -4109,6 +4153,24 @@ async def export_audit(token: str = Depends(require_bearer)):
         "status": "queued",
         "download_url": f"{HP_PUBLIC_BASE_URL}/v1/export/jobs/" + secrets.token_hex(6),
     }
+
+
+@app.api_route(
+    "/{custom_path:path}",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
+    include_in_schema=False,
+)
+async def custom_modular_api_endpoint(request: Request):
+    """Serve user-defined Modular API endpoints.
+
+    This catch-all is deliberately registered last. It only returns configured
+    custom responses when the runtime catalog resolves an active custom endpoint.
+    Everything else remains a normal 404.
+    """
+    response = await _try_custom_template_response(request)
+    if response is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    return response
 
 
 @app.exception_handler(404)

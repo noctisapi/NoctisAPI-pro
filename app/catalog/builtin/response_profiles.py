@@ -73,14 +73,14 @@ LEGACY_MEDIUM = ResponseProfileDefinition(
 
 ERROR_TRAP_MEDIUM = ResponseProfileDefinition(
     id="error_trap_medium",
-    name="Error-heavy Trap – Medium",
+    name="Error-heavy Profile – Medium",
     difficulty=Difficulty.MEDIUM,
     latency=LatencyConfig(min_ms=10, max_ms=150, p99_ms=500),
     error_style=ErrorStyleConfig(format="json", include_stack_trace=True, randomize_message=True),
     default_headers={
         "Content-Type": "application/json",
     },
-    description="Returns frequent 4xx/5xx errors with verbose messages. Induces more probing.",
+    description="Returns frequent 4xx/5xx errors with verbose messages.",
 )
 
 # ── Registry helper ───────────────────────────────────────────────────────────
