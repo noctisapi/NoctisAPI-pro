@@ -727,11 +727,36 @@ async def dashboard_license_upload(file: UploadFile = File(...)):
     }
 
 
+def _live_monitored_endpoints() -> list[str]:
+    """Return the currently-enabled template endpoints for health monitoring.
+
+    Re-queries the runtime provider on every call so the list stays in sync
+    with whatever template is active in API Modular.
+    Falls back to the monitor's startup list if the provider is unavailable.
+    """
+    try:
+        from app.runtime_provider import get_provider
+        eps = get_provider().get_config().enabled_endpoints()
+        from app.honeypot_monitor import _replace_path_params, _normalize_endpoint
+        labels = []
+        for ep in eps:
+            path = _replace_path_params(_normalize_endpoint(ep.path_pattern or ""))
+            if path:
+                method = ep.method.value if hasattr(ep.method, "value") else str(ep.method or "GET")
+                labels.append(f"{method.upper()} {path}")
+        if labels:
+            return labels
+    except Exception:
+        pass
+    return honeypot_monitor.endpoints
+
+
 def _honeypot_snapshot(conn: sqlite3.Connection, limit: int = 20) -> dict:
+    live_endpoints = _live_monitored_endpoints()
     summary = hp_get_summary(
         conn,
         honeypot_monitor.display_base_url,
-        honeypot_monitor.endpoints,
+        live_endpoints,
         limit=limit,
     )
     processed = []
@@ -749,7 +774,7 @@ def _honeypot_snapshot(conn: sqlite3.Connection, limit: int = 20) -> dict:
         endpoint_summary["last"] = last or None
         processed.append(endpoint_summary)
     summary["endpoints"] = processed
-    summary["configured"] = bool(summary.get("base_url") and honeypot_monitor.endpoints)
+    summary["configured"] = bool(summary.get("base_url") and live_endpoints)
     summary["interval_seconds"] = honeypot_monitor.interval
     summary["timeout_seconds"] = honeypot_monitor.timeout
     summary["endpoints_count"] = len(processed)
