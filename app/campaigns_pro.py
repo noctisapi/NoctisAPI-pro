@@ -416,3 +416,98 @@ def clear_campaign_tables(conn: sqlite3.Connection) -> None:
     cur.execute("DELETE FROM campaign_actor_links")
     cur.execute("DELETE FROM campaigns")
     conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Actor enrichment — typical_behavior
+# ---------------------------------------------------------------------------
+
+def get_actor_case_attack_types(conn: sqlite3.Connection, actor_id: str) -> list[str]:
+    """Return all non-null attack_type values from Cases linked to this actor.
+
+    Used as input to compute_typical_behavior() (pure, no I/O).
+    """
+    rows = conn.execute(
+        """
+        SELECT c.attack_type
+        FROM cases c
+        JOIN case_actors ca ON c.id = ca.case_id
+        WHERE ca.actor_id = ?
+          AND c.attack_type IS NOT NULL
+        """,
+        (actor_id,),
+    ).fetchall()
+    return [str(r[0]) for r in rows]
+
+
+def refresh_actor_typical_behavior(conn: sqlite3.Connection, actor_id: str) -> str:
+    """Recompute and persist typical_behavior for *actor_id*.
+
+    Returns the new value ("automated" | "targeted" | "mixed").
+    Safe to call at any time; updates actors.typical_behavior in-place.
+    """
+    from app.internal.analysis_engine import compute_typical_behavior
+
+    attack_types = get_actor_case_attack_types(conn, actor_id)
+    behavior = compute_typical_behavior(attack_types)
+    conn.execute(
+        "UPDATE actors SET typical_behavior=? WHERE actor_id=?",
+        (behavior, actor_id),
+    )
+    conn.commit()
+    return behavior
+
+
+# ---------------------------------------------------------------------------
+# Campaign aggregation — automated_ratio / targeted_ratio
+# ---------------------------------------------------------------------------
+
+def compute_campaign_attack_ratios(
+    attack_types: list[str],
+) -> dict[str, float]:
+    """Pure aggregation: compute automated_ratio and targeted_ratio from Case data.
+
+    Does NOT perform classification — only counts what is already stored.
+    Returns {"automated_ratio": float, "targeted_ratio": float}.
+    """
+    total = len(attack_types)
+    if total == 0:
+        return {"automated_ratio": 0.0, "targeted_ratio": 0.0}
+    auto_count = sum(1 for t in attack_types if t == "automated")
+    tgt_count  = sum(1 for t in attack_types if t == "targeted")
+    return {
+        "automated_ratio": round(auto_count / total, 4),
+        "targeted_ratio":  round(tgt_count  / total, 4),
+    }
+
+
+def get_campaign_case_attack_types(
+    conn: sqlite3.Connection, campaign_id: str
+) -> list[str]:
+    """Return all non-null attack_type values from Cases linked to *campaign_id*."""
+    rows = conn.execute(
+        "SELECT attack_type FROM cases WHERE campaign_id=? AND attack_type IS NOT NULL",
+        (campaign_id,),
+    ).fetchall()
+    return [str(r[0]) for r in rows]
+
+
+def refresh_campaign_attack_ratios(
+    conn: sqlite3.Connection, campaign_id: str
+) -> dict[str, float]:
+    """Recompute and persist automated_ratio / targeted_ratio for *campaign_id*.
+
+    Returns the computed ratio dict.  No-op if the campaigns table does not
+    yet have those columns (safe for older schemas).
+    """
+    attack_types = get_campaign_case_attack_types(conn, campaign_id)
+    ratios = compute_campaign_attack_ratios(attack_types)
+    try:
+        conn.execute(
+            "UPDATE campaigns SET automated_ratio=?, targeted_ratio=? WHERE campaign_id=?",
+            (ratios["automated_ratio"], ratios["targeted_ratio"], campaign_id),
+        )
+        conn.commit()
+    except Exception:
+        pass  # column may not exist in old schemas
+    return ratios

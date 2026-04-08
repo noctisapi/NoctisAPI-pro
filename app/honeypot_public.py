@@ -842,6 +842,52 @@ def _score_for(kind: str) -> int:
     return int(table.get(kind, 1))
 
 
+def _fetch_actor_signal_context(
+    cur: Any,
+    actor_id: str,
+    current_ts: str,
+    limit: int = 6,
+) -> "tuple[float, tuple, tuple, tuple]":
+    """Fetch recent event history for analysis signal computation.
+
+    Returns (interval_ms, recent_statuses, recent_paths, recent_intervals_ms).
+    Never raises; returns safe defaults on any error.
+    Called inside _insert_event() BEFORE the analysis engine (which is I/O-free).
+    """
+    try:
+        from datetime import datetime as _dt
+        rows = cur.execute(
+            "SELECT ts, path, status FROM events WHERE actor_id=? ORDER BY id DESC LIMIT ?",
+            (actor_id, limit),
+        ).fetchall()
+        if not rows:
+            return 0.0, (), (), ()
+
+        # Interval since last request
+        try:
+            dt_last = _dt.fromisoformat(str(rows[0][0] or "").replace("Z", "+00:00"))
+            dt_now  = _dt.fromisoformat(current_ts.replace("Z", "+00:00"))
+            interval_ms = max(0.0, (dt_now - dt_last).total_seconds() * 1000.0)
+        except Exception:
+            interval_ms = 0.0
+
+        recent_statuses = tuple(int(r[2]) for r in rows if r[2] is not None)
+        recent_paths    = tuple(str(r[1]) for r in rows if r[1])
+
+        # Inter-request intervals from consecutive events
+        intervals: list[float] = []
+        for i in range(len(rows) - 1):
+            try:
+                t0 = _dt.fromisoformat(str(rows[i][0] or "").replace("Z", "+00:00"))
+                t1 = _dt.fromisoformat(str(rows[i + 1][0] or "").replace("Z", "+00:00"))
+                intervals.append(abs((t0 - t1).total_seconds() * 1000.0))
+            except Exception:
+                pass
+        return interval_ms, recent_statuses, recent_paths, tuple(intervals)
+    except Exception:
+        return 0.0, (), (), ()
+
+
 def _bump_actor(conn: sqlite3.Connection, actor_id: str, score_delta: int = 0) -> None:
     now = _utc_now_iso()
     row = conn.execute("SELECT actor_id FROM actors WHERE actor_id=?", (actor_id,)).fetchone()
@@ -1059,6 +1105,48 @@ def _insert_event(
         except Exception:
             pass  # never fail the pipeline; attack_phase is best-effort
         # ─────────────────────────────────────────────────────────────────────
+
+        # ── Attack classification (automated vs targeted) ─────────────────────
+        # Pre-fetch recent actor history from DB, then run the pure analyzer.
+        # The analysis module itself has no I/O; we supply pre-fetched context.
+        try:
+            from app.internal.analysis_engine import AttackAnalyzer, RequestEvent
+            _interval_ms, _recent_st, _recent_paths, _recent_ivs = \
+                _fetch_actor_signal_context(cur, actor_id, ts)
+            _ae_event = RequestEvent(
+                path=path,
+                method=method,
+                ua=ua,
+                headers=_safe_headers(req),
+                query_params=dict(req.query_params),
+                status=int(status),
+                body_size=len(body) if body else 0,
+                session_request_count=max(0, seq - 1),
+                interval_ms=_interval_ms,
+                recent_statuses=_recent_st,
+                recent_paths=_recent_paths,
+                recent_intervals_ms=_recent_ivs,
+            )
+            _analysis = AttackAnalyzer().analyze(_ae_event)
+            try:
+                _ac_payload = json.loads(
+                    cur.execute(
+                        "SELECT extra_json FROM events WHERE rowid=?", (event_id,)
+                    ).fetchone()[0] or "{}"
+                )
+            except Exception:
+                _ac_payload = {}
+            _ac_payload["attack_type"] = _analysis.attack_type
+            _ac_payload["attack_confidence"] = _analysis.confidence_score
+            _ac_payload["attack_signals"] = _analysis.signals
+            cur.execute(
+                "UPDATE events SET extra_json=? WHERE rowid=?",
+                (json.dumps(_ac_payload, ensure_ascii=False), event_id),
+            )
+        except Exception:
+            pass  # never fail the pipeline; classification is best-effort
+        # ─────────────────────────────────────────────────────────────────────
+
         headers_json = json.dumps(_safe_headers(req), ensure_ascii=False)
         query_json = json.dumps(dict(req.query_params), ensure_ascii=False)
         body_json = None
