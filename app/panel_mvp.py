@@ -735,15 +735,9 @@ def _live_monitored_endpoints() -> list[str]:
     Falls back to the monitor's startup list if the provider is unavailable.
     """
     try:
-        from app.runtime_provider import get_provider
-        eps = get_provider().get_config().enabled_endpoints()
-        from app.honeypot_monitor import _replace_path_params, _normalize_endpoint
-        labels = []
-        for ep in eps:
-            path = _replace_path_params(_normalize_endpoint(ep.path_pattern or ""))
-            if path:
-                method = ep.method.value if hasattr(ep.method, "value") else str(ep.method or "GET")
-                labels.append(f"{method.upper()} {path}")
+        checks = honeypot_monitor.refresh_checks()
+        labels = [str(c.get("label") or "").strip() for c in checks]
+        labels = [label for label in labels if label]
         if labels:
             return labels
     except Exception:

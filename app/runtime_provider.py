@@ -158,6 +158,8 @@ class RuntimeConfigProvider:
     def _reload_registry_if_needed(self) -> None:
         """Reload catalog when custom templates changed in another process."""
         current_version = custom_api_templates.catalog_version(self._db_path)
+        if not hasattr(self, "_registry_version"):
+            self._registry_version = current_version
         if current_version == self._registry_version:
             return
         try:

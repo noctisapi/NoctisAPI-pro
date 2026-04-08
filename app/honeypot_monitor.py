@@ -233,7 +233,7 @@ def _default_checks() -> List[Dict[str, Any]]:
         from app.runtime_provider import get_provider
         provider = get_provider()
         config = provider.get_config()
-        enabled = config.enabled_endpoints
+        enabled = config.enabled_endpoints()
         if enabled:
             checks: List[Dict[str, Any]] = []
             for ep in enabled:
@@ -273,19 +273,9 @@ def _default_checks() -> List[Dict[str, Any]]:
     return checks or [_make_check("GET", "/health")]
 
 
-_DEFAULT_CHECKS_CACHE: Optional[List[Dict[str, Any]]] = None
-
-
-def _get_default_checks() -> List[Dict[str, Any]]:
-    """Return the default checks list, computing it once on first call.
-
-    Deferred so that runtime_provider (which needs the DB path) is fully
-    initialised before we ask it for the enabled-endpoint list.
-    """
-    global _DEFAULT_CHECKS_CACHE
-    if _DEFAULT_CHECKS_CACHE is None:
-        _DEFAULT_CHECKS_CACHE = _default_checks()
-    return _DEFAULT_CHECKS_CACHE
+def current_default_checks() -> List[Dict[str, Any]]:
+    """Return checks for the current API Modular runtime without cache."""
+    return _default_checks()
 
 
 def _safe_json(resp: httpx.Response) -> Dict[str, Any]:
@@ -327,7 +317,8 @@ class HoneypotAvailabilityMonitor:
         chosen = base_url if base_url is not None else (HONEYPOT_MONITOR_BASE_URL or HONEYPOT_PUBLIC_BASE_URL)
         self.base_url = _sanitize_base(chosen)
         self.public_base_url = _sanitize_base(HONEYPOT_PUBLIC_BASE_URL)
-        self.checks = checks or _get_default_checks()
+        self._dynamic_checks = checks is None and endpoints is None
+        self.checks = checks or current_default_checks()
         self.endpoints = endpoints or [c["label"] for c in self.checks]
         self._check_map = {c["label"]: c for c in self.checks}
         self.interval = HONEYPOT_CHECK_INTERVAL
@@ -337,7 +328,17 @@ class HoneypotAvailabilityMonitor:
 
     @property
     def configured(self) -> bool:
+        self.refresh_checks()
         return bool(self.base_url and self.checks)
+
+    def refresh_checks(self) -> List[Dict[str, Any]]:
+        """Refresh checks from the active API Modular runtime when dynamic."""
+        if not self._dynamic_checks:
+            return self.checks
+        self.checks = current_default_checks()
+        self.endpoints = [c["label"] for c in self.checks]
+        self._check_map = {c["label"]: c for c in self.checks}
+        return self.checks
 
     @property
     def display_base_url(self) -> str:
@@ -365,6 +366,7 @@ class HoneypotAvailabilityMonitor:
             self._stop_event.wait(self.interval)
 
     def run_check(self, endpoint: Optional[str] = None) -> List[Dict[str, Any]] | Dict[str, Any]:
+        self.refresh_checks()
         if not self.configured:
             raise RuntimeError("HONEYPOT_MONITOR_BASE_URL/HONEYPOT_PUBLIC_BASE_URL are not configured")
 
@@ -674,7 +676,7 @@ def _summarize_endpoint(conn: sqlite3.Connection, endpoint: str, limit: int) -> 
 
 
 def get_summary(conn: sqlite3.Connection, base_url: str, endpoints: List[str], limit: int = 20) -> Dict[str, Any]:
-    endpoints = endpoints or [c["label"] for c in DEFAULT_CHECKS]
+    endpoints = endpoints or [c["label"] for c in current_default_checks()]
     summaries = [_summarize_endpoint(conn, endpoint, limit) for endpoint in endpoints]
     return {
         "configured": bool(base_url and endpoints),
