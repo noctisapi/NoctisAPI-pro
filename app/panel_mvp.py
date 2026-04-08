@@ -5705,3 +5705,202 @@ def replay_export_har(session_id: str):
         headers={"Content-Disposition": f'attachment; filename="session_{short_id}.har"'},
     )
 
+
+# ── PRO: Log Export Stream — consumer token management ───────────────────────
+
+from app import log_export_stream as _les
+
+
+def _require_log_export_feature() -> None:
+    """Raise 403 if the LOG_EXPORT feature is not active."""
+    if not _has_feature(licensing.Feature.LOG_EXPORT, action="panel_log_export"):
+        raise HTTPException(status_code=403, detail="feature not available")
+
+
+@app.get("/dashboard/log-export", include_in_schema=False, response_class=HTMLResponse)
+def dashboard_log_export(request: Request):
+    pro_enabled = _has_feature(licensing.Feature.LOG_EXPORT, action="panel_log_export")
+    conn = db()
+    try:
+        _les.ensure_tables(conn)
+        consumers = _les.list_consumers(conn) if pro_enabled else []
+        stats = _les.get_export_stats(conn) if pro_enabled else {}
+    finally:
+        conn.close()
+
+    # Human-readable retention label
+    retention_s = _les.get_retention_seconds()
+    if retention_s >= 86400:
+        retention_label = f"{retention_s // 86400}d"
+    elif retention_s >= 3600:
+        retention_label = f"{retention_s // 3600}h"
+    else:
+        retention_label = f"{retention_s}s"
+
+    from datetime import datetime, timezone as _tz
+    now_iso = datetime.now(_tz.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+    return templates.TemplateResponse(
+        "log_export.html",
+        {
+            "request": request,
+            "pro_enabled": pro_enabled,
+            "consumers": consumers,
+            "stats": stats,
+            "retention_label": retention_label,
+            "now_iso": now_iso,
+            "public_host": HP_PUBLIC_BASE_URL or "your-domain.com",
+            **_license_context(),
+        },
+    )
+
+
+@app.get("/pro/log-export/stats", include_in_schema=False, response_class=JSONResponse)
+def log_export_stats():
+    """Return aggregate stats for the log-export stream (PRO)."""
+    _require_log_export_feature()
+    conn = db()
+    try:
+        _les.ensure_tables(conn)
+        return JSONResponse(content=_les.get_export_stats(conn))
+    finally:
+        conn.close()
+
+
+@app.get("/pro/log-export/consumers", include_in_schema=False, response_class=JSONResponse)
+def log_export_list_consumers():
+    """List all log-stream consumers. Token hashes are never returned."""
+    _require_log_export_feature()
+    conn = db()
+    try:
+        _les.ensure_tables(conn)
+        return JSONResponse(content={"consumers": _les.list_consumers(conn)})
+    finally:
+        conn.close()
+
+
+@app.post("/pro/log-export/consumers", include_in_schema=False, response_class=JSONResponse)
+async def log_export_create_consumer(request: Request):
+    """
+    Create a new log-stream consumer.
+
+    Body: {"name": "my-siem-agent", "expires_at": "2027-01-01T00:00:00Z"}  (expires_at optional)
+
+    The plaintext token is returned ONCE in this response and never stored.
+    """
+    _require_log_export_feature()
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid JSON body")
+    name = str(body.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+    expires_at = str(body.get("expires_at") or "").strip() or None
+    conn = db()
+    try:
+        _les.ensure_tables(conn)
+        result = _les.create_consumer(conn, name=name, expires_at=expires_at)
+    finally:
+        conn.close()
+    # token is plaintext — shown once, never retrievable again.
+    return JSONResponse(
+        status_code=201,
+        content={
+            "consumer_id": result["consumer_id"],
+            "name": result["name"],
+            "token": result["token"],
+            "created_at": result["created_at"],
+            "note": "Save this token now. It will not be shown again.",
+        },
+    )
+
+
+@app.post(
+    "/pro/log-export/consumers/{consumer_id}/revoke",
+    include_in_schema=False,
+    response_class=JSONResponse,
+)
+def log_export_revoke_consumer(consumer_id: int):
+    """Disable a consumer token by ID."""
+    _require_log_export_feature()
+    conn = db()
+    try:
+        ok = _les.revoke_consumer(conn, consumer_id)
+    finally:
+        conn.close()
+    if not ok:
+        raise HTTPException(status_code=404, detail="consumer not found")
+    return JSONResponse(content={"ok": True, "consumer_id": consumer_id})
+
+
+@app.post(
+    "/pro/log-export/consumers/{consumer_id}/rotate",
+    include_in_schema=False,
+    response_class=JSONResponse,
+)
+def log_export_rotate_consumer(consumer_id: int):
+    """
+    Rotate the token for a consumer.
+
+    Returns the new plaintext token (shown once).
+    """
+    _require_log_export_feature()
+    conn = db()
+    try:
+        new_token = _les.rotate_consumer_token(conn, consumer_id)
+    finally:
+        conn.close()
+    if new_token is None:
+        raise HTTPException(status_code=404, detail="consumer not found")
+    return JSONResponse(
+        content={
+            "ok": True,
+            "consumer_id": consumer_id,
+            "token": new_token,
+            "note": "Save this token now. It will not be shown again.",
+        }
+    )
+
+
+@app.put(
+    "/pro/log-export/consumers/{consumer_id}",
+    include_in_schema=False,
+    response_class=JSONResponse,
+)
+async def log_export_update_consumer(consumer_id: int, request: Request):
+    """Enable or disable a consumer. Body: {"enabled": true|false}"""
+    _require_log_export_feature()
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid JSON body")
+    if "enabled" not in body:
+        raise HTTPException(status_code=400, detail="'enabled' field required")
+    conn = db()
+    try:
+        ok = _les.set_consumer_enabled(conn, consumer_id, bool(body["enabled"]))
+    finally:
+        conn.close()
+    if not ok:
+        raise HTTPException(status_code=404, detail="consumer not found")
+    return JSONResponse(content={"ok": True, "consumer_id": consumer_id})
+
+
+@app.delete(
+    "/pro/log-export/consumers/{consumer_id}",
+    include_in_schema=False,
+    response_class=JSONResponse,
+)
+def log_export_delete_consumer(consumer_id: int):
+    """Permanently delete a consumer and its token hash."""
+    _require_log_export_feature()
+    conn = db()
+    try:
+        ok = _les.delete_consumer(conn, consumer_id)
+    finally:
+        conn.close()
+    if not ok:
+        raise HTTPException(status_code=404, detail="consumer not found")
+    return JSONResponse(content={"ok": True, "consumer_id": consumer_id})
+

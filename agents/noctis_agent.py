@@ -1,0 +1,363 @@
+#!/usr/bin/env python3
+"""
+NoctisAPI Log Export Agent — Reference Implementation
+=====================================================
+
+Connects outbound to NoctisAPI's /pro/internal/log-poll endpoint and
+streams honeypot events to a local JSONL file.
+
+Features:
+  - Persistent cursor across restarts (stored on disk)
+  - Long-polling loop with configurable wait time
+  - Exponential backoff on transient errors
+  - Idempotent event processing (cursor saved only after successful write)
+  - Optional deduplication via event_id
+
+Usage:
+  python noctis_agent.py --config config.json
+
+Config file example (config.json):
+  {
+    "server_url":              "https://your-domain.com/pro/internal/log-poll",
+    "bearer_token":            "nctx_ls_<hex>",
+    "cursor_file":             "/var/lib/noctis-agent/cursor.json",
+    "output_path":             "/var/log/noctisapi/events.jsonl",
+    "poll_wait_seconds":       25,
+    "max_events":              100,
+    "request_timeout_seconds": 35,
+    "backoff_max_seconds":     15
+  }
+
+Environment variable overrides (all optional):
+  NOCTIS_SERVER_URL        — overrides server_url
+  NOCTIS_BEARER_TOKEN      — overrides bearer_token (recommended; avoids token in config file)
+  NOCTIS_CURSOR_FILE       — overrides cursor_file
+  NOCTIS_OUTPUT_PATH       — overrides output_path
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import os
+import sys
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+from typing import Optional
+
+_logger = logging.getLogger("noctis_agent")
+
+# ---------------------------------------------------------------------------
+# Defaults
+# ---------------------------------------------------------------------------
+
+_DEFAULTS = {
+    "server_url": "",
+    "bearer_token": "",
+    "cursor_file": "/var/lib/noctis-agent/cursor.json",
+    "output_path": "/var/log/noctisapi/events.jsonl",
+    "poll_wait_seconds": 25,
+    "max_events": 100,
+    "request_timeout_seconds": 35,
+    "backoff_max_seconds": 15,
+}
+
+# Backoff schedule in seconds (retried in order, then holds at max).
+_BACKOFF_SCHEDULE = [1, 2, 5, 10, 15]
+
+
+# ---------------------------------------------------------------------------
+# Config
+# ---------------------------------------------------------------------------
+
+def load_config(path: Optional[str]) -> dict:
+    """Merge defaults < config file < environment variables."""
+    cfg = dict(_DEFAULTS)
+
+    if path:
+        with open(path, "r") as f:
+            file_cfg = json.load(f)
+        cfg.update({k: v for k, v in file_cfg.items() if k in _DEFAULTS})
+
+    # Environment overrides — token especially should come from env, not file.
+    if os.environ.get("NOCTIS_SERVER_URL"):
+        cfg["server_url"] = os.environ["NOCTIS_SERVER_URL"].strip()
+    if os.environ.get("NOCTIS_BEARER_TOKEN"):
+        cfg["bearer_token"] = os.environ["NOCTIS_BEARER_TOKEN"].strip()
+    if os.environ.get("NOCTIS_CURSOR_FILE"):
+        cfg["cursor_file"] = os.environ["NOCTIS_CURSOR_FILE"].strip()
+    if os.environ.get("NOCTIS_OUTPUT_PATH"):
+        cfg["output_path"] = os.environ["NOCTIS_OUTPUT_PATH"].strip()
+
+    return cfg
+
+
+def validate_config(cfg: dict) -> None:
+    if not cfg.get("server_url"):
+        raise ValueError("server_url is required")
+    if not cfg.get("bearer_token"):
+        raise ValueError("bearer_token is required (use env NOCTIS_BEARER_TOKEN)")
+    if not cfg["bearer_token"].startswith("nctx_ls_"):
+        _logger.warning("bearer_token does not start with 'nctx_ls_' — may be invalid")
+
+
+# ---------------------------------------------------------------------------
+# Cursor persistence
+# ---------------------------------------------------------------------------
+
+def load_cursor(cursor_file: str) -> int:
+    """Return the last persisted cursor, or 0 if none exists."""
+    p = Path(cursor_file)
+    if not p.exists():
+        return 0
+    try:
+        data = json.loads(p.read_text())
+        return int(data.get("cursor", 0))
+    except Exception as exc:
+        _logger.warning("cursor load failed (%s), starting from 0", exc)
+        return 0
+
+
+def save_cursor(cursor_file: str, cursor: int) -> None:
+    """Atomically persist *cursor* to disk."""
+    p = Path(cursor_file)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"cursor": cursor}))
+    tmp.replace(p)
+
+
+# ---------------------------------------------------------------------------
+# Event output
+# ---------------------------------------------------------------------------
+
+def write_events(output_path: str, events: list[dict]) -> None:
+    """Append events to a JSONL file. Raises on I/O error."""
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "a", encoding="utf-8") as f:
+        for event in events:
+            f.write(json.dumps(event, ensure_ascii=False) + "\n")
+
+
+# ---------------------------------------------------------------------------
+# HTTP polling
+# ---------------------------------------------------------------------------
+
+def poll(
+    server_url: str,
+    token: str,
+    cursor: int,
+    max_events: int,
+    wait_seconds: int,
+    timeout_seconds: int,
+) -> dict:
+    """
+    POST to /pro/internal/log-poll and return the parsed JSON body.
+
+    Raises urllib.error.HTTPError, urllib.error.URLError, or json.JSONDecodeError
+    on failure.
+    """
+    payload = json.dumps(
+        {
+            "cursor": cursor,
+            "max_events": max_events,
+            "wait_seconds": wait_seconds,
+        }
+    ).encode()
+
+    req = urllib.request.Request(
+        server_url,
+        data=payload,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "noctis-agent/1.0",
+        },
+    )
+
+    with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
+        raw = resp.read()
+
+    return json.loads(raw)
+
+
+# ---------------------------------------------------------------------------
+# Backoff helper
+# ---------------------------------------------------------------------------
+
+class _Backoff:
+    def __init__(self, schedule: list[int], max_seconds: int):
+        self._sched = schedule
+        self._max = max_seconds
+        self._idx = 0
+        self._consecutive = 0
+
+    def fail(self) -> None:
+        self._consecutive += 1
+        self._idx = min(self._idx + 1, len(self._sched) - 1)
+
+    def success(self) -> None:
+        self._consecutive = 0
+        self._idx = 0
+
+    def sleep(self) -> None:
+        delay = min(self._sched[self._idx], self._max)
+        _logger.info("backoff: sleeping %ds (consecutive failures: %d)", delay, self._consecutive)
+        time.sleep(delay)
+
+
+# ---------------------------------------------------------------------------
+# Main polling loop
+# ---------------------------------------------------------------------------
+
+_PERMANENT_ERRORS = {"cursor_expired"}
+
+
+def run_agent(cfg: dict) -> None:
+    server_url = cfg["server_url"]
+    token = cfg["bearer_token"]
+    cursor_file = cfg["cursor_file"]
+    output_path = cfg["output_path"]
+    poll_wait = int(cfg["poll_wait_seconds"])
+    max_events = int(cfg["max_events"])
+    timeout = int(cfg["request_timeout_seconds"])
+    backoff_max = int(cfg["backoff_max_seconds"])
+
+    backoff = _Backoff(_BACKOFF_SCHEDULE, backoff_max)
+    _logger.info("agent started — server=%s cursor_file=%s output=%s", server_url, cursor_file, output_path)
+
+    auth_failed_count = 0
+
+    while True:
+        cursor = load_cursor(cursor_file)
+
+        try:
+            _logger.debug("polling cursor=%d wait=%ds", cursor, poll_wait)
+            body = poll(
+                server_url=server_url,
+                token=token,
+                cursor=cursor,
+                max_events=max_events,
+                wait_seconds=poll_wait,
+                timeout_seconds=timeout,
+            )
+        except urllib.error.HTTPError as exc:
+            status = exc.code
+            if status in (401, 403, 404):
+                auth_failed_count += 1
+                _logger.error(
+                    "auth/access error (HTTP %d) — check bearer_token and server_url "
+                    "[failure #%d]",
+                    status,
+                    auth_failed_count,
+                )
+                if auth_failed_count >= 3:
+                    _logger.critical(
+                        "3 consecutive auth failures — stopping agent to prevent token lockout"
+                    )
+                    sys.exit(1)
+                # Slow backoff on auth issues; do not hammer.
+                time.sleep(30)
+                continue
+            _logger.warning("HTTP error %d — will retry", status)
+            backoff.fail()
+            backoff.sleep()
+            continue
+        except (urllib.error.URLError, OSError, TimeoutError) as exc:
+            _logger.warning("network error: %s — will retry", exc)
+            backoff.fail()
+            backoff.sleep()
+            continue
+        except json.JSONDecodeError as exc:
+            _logger.warning("bad JSON response: %s — will retry", exc)
+            backoff.fail()
+            backoff.sleep()
+            continue
+
+        # Reset auth failure counter on any successful HTTP response.
+        auth_failed_count = 0
+
+        if not isinstance(body, dict):
+            _logger.warning("unexpected response shape — will retry")
+            backoff.fail()
+            backoff.sleep()
+            continue
+
+        if not body.get("ok"):
+            error_code = body.get("error", "unknown")
+            _logger.warning("server error: %s", error_code)
+            if error_code in _PERMANENT_ERRORS:
+                _logger.error(
+                    "cursor_expired: the agent has fallen too far behind the retention window. "
+                    "Resetting cursor to 0 and re-syncing from earliest available event."
+                )
+                save_cursor(cursor_file, 0)
+            else:
+                backoff.fail()
+                backoff.sleep()
+            continue
+
+        events = body.get("events") or []
+        new_cursor = body.get("cursor", cursor)
+
+        if events:
+            try:
+                write_events(output_path, events)
+            except Exception as exc:
+                _logger.error("failed to write events to %s: %s — will retry without advancing cursor", output_path, exc)
+                backoff.fail()
+                backoff.sleep()
+                continue
+            # Cursor is saved ONLY after successful write — ensures no event is silently dropped.
+            save_cursor(cursor_file, new_cursor)
+            _logger.info("wrote %d event(s), cursor advanced to %d", len(events), new_cursor)
+        else:
+            _logger.debug("no new events (cursor=%d)", cursor)
+
+        backoff.success()
+        # No explicit sleep here; the long-poll wait_seconds acts as the interval
+        # when the server has no events.  When events are returned immediately we
+        # loop straight back to avoid missed events during bursts.
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+def _setup_logging(verbose: bool) -> None:
+    level = logging.DEBUG if verbose else logging.INFO
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s %(levelname)s %(name)s — %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%SZ",
+    )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="NoctisAPI Log Export Agent")
+    parser.add_argument("--config", "-c", default=None, help="Path to JSON config file")
+    parser.add_argument("--verbose", "-v", action="store_true", help="Enable debug logging")
+    args = parser.parse_args()
+
+    _setup_logging(args.verbose)
+
+    cfg = load_config(args.config)
+    try:
+        validate_config(cfg)
+    except ValueError as exc:
+        _logger.critical("config error: %s", exc)
+        sys.exit(1)
+
+    try:
+        run_agent(cfg)
+    except KeyboardInterrupt:
+        _logger.info("agent stopped by user")
+        sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()

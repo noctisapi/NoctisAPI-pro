@@ -1,0 +1,617 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  /* ── Consumer status badges ── */
+  .cons-enabled  { background:rgba(26,191,107,.13); color:#7ee2b8; border-color:rgba(26,191,107,.4); }
+  .cons-disabled { background:rgba(200,200,200,.08); color:var(--muted); border-color:rgba(200,200,200,.25); }
+  .cons-expired  { background:rgba(231,76,60,.13);  color:#f2a6a6; border-color:rgba(231,76,60,.35); }
+
+  /* ── Filter bar ── */
+  .filter-card {
+    background: linear-gradient(180deg, var(--panel2), var(--panel));
+    border: 1px solid var(--stroke);
+    border-radius: 16px;
+    padding: 14px 20px;
+    margin-bottom: 14px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: flex-end;
+  }
+  .filter-field { display: flex; flex-direction: column; gap: 4px; }
+  .filter-field label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+  .filter-field.flex-1 { flex: 1; min-width: 180px; }
+
+  /* ── Modal overlay ── */
+  .modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,.65);
+    z-index: 100;
+    align-items: center;
+    justify-content: center;
+  }
+  .modal-overlay.open { display: flex; }
+  .modal-box {
+    background: var(--panel);
+    border: 1px solid var(--stroke2);
+    border-radius: 8px;
+    width: 100%;
+    max-width: 480px;
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    position: relative;
+  }
+  .modal-title {
+    font-size: 15px;
+    font-weight: 700;
+    margin: 0;
+  }
+  .modal-close {
+    position: absolute;
+    top: 14px; right: 16px;
+    background: none;
+    border: none;
+    color: var(--muted);
+    font-size: 20px;
+    cursor: pointer;
+    line-height: 1;
+    padding: 2px 6px;
+  }
+  .modal-close:hover { color: var(--text); }
+
+  .form-row { display: flex; flex-direction: column; gap: 5px; }
+  .form-row label { font-size: 0.78rem; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+  .form-row .input { width: 100%; box-sizing: border-box; }
+
+  /* ── Token reveal box ── */
+  .token-reveal {
+    display: none;
+    flex-direction: column;
+    gap: 10px;
+    background: rgba(74,158,110,.07);
+    border: 1px solid rgba(74,158,110,.35);
+    border-radius: 6px;
+    padding: 14px 16px;
+  }
+  .token-reveal.visible { display: flex; }
+  .token-reveal-label {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: #7ee2b8;
+    font-weight: 700;
+  }
+  .token-reveal-warn {
+    font-size: 0.78rem;
+    color: #ffc940;
+  }
+  .token-value {
+    font-family: var(--mono);
+    font-size: 0.82rem;
+    color: var(--text);
+    background: rgba(0,0,0,.35);
+    border: 1px solid var(--stroke);
+    border-radius: 4px;
+    padding: 8px 12px;
+    word-break: break-all;
+    user-select: all;
+  }
+  .copy-btn {
+    align-self: flex-start;
+    font-size: 0.78rem;
+    padding: 4px 12px;
+  }
+
+  /* ── Table extras ── */
+  .cons-table td { vertical-align: middle; }
+  .cons-name-cell { font-weight: 500; }
+  .ip-cell { font-size: 0.78rem; color: var(--muted); }
+  .actions-cell { display: flex; gap: 6px; }
+
+  /* ── Stats strip ── */
+  .stats-strip {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+  }
+  .stat-box {
+    flex: 1;
+    min-width: 130px;
+    background: var(--panel);
+    border: 1px solid var(--stroke);
+    border-radius: 6px;
+    padding: 12px 16px;
+  }
+  .stat-label {
+    font-size: 0.70rem;
+    text-transform: uppercase;
+    letter-spacing: .07em;
+    color: var(--muted);
+    margin-bottom: 4px;
+  }
+  .stat-value {
+    font-family: var(--mono);
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text);
+    line-height: 1.2;
+  }
+  .stat-sub {
+    font-size: 0.72rem;
+    color: var(--muted);
+    margin-top: 2px;
+  }
+
+  /* ── PRO gate banner ── */
+  .pro-gate {
+    background: rgba(74,158,110,.06);
+    border: 1px solid rgba(74,158,110,.25);
+    border-radius: 6px;
+    padding: 14px 18px;
+    margin-bottom: 16px;
+    font-size: 0.85rem;
+    color: var(--muted);
+  }
+
+  /* ── Feedback messages ── */
+  .feedback-ok  { color: #7ee2b8; font-size: 0.82rem; }
+  .feedback-err { color: #f2a6a6; font-size: 0.82rem; }
+</style>
+
+<!-- ── Page header ── -->
+<div class="page-head">
+  <div>
+    <h1>Log Export Stream</h1>
+    <div class="sub">Pull-based log delivery for SIEM / internal agents &middot; PRO</div>
+  </div>
+  <div class="kpis">
+    <div class="kpi">
+      <div class="kpi-label">Consumers</div>
+      <div class="kpi-value mono">{{ stats.active_consumers }}</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Events</div>
+      <div class="kpi-value mono">{{ stats.total_events }}</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Retention</div>
+      <div class="kpi-value mono">{{ retention_label }}</div>
+    </div>
+  </div>
+</div>
+
+{% if not pro_enabled %}
+<!-- ── PRO required gate ── -->
+<div class="card" style="max-width:480px;margin:32px auto;text-align:center;">
+  <div class="card-body" style="padding:32px 24px;display:flex;flex-direction:column;align-items:center;gap:14px;">
+    <div style="font-size:28px;line-height:1;">🔒</div>
+    <div>
+      <div style="font-weight:700;font-size:15px;margin-bottom:6px;">Pro edition required</div>
+      <div class="muted small-text"><strong style="color:var(--text);">Log Export Stream</strong> is available on the Pro edition.</div>
+    </div>
+    <a href="https://www.noctisapi.com/#comparison" target="_blank" rel="noreferrer" class="btn btn-primary">Upgrade to Pro →</a>
+    <a href="/dashboard" class="back" style="margin:0;">← Back to dashboard</a>
+  </div>
+</div>
+{% else %}
+
+<!-- ── Stats strip ── -->
+<div class="stats-strip">
+  <div class="stat-box">
+    <div class="stat-label">Total export events</div>
+    <div class="stat-value">{{ stats.total_events }}</div>
+    <div class="stat-sub">accumulated in the store</div>
+  </div>
+  <div class="stat-box">
+    <div class="stat-label">Active consumers</div>
+    <div class="stat-value">{{ stats.active_consumers }}</div>
+    <div class="stat-sub">enabled tokens</div>
+  </div>
+  <div class="stat-box">
+    <div class="stat-label">Retention window</div>
+    <div class="stat-value">{{ retention_label }}</div>
+    <div class="stat-sub">HP_LOG_EXPORT_RETENTION_SECONDS</div>
+  </div>
+  <div class="stat-box">
+    <div class="stat-label">Oldest event</div>
+    <div class="stat-value mono" style="font-size:13px;">{{ (stats.oldest_event or '—')[:10] }}</div>
+    <div class="stat-sub">first available cursor</div>
+  </div>
+</div>
+
+<!-- ── Action bar ── -->
+<div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+  <button class="btn btn-primary" type="button" onclick="openCreate()">+ New Consumer</button>
+  <span class="muted" style="font-size:0.80rem;">
+    Endpoint: <span class="mono" style="color:var(--text);">POST /pro/internal/log-poll</span>
+  </span>
+</div>
+
+<!-- ── Filter bar ── -->
+<div class="filter-card">
+  <div class="filter-field flex-1">
+    <label>Search name</label>
+    <input class="input" type="text" id="searchInput" placeholder="Filter by name…" autocomplete="off" oninput="filterTable()">
+  </div>
+  <div class="filter-field">
+    <label>Status</label>
+    <select class="input" id="statusFilter" onchange="filterTable()">
+      <option value="">All</option>
+      <option value="enabled">Enabled</option>
+      <option value="disabled">Disabled</option>
+    </select>
+  </div>
+  <div style="display:flex;gap:6px;align-items:flex-end;">
+    <button class="btn btn-ghost btn-small" type="button" onclick="clearFilter()">Clear</button>
+  </div>
+</div>
+
+<!-- ── Consumers table ── -->
+<div class="card">
+  <div class="card-head">
+    <div class="card-title">Consumers</div>
+    <div class="card-sub" id="tableCount">
+      {{ consumers | length }} consumer{{ 's' if consumers | length != 1 else '' }}
+    </div>
+  </div>
+
+  <div class="table-wrap">
+    <table class="table cons-table" id="consTable">
+      <thead>
+        <tr>
+          <th style="width:48px;">#</th>
+          <th>Name</th>
+          <th style="width:100px;">Status</th>
+          <th style="width:150px;">Created</th>
+          <th style="width:150px;">Last used</th>
+          <th style="width:120px;">Last IP</th>
+          <th style="width:130px;">Expires</th>
+          <th style="width:130px;"></th>
+        </tr>
+      </thead>
+      <tbody id="consBody">
+        {% for c in consumers %}
+        {% set expired = c.expires_at and c.expires_at < now_iso %}
+        <tr data-id="{{ c.id }}" data-enabled="{{ '1' if c.enabled else '0' }}">
+          <td class="mono muted" style="font-size:0.82rem;">{{ c.id }}</td>
+          <td class="cons-name-cell">{{ c.name }}</td>
+          <td>
+            {% if expired %}
+              <span class="badge cons-expired">expired</span>
+            {% elif c.enabled %}
+              <span class="badge cons-enabled">enabled</span>
+            {% else %}
+              <span class="badge cons-disabled">disabled</span>
+            {% endif %}
+          </td>
+          <td class="mono muted" style="font-size:0.80rem;">{{ (c.created_at or '—')[:19].replace('T',' ') }}</td>
+          <td class="mono muted" style="font-size:0.80rem;">{{ (c.last_used_at or '—')[:19].replace('T',' ') }}</td>
+          <td class="ip-cell mono">{{ c.last_used_ip or '—' }}</td>
+          <td class="mono muted" style="font-size:0.80rem;">
+            {% if c.expires_at %}{{ c.expires_at[:10] }}{% else %}—{% endif %}
+          </td>
+          <td>
+            <div class="actions-cell">
+              <button class="btn btn-small" title="{{ 'Disable' if c.enabled else 'Enable' }}"
+                onclick="toggleConsumer({{ c.id }}, {{ 'false' if c.enabled else 'true' }}, this)">
+                {{ 'Disable' if c.enabled else 'Enable' }}
+              </button>
+              <button class="btn btn-small" title="Rotate token"
+                onclick="rotateConsumer({{ c.id }}, this)">
+                Rotate
+              </button>
+              <button class="btn btn-danger btn-small" title="Delete consumer"
+                onclick="deleteConsumer({{ c.id }}, this)">
+                Delete
+              </button>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% if not consumers %}
+  <div style="padding:32px;text-align:center;color:var(--muted);font-size:0.85rem;">
+    No consumers yet. Click <strong style="color:var(--text);">+ New Consumer</strong> to create the first one.
+  </div>
+  {% endif %}
+</div>
+
+<!-- ── Agent usage note ── -->
+<div style="margin-top:20px;">
+  <div class="card">
+    <div class="card-head">
+      <div class="card-title">Agent setup</div>
+    </div>
+    <div class="card-body" style="padding:14px 16px;">
+      <div style="font-size:0.82rem;color:var(--muted);margin-bottom:10px;">
+        Run the reference agent on your internal machine. It connects outbound — no inbound port needed.
+      </div>
+      <pre style="background:rgba(0,0,0,.3);border:1px solid var(--stroke);border-radius:4px;padding:12px 14px;font-size:0.78rem;overflow-x:auto;margin:0;"><code>NOCTIS_BEARER_TOKEN=nctx_ls_... \
+python agents/noctis_agent.py --config agent_config.json
+
+# agent_config.json
+{
+  "server_url":              "https://{{ public_host }}/pro/internal/log-poll",
+  "cursor_file":             "/var/lib/noctis-agent/cursor.json",
+  "output_path":             "/var/log/noctisapi/events.jsonl",
+  "poll_wait_seconds":       25,
+  "max_events":              100,
+  "request_timeout_seconds": 35
+}</code></pre>
+    </div>
+  </div>
+</div>
+
+{% endif %}{# end pro_enabled #}
+
+
+<!-- ══════════════════════════════════════════════════════════
+     Modal: create new consumer
+══════════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="createModal" onclick="modalBgClick(event)">
+  <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <button class="modal-close" onclick="closeCreate()" title="Close">&times;</button>
+    <div class="modal-title" id="modalTitle">New Consumer Token</div>
+
+    <!-- Form fields (visible before creation) -->
+    <div id="createForm">
+      <div class="form-row" style="margin-bottom:12px;">
+        <label for="consName">Consumer name <span style="color:#f2a6a6;">*</span></label>
+        <input class="input" type="text" id="consName" placeholder="e.g. prod-siem-agent" autocomplete="off" maxlength="120">
+      </div>
+      <div class="form-row" style="margin-bottom:16px;">
+        <label for="consExpires">Expires at <span class="muted">(optional, UTC)</span></label>
+        <input class="input" type="datetime-local" id="consExpires">
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <button class="btn btn-primary" type="button" id="createBtn" onclick="doCreate()">Create token</button>
+        <button class="btn btn-ghost" type="button" onclick="closeCreate()">Cancel</button>
+        <span id="createFeedback" style="font-size:0.82rem;"></span>
+      </div>
+    </div>
+
+    <!-- Token reveal (shown after successful creation) -->
+    <div class="token-reveal" id="tokenReveal">
+      <div class="token-reveal-label">✓ Token created — copy it now</div>
+      <div class="token-reveal-warn">⚠ This token will not be shown again. Store it securely before closing.</div>
+      <div class="token-value mono" id="tokenValue"></div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <button class="btn btn-small copy-btn" type="button" onclick="copyToken()">Copy</button>
+        <span id="copyFeedback" class="feedback-ok" style="display:none;">Copied!</span>
+      </div>
+    </div>
+
+    <!-- Done button (shown after token reveal) -->
+    <div id="doneRow" style="display:none;">
+      <button class="btn btn-primary" type="button" onclick="doneCreate()">Done — reload page</button>
+    </div>
+  </div>
+</div>
+
+
+<!-- ══════════════════════════════════════════════════════════
+     Modal: rotated token reveal
+══════════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="rotateModal" onclick="rotateBgClick(event)">
+  <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="rotateTitle">
+    <button class="modal-close" onclick="closeRotate()" title="Close">&times;</button>
+    <div class="modal-title" id="rotateTitle">Token Rotated</div>
+    <div class="token-reveal visible" id="rotateReveal">
+      <div class="token-reveal-label">✓ New token generated — copy it now</div>
+      <div class="token-reveal-warn">⚠ This token will not be shown again. The old token is immediately invalidated.</div>
+      <div class="token-value mono" id="rotateTokenValue"></div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <button class="btn btn-small copy-btn" type="button" onclick="copyRotatedToken()">Copy</button>
+        <span id="rotateCopyFeedback" class="feedback-ok" style="display:none;">Copied!</span>
+      </div>
+    </div>
+    <button class="btn btn-primary" type="button" onclick="closeRotate()">Done</button>
+  </div>
+</div>
+
+
+<script>
+/* ── Filter ── */
+function filterTable() {
+  const q = (document.getElementById('searchInput').value || '').toLowerCase();
+  const sf = document.getElementById('statusFilter').value;
+  let visible = 0;
+  document.querySelectorAll('#consBody tr').forEach(tr => {
+    const name = (tr.querySelector('.cons-name-cell') || {}).textContent || '';
+    const en = tr.dataset.enabled;
+    const matchText = !q || name.toLowerCase().includes(q);
+    const matchStatus = !sf
+      || (sf === 'enabled' && en === '1')
+      || (sf === 'disabled' && en === '0');
+    const show = matchText && matchStatus;
+    tr.style.display = show ? '' : 'none';
+    if (show) visible++;
+  });
+  const total = document.querySelectorAll('#consBody tr').length;
+  const el = document.getElementById('tableCount');
+  if (el) el.textContent = visible + ' / ' + total + ' consumer' + (total !== 1 ? 's' : '');
+}
+
+function clearFilter() {
+  document.getElementById('searchInput').value = '';
+  document.getElementById('statusFilter').value = '';
+  filterTable();
+}
+
+/* ── Create modal ── */
+function openCreate() {
+  document.getElementById('consName').value = '';
+  document.getElementById('consExpires').value = '';
+  document.getElementById('createForm').style.display = '';
+  document.getElementById('tokenReveal').classList.remove('visible');
+  document.getElementById('doneRow').style.display = 'none';
+  document.getElementById('createFeedback').textContent = '';
+  document.getElementById('createBtn').disabled = false;
+  document.getElementById('createModal').classList.add('open');
+  setTimeout(() => document.getElementById('consName').focus(), 50);
+}
+
+function closeCreate() {
+  document.getElementById('createModal').classList.remove('open');
+}
+
+function modalBgClick(e) {
+  if (e.target === document.getElementById('createModal')) closeCreate();
+}
+
+async function doCreate() {
+  const name = document.getElementById('consName').value.trim();
+  if (!name) {
+    document.getElementById('createFeedback').className = 'feedback-err';
+    document.getElementById('createFeedback').textContent = 'Name is required.';
+    return;
+  }
+  const expiresRaw = document.getElementById('consExpires').value.trim();
+  const body = { name };
+  if (expiresRaw) {
+    // datetime-local gives "YYYY-MM-DDTHH:MM", convert to UTC ISO
+    body.expires_at = new Date(expiresRaw).toISOString();
+  }
+  const btn = document.getElementById('createBtn');
+  btn.disabled = true;
+  document.getElementById('createFeedback').textContent = '';
+
+  try {
+    const res = await fetch('/pro/log-export/consumers', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      document.getElementById('createFeedback').className = 'feedback-err';
+      document.getElementById('createFeedback').textContent =
+        'Error: ' + (data.detail || res.status);
+      btn.disabled = false;
+      return;
+    }
+    // Show token reveal
+    document.getElementById('createForm').style.display = 'none';
+    document.getElementById('tokenValue').textContent = data.token || '';
+    document.getElementById('tokenReveal').classList.add('visible');
+    document.getElementById('doneRow').style.display = '';
+  } catch (e) {
+    document.getElementById('createFeedback').className = 'feedback-err';
+    document.getElementById('createFeedback').textContent = 'Network error: ' + e.message;
+    btn.disabled = false;
+  }
+}
+
+function copyToken() {
+  const val = document.getElementById('tokenValue').textContent;
+  navigator.clipboard.writeText(val).then(() => {
+    const fb = document.getElementById('copyFeedback');
+    fb.style.display = '';
+    setTimeout(() => { fb.style.display = 'none'; }, 2000);
+  });
+}
+
+function doneCreate() {
+  closeCreate();
+  location.reload();
+}
+
+/* ── Toggle enable/disable ── */
+async function toggleConsumer(id, enable, btn) {
+  btn.disabled = true;
+  try {
+    const res = await fetch('/pro/log-export/consumers/' + id, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: enable }),
+    });
+    if (res.ok) {
+      location.reload();
+    } else {
+      const d = await res.json().catch(() => ({}));
+      alert('Error: ' + (d.detail || res.status));
+      btn.disabled = false;
+    }
+  } catch (e) {
+    alert('Network error: ' + e.message);
+    btn.disabled = false;
+  }
+}
+
+/* ── Rotate token ── */
+async function rotateConsumer(id, btn) {
+  if (!confirm('Rotate token for consumer #' + id + '?\n\nThe current token will stop working immediately.')) return;
+  btn.disabled = true;
+  try {
+    const res = await fetch('/pro/log-export/consumers/' + id + '/rotate', { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok) {
+      alert('Error: ' + (data.detail || res.status));
+      btn.disabled = false;
+      return;
+    }
+    document.getElementById('rotateTokenValue').textContent = data.token || '';
+    document.getElementById('rotateModal').classList.add('open');
+  } catch (e) {
+    alert('Network error: ' + e.message);
+    btn.disabled = false;
+  }
+}
+
+function closeRotate() {
+  document.getElementById('rotateModal').classList.remove('open');
+  location.reload();
+}
+
+function rotateBgClick(e) {
+  if (e.target === document.getElementById('rotateModal')) closeRotate();
+}
+
+function copyRotatedToken() {
+  const val = document.getElementById('rotateTokenValue').textContent;
+  navigator.clipboard.writeText(val).then(() => {
+    const fb = document.getElementById('rotateCopyFeedback');
+    fb.style.display = '';
+    setTimeout(() => { fb.style.display = 'none'; }, 2000);
+  });
+}
+
+/* ── Delete consumer ── */
+async function deleteConsumer(id, btn) {
+  if (!confirm('Delete consumer #' + id + '?\n\nThis permanently removes the token. Any agent using it will stop receiving events.')) return;
+  btn.disabled = true;
+  try {
+    const res = await fetch('/pro/log-export/consumers/' + id, { method: 'DELETE' });
+    if (res.ok) {
+      const row = btn.closest('tr');
+      if (row) row.remove();
+      filterTable();
+    } else {
+      const d = await res.json().catch(() => ({}));
+      alert('Error: ' + (d.detail || res.status));
+      btn.disabled = false;
+    }
+  } catch (e) {
+    alert('Network error: ' + e.message);
+    btn.disabled = false;
+  }
+}
+
+/* ── Keyboard: Esc closes modals ── */
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    closeCreate();
+    closeRotate();
+  }
+});
+</script>
+
+{% endblock %}

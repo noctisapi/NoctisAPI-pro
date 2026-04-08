@@ -49,6 +49,7 @@ from app.server_config import RequestTimeoutMiddleware, get_request_timeout
 from app.structured_logging import get_request_id, set_request_id
 from app import siem_logger
 from app import alert_dispatcher
+from app import log_export_stream
 from app import custom_api_templates
 from app.geoip import close_reader as _close_geoip_reader
 from app.geoip import lookup_country as _lookup_geoip_country
@@ -190,6 +191,9 @@ app.add_middleware(NoCacheMiddleware)
 # middleware runs.
 app.add_middleware(RequestTimeoutMiddleware, timeout=get_request_timeout())
 
+# ── PRO internal router — real backend, excluded from honeypot deception ─────
+from app.pro_router import router as _pro_router  # noqa: E402
+app.include_router(_pro_router)
 
 # ── Custom OpenAPI schema — reflects catalog surface, not all internal routes ─
 #
@@ -455,6 +459,17 @@ async def _startup_checks() -> None:
         print(f"[WARNING] api_modular startup init failed: {exc}", file=sys.stderr)
     finally:
         conn.close()
+
+    # Log-export stream tables + retention worker (PRO feature; best-effort).
+    try:
+        _le_conn = _db()
+        try:
+            log_export_stream.ensure_tables(_le_conn)
+        finally:
+            _le_conn.close()
+        log_export_stream.start_retention_worker(_db)
+    except Exception as _le_exc:
+        print(f"[WARNING] log_export_stream startup init failed: {_le_exc}", file=sys.stderr)
 
 
 @app.on_event("shutdown")
@@ -2126,6 +2141,10 @@ async def log_all_requests(request: Request, call_next):
         "/docs",
         "/redoc",
     }
+    # PRO internal routes are real backend endpoints — skip all honeypot tracking.
+    _is_pro_internal = request.url.path.startswith("/pro/internal/")
+    if _is_pro_internal:
+        skip_policy = True
     modular_policy: Dict[str, Any] = _default_modular_policy(source="ok", error="")
 
     if not skip_policy:
@@ -2201,6 +2220,8 @@ async def log_all_requests(request: Request, call_next):
         latency_ms = int((time.perf_counter() - t0) * 1000.0)
 
         if request.url.path.startswith("/static/"):
+            skip_log = True
+        if _is_pro_internal:
             skip_log = True
         if is_monitor:
             skip_log = True
@@ -2381,6 +2402,22 @@ async def log_all_requests(request: Request, call_next):
                             "UPDATE events SET extra_json=? WHERE id=?",
                             (json.dumps(extra_obj, ensure_ascii=False), inserted_event_id),
                         )
+
+                # Log-export stream: emit redacted export event (PRO, non-blocking).
+                # Shares the same connection/transaction; silently skipped on error.
+                if licensing.has_feature(licensing.Feature.LOG_EXPORT):
+                    _geo_for_export = geo if isinstance(geo, dict) else {}
+                    log_export_stream.try_emit_export_event(
+                        conn,
+                        kind=kind,
+                        method=request.method,
+                        path=request.url.path,
+                        status=status_code,
+                        latency_ms=latency_ms,
+                        actor_id=actor_id,
+                        country=_geo_for_export.get("country_iso2"),
+                        trap_flags=(hp_event.get("trap_flags") if hp_event else None),
+                    )
 
                 conn.commit()
 

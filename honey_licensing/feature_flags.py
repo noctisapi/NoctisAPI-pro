@@ -19,6 +19,7 @@ class Feature(str, Enum):
     API_MUTATION = "api_mutation"
     ANALYTICS = "analytics"
     WEBHOOKS = "webhooks"
+    LOG_EXPORT = "log_export"
 
 
 _CORE_FEATURES: Set[str] = set()
@@ -31,6 +32,7 @@ _PRO_FEATURES: Set[str] = {
     Feature.API_MUTATION.value,
     Feature.ANALYTICS.value,
     Feature.WEBHOOKS.value,
+    Feature.LOG_EXPORT.value,
 }
 
 _PROVIDER_LOCK = threading.Lock()

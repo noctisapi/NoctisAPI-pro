@@ -32,6 +32,9 @@
         <a class="link" href="/dashboard/api-modular">API Modular</a>
         <a class="link" href="/dashboard/actors/deleted">Deleted</a>
         <a class="link" href="/dashboard/honeypot">API Health</a>
+        {% if "log_export" in license_features %}
+        <a class="link" href="/dashboard/log-export">Log Export</a>
+        {% endif %}
         <a class="link" href="/dashboard/environment">Environment</a>
       </div>
       <div style="display:flex;align-items:center;gap:12px;">
