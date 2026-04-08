@@ -10,6 +10,7 @@ import json
 import tempfile
 import sqlite3
 import urllib.request
+from pathlib import Path
 from app.tls_config import get_ssl_context
 from app.geoip import close_reader as _close_geoip_reader
 from app.geoip import flag_emoji_from_iso2 as _shared_flag_emoji_from_iso2
@@ -25,7 +26,7 @@ from datetime import datetime, timezone
 _logger = logging.getLogger(__name__)
 
 from fastapi import FastAPI, Request, HTTPException, Body, UploadFile, File
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from typing import Optional, List
@@ -5873,6 +5874,20 @@ def log_export_rotate_consumer(consumer_id: int):
         new_tokens = _les.rotate_consumer_tokens(conn, consumer_id)
     finally:
         conn.close()
+
+
+@app.get("/pro/log-export/agent.py", include_in_schema=False)
+def log_export_download_agent():
+    """Download the reference Log Export client agent."""
+    _require_log_export_feature()
+    agent_path = Path(__file__).resolve().parent.parent / "agents" / "noctis_agent.py"
+    if not agent_path.exists():
+        raise HTTPException(status_code=404, detail="agent not found")
+    return FileResponse(
+        path=str(agent_path),
+        media_type="text/x-python",
+        filename="noctis_agent.py",
+    )
     if new_tokens is None:
         raise HTTPException(status_code=404, detail="consumer not found")
     return JSONResponse(
