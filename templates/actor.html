@@ -1,11 +1,21 @@
 {% extends "base.html" %}
 {% block content %}
 {% set cases_enabled = "cases" in license_features %}
+<style>
+  .at-automated { background:rgba(74,144,226,.12); color:#7ab8f5; border-color:rgba(74,144,226,.4); }
+  .at-targeted  { background:rgba(231,76,60,.12);  color:#f2a6a6; border-color:rgba(231,76,60,.4); }
+  .at-mixed     { background:rgba(255,179,0,.12);  color:#ffc940; border-color:rgba(255,179,0,.4); }
+</style>
 
 <div class="page-head">
   <div>
     <h1>Actor {{ actor.short }}</h1>
-    <div class="sub">{{ actor.actor_id }}</div>
+    <div class="sub" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+      <span>{{ actor.actor_id }}</span>
+      {% if actor.typical_behavior %}
+      <span class="badge at-{{ actor.typical_behavior }}" style="font-size:0.72rem;">{{ actor.typical_behavior }}</span>
+      {% endif %}
+    </div>
   </div>
 
   <div class="kpis">

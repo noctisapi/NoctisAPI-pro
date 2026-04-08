@@ -9,6 +9,9 @@
   .status-monitoring   { background:rgba(74,144,226,.12); color:#7ab8f5; border-color:rgba(74,144,226,.4); }
   .status-closed       { background:rgba(200,200,200,.1); color:var(--muted); border-color:rgba(200,200,200,.3); }
   .status-false_positive { background:rgba(255,179,0,.12); color:#ffc940; border-color:rgba(255,179,0,.35); }
+  .at-automated { background:rgba(74,144,226,.12); color:#7ab8f5; border-color:rgba(74,144,226,.4); }
+  .at-targeted  { background:rgba(231,76,60,.12);  color:#f2a6a6; border-color:rgba(231,76,60,.4); }
+  .at-mixed     { background:rgba(255,179,0,.12);  color:#ffc940; border-color:rgba(255,179,0,.4); }
 
   .filter-card {
     background: linear-gradient(180deg, var(--panel2), var(--panel));
@@ -118,6 +121,7 @@
           <th data-type="select" data-options='["critical","high","medium","low"]' style="width:110px;">Severity</th>
           <th data-type="select" data-options='["open","monitoring","closed","false positive"]' style="width:150px;">Status</th>
           <th data-type="text">Techniques</th>
+          <th data-type="select" data-options='["automated","targeted","mixed"]' style="width:120px;">Attack Type</th>
           <th data-type="date" style="width:175px;">Updated</th>
           <th data-type="none" style="width:90px;"></th>
         </tr>
@@ -146,6 +150,16 @@
             <span class="badge" style="font-size:0.68rem;margin:1px;">{{ t | replace('_',' ') }}</span>
             {% endfor %}
           </td>
+          <td>
+            {% if c.attack_type %}
+            <span class="badge at-{{ c.attack_type }}">{{ c.attack_type }}</span>
+            {% if c.confidence_score %}
+            <span class="muted" style="font-size:0.72rem;margin-left:4px;">{{ (c.confidence_score * 100)|round|int }}%</span>
+            {% endif %}
+            {% else %}
+            <span class="muted" style="font-size:0.82rem;">—</span>
+            {% endif %}
+          </td>
           <td class="mono muted" style="font-size:0.82rem;">{{ c.updated_at }}</td>
           <td class="table-actions">
             <button class="btn btn-danger btn-small" type="button" onclick="deleteCase({{ c.id }}, this)">Delete</button>
@@ -154,7 +168,7 @@
         {% endfor %}
         {% if not cases %}
         <tr>
-          <td colspan="6" style="text-align:center;padding:32px;" class="muted">
+          <td colspan="7" style="text-align:center;padding:32px;" class="muted">
             No cases found{% if q or status_filter or severity_filter %} matching the current filters{% endif %}.
           </td>
         </tr>

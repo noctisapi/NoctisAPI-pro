@@ -2,6 +2,8 @@
 {% block content %}
 {% set pro_state = campaigns_pro_state or {} %}
 <style>
+  .at-automated { background:rgba(74,144,226,.12); color:#7ab8f5; border-color:rgba(74,144,226,.4); }
+  .at-targeted  { background:rgba(231,76,60,.12);  color:#f2a6a6; border-color:rgba(231,76,60,.4); }
   .score-pill {
     display: inline-block;
     font-weight: 800;
@@ -172,6 +174,7 @@
           <th data-type="number" style="width:100px;">Confidence</th>
           <th data-type="number" style="width:90px;">Members</th>
           <th data-type="text" style="width:150px;">Behavior</th>
+          <th data-type="text" style="width:130px;">Attack Mix</th>
           <th data-type="number" style="width:80px;">Requests</th>
           <th data-type="number" style="width:70px;">IPs</th>
           <th data-type="date" style="width:130px;">Last Seen</th>
@@ -210,6 +213,16 @@
             {% if bp and bp != 'unknown' %}
             <span class="bp-pill bp-{{ bp }}">{{ bp | replace('_', ' ') }}</span>
             {% else %}<span class="muted" style="font-size:0.8rem;">—</span>{% endif %}
+          </td>
+          <td>
+            {% set auto_r = (c.automated_ratio or 0) %}
+            {% set tgt_r  = (c.targeted_ratio  or 0) %}
+            {% if auto_r or tgt_r %}
+            <div style="font-size:0.75rem;line-height:1.6;">
+              {% if auto_r %}<span class="badge at-automated" style="font-size:0.68rem;margin:1px;">auto {{ (auto_r*100)|round|int }}%</span>{% endif %}
+              {% if tgt_r  %}<span class="badge at-targeted"  style="font-size:0.68rem;margin:1px;">targeted {{ (tgt_r*100)|round|int }}%</span>{% endif %}
+            </div>
+            {% else %}<span class="muted" style="font-size:0.82rem;">—</span>{% endif %}
           </td>
           <td class="mono" style="font-size:0.82rem;">{{ c.request_count if c.request_count is not none else '—' }}</td>
           <td class="mono" style="font-size:0.82rem;">{{ c.ip_diversity if c.ip_diversity is not none else '—' }}</td>

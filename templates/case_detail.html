@@ -1,6 +1,10 @@
 {% extends "base.html" %}
 {% block content %}
 <style>
+  /* Attack type badges */
+  .at-automated { background:rgba(74,144,226,.12); color:#7ab8f5; border-color:rgba(74,144,226,.4); }
+  .at-targeted  { background:rgba(231,76,60,.12);  color:#f2a6a6; border-color:rgba(231,76,60,.4); }
+  .at-mixed     { background:rgba(255,179,0,.12);  color:#ffc940; border-color:rgba(255,179,0,.4); }
   /* Severity & status badges */
   .sev-critical { background:rgba(231,76,60,.15);  color:#f2a6a6; border-color:rgba(231,76,60,.4); }
   .sev-high     { background:rgba(230,126,34,.15); color:#f0b06a; border-color:rgba(230,126,34,.4); }
@@ -226,6 +230,14 @@
     </div>
     <!-- Details -->
     <div class="intel-grid">
+      <div class="ig-key">Attack type</div>
+      <div class="ig-val">
+        {% if case.attack_type %}
+        <span class="badge at-{{ case.attack_type }}" style="margin-right:6px;">{{ case.attack_type }}</span>
+        {% if case.confidence_score %}<span class="muted" style="font-size:0.78rem;">{{ (case.confidence_score * 100)|round|int }}% confidence</span>{% endif %}
+        {% else %}<span class="muted">—</span>{% endif %}
+      </div>
+
       <div class="ig-key">Stage flow</div>
       <div class="ig-val mono">{{ case_stage.flow or '—' }}</div>
 
