@@ -5720,8 +5720,10 @@ from app import log_export_stream as _les
 
 def _require_log_export_feature() -> None:
     """Raise 403 if the LOG_EXPORT feature is not active."""
-    if not _has_feature(licensing.Feature.LOG_EXPORT, action="panel_log_export"):
-        raise HTTPException(status_code=403, detail="feature not available")
+    ok, reason = _pro_feature_status(licensing.Feature.LOG_EXPORT, action="panel_log_export")
+    if not ok:
+        _logger.warning("Log Export feature denied: %s", reason)
+        raise HTTPException(status_code=403, detail=f"feature not available: {reason}")
 
 
 @app.get("/dashboard/log-export", include_in_schema=False, response_class=HTMLResponse)
