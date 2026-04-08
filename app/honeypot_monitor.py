@@ -214,6 +214,7 @@ def _make_check(method: str, path: str) -> Dict[str, Any]:
 
 
 def _default_checks() -> List[Dict[str, Any]]:
+    # 1. Explicit override via env var — highest priority, unchanged.
     explicit = _parse_endpoints(HONEYPOT_MONITORED_ENDPOINTS_RAW)
     if explicit:
         checks: List[Dict[str, Any]] = []
@@ -224,13 +225,37 @@ def _default_checks() -> List[Dict[str, Any]]:
             else:
                 checks.append(_make_check("GET", item))
         return checks
+
+    # 2. Use the same enabled-endpoint list that /docs uses — the API Modular
+    #    template determines which endpoints are active. This mirrors exactly
+    #    what the honeypot exposes to attackers.
+    try:
+        from app.runtime_provider import get_provider
+        provider = get_provider()
+        config = provider.get_config()
+        enabled = config.enabled_endpoints
+        if enabled:
+            checks: List[Dict[str, Any]] = []
+            for ep in enabled:
+                path = _replace_path_params(_normalize_endpoint(ep.path or ""))
+                if not path:
+                    continue
+                method = (ep.method or "GET").upper()
+                if method in {"HEAD", "OPTIONS"}:
+                    continue
+                checks.append(_make_check(method, path))
+            return checks or [_make_check("GET", "/health")]
+    except Exception:
+        pass
+
+    # 3. Last resort: fall back to FastAPI route discovery (filters /pro/*).
     try:
         from fastapi.routing import APIRoute
         from app import honeypot_public
     except Exception:
         return [_make_check("GET", "/health")]
 
-    checks: List[Dict[str, Any]] = []
+    checks = []
     for route in honeypot_public.app.routes:
         if not isinstance(route, APIRoute):
             continue
@@ -244,11 +269,22 @@ def _default_checks() -> List[Dict[str, Any]]:
         methods = sorted([m for m in (route.methods or []) if m not in {"HEAD", "OPTIONS"}])
         for method in methods:
             checks.append(_make_check(method, path))
-    # replace /files/lookup with query placeholder
     return checks or [_make_check("GET", "/health")]
 
 
-DEFAULT_CHECKS = _default_checks()
+_DEFAULT_CHECKS_CACHE: Optional[List[Dict[str, Any]]] = None
+
+
+def _get_default_checks() -> List[Dict[str, Any]]:
+    """Return the default checks list, computing it once on first call.
+
+    Deferred so that runtime_provider (which needs the DB path) is fully
+    initialised before we ask it for the enabled-endpoint list.
+    """
+    global _DEFAULT_CHECKS_CACHE
+    if _DEFAULT_CHECKS_CACHE is None:
+        _DEFAULT_CHECKS_CACHE = _default_checks()
+    return _DEFAULT_CHECKS_CACHE
 
 
 def _safe_json(resp: httpx.Response) -> Dict[str, Any]:
@@ -290,7 +326,7 @@ class HoneypotAvailabilityMonitor:
         chosen = base_url if base_url is not None else (HONEYPOT_MONITOR_BASE_URL or HONEYPOT_PUBLIC_BASE_URL)
         self.base_url = _sanitize_base(chosen)
         self.public_base_url = _sanitize_base(HONEYPOT_PUBLIC_BASE_URL)
-        self.checks = checks or DEFAULT_CHECKS
+        self.checks = checks or _get_default_checks()
         self.endpoints = endpoints or [c["label"] for c in self.checks]
         self._check_map = {c["label"]: c for c in self.checks}
         self.interval = HONEYPOT_CHECK_INTERVAL
