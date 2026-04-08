@@ -334,13 +334,15 @@
       <div style="font-size:0.82rem;color:var(--muted);margin-bottom:10px;">
         Run the reference agent on your internal machine. It connects outbound — no inbound port needed.
       </div>
-      <pre style="background:rgba(0,0,0,.3);border:1px solid var(--stroke);border-radius:4px;padding:12px 14px;font-size:0.78rem;overflow-x:auto;margin:0;"><code>NOCTIS_BEARER_TOKEN=nctx_ls_... \
+      <pre style="background:rgba(0,0,0,.3);border:1px solid var(--stroke);border-radius:4px;padding:12px 14px;font-size:0.78rem;overflow-x:auto;margin:0;"><code>NOCTIS_REFRESH_TOKEN=nctx_rt_... \
 python agents/noctis_agent.py --config agent_config.json
 
 # agent_config.json
 {
   "server_url":              "{{ public_base_url }}/pro/internal/log-poll",
+  "token_url":               "{{ public_base_url }}/pro/internal/log-token/refresh",
   "cursor_file":             "/var/lib/noctis-agent/cursor.json",
+  "token_state_file":        "/var/lib/noctis-agent/token.json",
   "output_path":             "/var/log/noctisapi/events.jsonl",
   "poll_wait_seconds":       25,
   "max_events":              100,
@@ -380,8 +382,8 @@ python agents/noctis_agent.py --config agent_config.json
 
     <!-- Token reveal (shown after successful creation) -->
     <div class="token-reveal" id="tokenReveal">
-      <div class="token-reveal-label">✓ Token created — copy it now</div>
-      <div class="token-reveal-warn">⚠ This token will not be shown again. Store it securely before closing.</div>
+      <div class="token-reveal-label">Tokens created - copy them now</div>
+      <div class="token-reveal-warn">These tokens will not be shown again. Store the refresh token securely before closing.</div>
       <div class="token-value mono" id="tokenValue"></div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
         <button class="btn btn-small copy-btn" type="button" onclick="copyToken()">Copy</button>
@@ -403,10 +405,10 @@ python agents/noctis_agent.py --config agent_config.json
 <div class="modal-overlay" id="rotateModal" onclick="rotateBgClick(event)">
   <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="rotateTitle">
     <button class="modal-close" onclick="closeRotate()" title="Close">&times;</button>
-    <div class="modal-title" id="rotateTitle">Token Rotated</div>
+    <div class="modal-title" id="rotateTitle">Tokens Rotated</div>
     <div class="token-reveal visible" id="rotateReveal">
-      <div class="token-reveal-label">✓ New token generated — copy it now</div>
-      <div class="token-reveal-warn">⚠ This token will not be shown again. The old token is immediately invalidated.</div>
+      <div class="token-reveal-label">New tokens generated - copy them now</div>
+      <div class="token-reveal-warn">These tokens will not be shown again. The old access and refresh tokens are immediately invalidated.</div>
       <div class="token-value mono" id="rotateTokenValue"></div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
         <button class="btn btn-small copy-btn" type="button" onclick="copyRotatedToken()">Copy</button>
@@ -500,7 +502,7 @@ async function doCreate() {
     }
     // Show token reveal
     document.getElementById('createForm').style.display = 'none';
-    document.getElementById('tokenValue').textContent = data.token || '';
+    document.getElementById('tokenValue').textContent = formatTokenBundle(data);
     document.getElementById('tokenReveal').classList.add('visible');
     document.getElementById('doneRow').style.display = '';
   } catch (e) {
@@ -522,6 +524,16 @@ function copyToken() {
 function doneCreate() {
   closeCreate();
   location.reload();
+}
+
+function formatTokenBundle(data) {
+  return [
+    'access_token=' + (data.access_token || data.token || ''),
+    'refresh_token=' + (data.refresh_token || ''),
+    'expires_in=' + (data.expires_in || ''),
+    'access_token_expires_at=' + (data.access_token_expires_at || ''),
+    'refresh_token_expires_at=' + (data.refresh_token_expires_at || '')
+  ].join('\n');
 }
 
 /* ── Toggle enable/disable ── */
@@ -548,7 +560,7 @@ async function toggleConsumer(id, enable, btn) {
 
 /* ── Rotate token ── */
 async function rotateConsumer(id, btn) {
-  if (!confirm('Rotate token for consumer #' + id + '?\n\nThe current token will stop working immediately.')) return;
+  if (!confirm('Rotate tokens for consumer #' + id + '?\n\nThe current access and refresh tokens will stop working immediately.')) return;
   btn.disabled = true;
   try {
     const res = await fetch('/pro/log-export/consumers/' + id + '/rotate', { method: 'POST' });
@@ -558,7 +570,7 @@ async function rotateConsumer(id, btn) {
       btn.disabled = false;
       return;
     }
-    document.getElementById('rotateTokenValue').textContent = data.token || '';
+    document.getElementById('rotateTokenValue').textContent = formatTokenBundle(data);
     document.getElementById('rotateModal').classList.add('open');
   } catch (e) {
     alert('Network error: ' + e.message);

@@ -2405,7 +2405,12 @@ async def log_all_requests(request: Request, call_next):
 
                 # Log-export stream: emit redacted export event (PRO, non-blocking).
                 # Shares the same connection/transaction; silently skipped on error.
-                if licensing.has_feature(licensing.Feature.LOG_EXPORT):
+                _log_export_ok, _log_export_reason = pro_ops.authorize_pro_feature(
+                    feature=licensing.Feature.LOG_EXPORT.value,
+                    action="log_export_emit",
+                    force_refresh=False,
+                )
+                if _log_export_ok:
                     _geo_for_export = geo if isinstance(geo, dict) else {}
                     log_export_stream.try_emit_export_event(
                         conn,

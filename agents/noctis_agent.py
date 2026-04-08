@@ -19,8 +19,10 @@ Usage:
 Config file example (config.json):
   {
     "server_url":              "https://your-domain.com/pro/internal/log-poll",
-    "bearer_token":            "nctx_ls_<hex>",
+    "token_url":               "https://your-domain.com/pro/internal/log-token/refresh",
+    "refresh_token":           "nctx_rt_<hex>",
     "cursor_file":             "/var/lib/noctis-agent/cursor.json",
+    "token_state_file":        "/var/lib/noctis-agent/token.json",
     "output_path":             "/var/log/noctisapi/events.jsonl",
     "poll_wait_seconds":       25,
     "max_events":              100,
@@ -43,6 +45,7 @@ import os
 import sys
 import time
 import urllib.error
+from urllib.parse import urlsplit, urlunsplit
 import urllib.request
 from pathlib import Path
 from typing import Optional
@@ -55,8 +58,11 @@ _logger = logging.getLogger("noctis_agent")
 
 _DEFAULTS = {
     "server_url": "",
+    "token_url": "",
     "bearer_token": "",
+    "refresh_token": "",
     "cursor_file": "/var/lib/noctis-agent/cursor.json",
+    "token_state_file": "/var/lib/noctis-agent/token.json",
     "output_path": "/var/log/noctisapi/events.jsonl",
     "poll_wait_seconds": 25,
     "max_events": 100,
@@ -84,10 +90,16 @@ def load_config(path: Optional[str]) -> dict:
     # Environment overrides — token especially should come from env, not file.
     if os.environ.get("NOCTIS_SERVER_URL"):
         cfg["server_url"] = os.environ["NOCTIS_SERVER_URL"].strip()
+    if os.environ.get("NOCTIS_TOKEN_URL"):
+        cfg["token_url"] = os.environ["NOCTIS_TOKEN_URL"].strip()
     if os.environ.get("NOCTIS_BEARER_TOKEN"):
         cfg["bearer_token"] = os.environ["NOCTIS_BEARER_TOKEN"].strip()
+    if os.environ.get("NOCTIS_REFRESH_TOKEN"):
+        cfg["refresh_token"] = os.environ["NOCTIS_REFRESH_TOKEN"].strip()
     if os.environ.get("NOCTIS_CURSOR_FILE"):
         cfg["cursor_file"] = os.environ["NOCTIS_CURSOR_FILE"].strip()
+    if os.environ.get("NOCTIS_TOKEN_STATE_FILE"):
+        cfg["token_state_file"] = os.environ["NOCTIS_TOKEN_STATE_FILE"].strip()
     if os.environ.get("NOCTIS_OUTPUT_PATH"):
         cfg["output_path"] = os.environ["NOCTIS_OUTPUT_PATH"].strip()
 
@@ -97,9 +109,9 @@ def load_config(path: Optional[str]) -> dict:
 def validate_config(cfg: dict) -> None:
     if not cfg.get("server_url"):
         raise ValueError("server_url is required")
-    if not cfg.get("bearer_token"):
-        raise ValueError("bearer_token is required (use env NOCTIS_BEARER_TOKEN)")
-    if not cfg["bearer_token"].startswith("nctx_ls_"):
+    if not cfg.get("bearer_token") and not cfg.get("refresh_token"):
+        raise ValueError("refresh_token or bearer_token is required")
+    if cfg.get("bearer_token") and not cfg["bearer_token"].startswith(("nctx_at_", "nctx_ls_")):
         _logger.warning("bearer_token does not start with 'nctx_ls_' — may be invalid")
 
 
@@ -126,6 +138,27 @@ def save_cursor(cursor_file: str, cursor: int) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(".tmp")
     tmp.write_text(json.dumps({"cursor": cursor}))
+    tmp.replace(p)
+
+
+def load_token_state(token_state_file: str) -> dict:
+    p = Path(token_state_file)
+    if not p.exists():
+        return {}
+    try:
+        data = json.loads(p.read_text())
+        if isinstance(data, dict):
+            return data
+    except Exception as exc:
+        _logger.warning("token state load failed (%s), using configured token", exc)
+    return {}
+
+
+def save_token_state(token_state_file: str, state: dict) -> None:
+    p = Path(token_state_file)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(".tmp")
+    tmp.write_text(json.dumps(state, indent=2, sort_keys=True))
     tmp.replace(p)
 
 
@@ -185,6 +218,35 @@ def poll(
     return json.loads(raw)
 
 
+def derive_token_url(server_url: str, configured_token_url: str) -> str:
+    if configured_token_url:
+        return configured_token_url
+    if server_url.rstrip("/").endswith("/pro/internal/log-poll"):
+        return server_url.rstrip("/")[: -len("/pro/internal/log-poll")] + "/pro/internal/log-token/refresh"
+    parts = urlsplit(server_url)
+    return urlunsplit((parts.scheme, parts.netloc, "/pro/internal/log-token/refresh", "", ""))
+
+
+def refresh_tokens(token_url: str, refresh_token: str, timeout_seconds: int) -> dict:
+    payload = json.dumps({"refresh_token": refresh_token}).encode()
+    req = urllib.request.Request(
+        token_url,
+        data=payload,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "noctis-agent/1.0",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
+        raw = resp.read()
+    body = json.loads(raw)
+    if not isinstance(body, dict) or not body.get("access_token") or not body.get("refresh_token"):
+        raise ValueError("token refresh response did not include access_token and refresh_token")
+    return body
+
+
 # ---------------------------------------------------------------------------
 # Backoff helper
 # ---------------------------------------------------------------------------
@@ -219,18 +281,50 @@ _PERMANENT_ERRORS = {"cursor_expired"}
 
 def run_agent(cfg: dict) -> None:
     server_url = cfg["server_url"]
-    token = cfg["bearer_token"]
+    token_url = derive_token_url(server_url, cfg.get("token_url") or "")
     cursor_file = cfg["cursor_file"]
+    token_state_file = cfg["token_state_file"]
     output_path = cfg["output_path"]
     poll_wait = int(cfg["poll_wait_seconds"])
     max_events = int(cfg["max_events"])
     timeout = int(cfg["request_timeout_seconds"])
     backoff_max = int(cfg["backoff_max_seconds"])
+    token_state = load_token_state(token_state_file)
+    token = str(token_state.get("access_token") or cfg.get("bearer_token") or "")
+    refresh_token = str(token_state.get("refresh_token") or cfg.get("refresh_token") or "")
 
     backoff = _Backoff(_BACKOFF_SCHEDULE, backoff_max)
     _logger.info("agent started — server=%s cursor_file=%s output=%s", server_url, cursor_file, output_path)
 
     auth_failed_count = 0
+
+    def _refresh_access_token() -> bool:
+        nonlocal token, refresh_token
+        if not refresh_token:
+            return False
+        try:
+            refreshed = refresh_tokens(token_url, refresh_token, timeout)
+        except Exception as exc:
+            _logger.error("token refresh failed: %s", exc)
+            return False
+        token = str(refreshed["access_token"])
+        refresh_token = str(refreshed["refresh_token"])
+        save_token_state(
+            token_state_file,
+            {
+                "access_token": token,
+                "refresh_token": refresh_token,
+                "expires_in": refreshed.get("expires_in"),
+                "access_token_expires_at": refreshed.get("access_token_expires_at"),
+                "refresh_token_expires_at": refreshed.get("refresh_token_expires_at"),
+            },
+        )
+        _logger.info("refreshed log-export access token")
+        return True
+
+    if refresh_token and not token:
+        if not _refresh_access_token():
+            raise RuntimeError("initial token refresh failed")
 
     while True:
         cursor = load_cursor(cursor_file)
@@ -248,6 +342,9 @@ def run_agent(cfg: dict) -> None:
         except urllib.error.HTTPError as exc:
             status = exc.code
             if status in (401, 403, 404):
+                if refresh_token and _refresh_access_token():
+                    auth_failed_count = 0
+                    continue
                 auth_failed_count += 1
                 _logger.error(
                     "auth/access error (HTTP %d) — check bearer_token and server_url "

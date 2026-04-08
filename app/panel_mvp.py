@@ -5720,7 +5720,11 @@ from app import log_export_stream as _les
 
 def _require_log_export_feature() -> None:
     """Raise 403 if the LOG_EXPORT feature is not active."""
-    ok, reason = _pro_feature_status(licensing.Feature.LOG_EXPORT, action="panel_log_export")
+    ok, reason = pro_ops.authorize_pro_feature(
+        feature=licensing.Feature.LOG_EXPORT.value,
+        action="panel_log_export",
+        force_refresh=False,
+    )
     if not ok:
         _logger.warning("Log Export feature denied: %s", reason)
         raise HTTPException(status_code=403, detail=f"feature not available: {reason}")
@@ -5728,7 +5732,11 @@ def _require_log_export_feature() -> None:
 
 @app.get("/dashboard/log-export", include_in_schema=False, response_class=HTMLResponse)
 def dashboard_log_export(request: Request):
-    pro_enabled = _has_feature(licensing.Feature.LOG_EXPORT, action="panel_log_export")
+    pro_enabled, _reason = pro_ops.authorize_pro_feature(
+        feature=licensing.Feature.LOG_EXPORT.value,
+        action="panel_log_export",
+        force_refresh=False,
+    )
     conn = db()
     try:
         _les.ensure_tables(conn)
@@ -5819,8 +5827,13 @@ async def log_export_create_consumer(request: Request):
             "consumer_id": result["consumer_id"],
             "name": result["name"],
             "token": result["token"],
+            "access_token": result["access_token"],
+            "refresh_token": result["refresh_token"],
+            "expires_in": result["expires_in"],
+            "access_token_expires_at": result["access_token_expires_at"],
+            "refresh_token_expires_at": result["refresh_token_expires_at"],
             "created_at": result["created_at"],
-            "note": "Save this token now. It will not be shown again.",
+            "note": "Save these tokens now. They will not be shown again.",
         },
     )
 
@@ -5857,17 +5870,22 @@ def log_export_rotate_consumer(consumer_id: int):
     _require_log_export_feature()
     conn = db()
     try:
-        new_token = _les.rotate_consumer_token(conn, consumer_id)
+        new_tokens = _les.rotate_consumer_tokens(conn, consumer_id)
     finally:
         conn.close()
-    if new_token is None:
+    if new_tokens is None:
         raise HTTPException(status_code=404, detail="consumer not found")
     return JSONResponse(
         content={
             "ok": True,
             "consumer_id": consumer_id,
-            "token": new_token,
-            "note": "Save this token now. It will not be shown again.",
+            "token": new_tokens["access_token"],
+            "access_token": new_tokens["access_token"],
+            "refresh_token": new_tokens["refresh_token"],
+            "expires_in": new_tokens["expires_in"],
+            "access_token_expires_at": new_tokens["access_token_expires_at"],
+            "refresh_token_expires_at": new_tokens["refresh_token_expires_at"],
+            "note": "Save these tokens now. They will not be shown again.",
         }
     )
 

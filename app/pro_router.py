@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field
 
 from app import licensing
 from app import log_export_stream
+from app import pro_ops
 
 _logger = logging.getLogger(__name__)
 
@@ -92,11 +93,61 @@ class LogPollRequest(BaseModel):
     wait_seconds: int = Field(25, ge=0, le=30)
 
 
+class LogTokenRefreshRequest(BaseModel):
+    refresh_token: str
+
+
 # ---------------------------------------------------------------------------
 # Router
 # ---------------------------------------------------------------------------
 
 router = APIRouter(tags=[])  # No tags — excluded from public OpenAPI
+
+
+def _log_export_enabled() -> bool:
+    ok, _reason = pro_ops.authorize_pro_feature(
+        feature=licensing.Feature.LOG_EXPORT.value,
+        action="log_export_stream",
+        force_refresh=False,
+    )
+    return bool(ok)
+
+
+@router.post(
+    "/pro/internal/log-token/refresh",
+    include_in_schema=False,
+    response_class=JSONResponse,
+)
+async def log_token_refresh(body: LogTokenRefreshRequest) -> JSONResponse:
+    """
+    Rotate the refresh token and issue a short-lived access token.
+
+    On auth failure this returns 404 to avoid leaking consumer identity.
+    """
+    if not _log_export_enabled():
+        return JSONResponse(status_code=404, content={"detail": "Not found"})
+
+    conn = _db()
+    try:
+        log_export_stream.ensure_tables(conn)
+        result = log_export_stream.refresh_consumer_tokens(conn, body.refresh_token.strip())
+    finally:
+        conn.close()
+
+    if result is None:
+        return JSONResponse(status_code=404, content={"detail": "Not found"})
+    return JSONResponse(
+        status_code=200,
+        content={
+            "ok": True,
+            "token_type": "Bearer",
+            "access_token": result["access_token"],
+            "refresh_token": result["refresh_token"],
+            "expires_in": result["expires_in"],
+            "access_token_expires_at": result["access_token_expires_at"],
+            "refresh_token_expires_at": result["refresh_token_expires_at"],
+        },
+    )
 
 
 @router.post(
@@ -109,7 +160,9 @@ async def log_poll(request: Request, body: LogPollRequest) -> JSONResponse:
     Long-polling log export endpoint.
 
     Authentication:
-      Authorization: Bearer nctx_ls_<hex>
+      Authorization: Bearer nctx_at_<hex>
+
+    Legacy nctx_ls_<hex> tokens remain accepted for existing agents.
 
     On any auth failure the response is 404 to avoid leaking whether
     a consumer identity exists.
@@ -120,7 +173,7 @@ async def log_poll(request: Request, body: LogPollRequest) -> JSONResponse:
     # ------------------------------------------------------------------
     # 1. Feature gate — checked before touching any DB.
     # ------------------------------------------------------------------
-    if not licensing.has_feature(licensing.Feature.LOG_EXPORT):
+    if not _log_export_enabled():
         return JSONResponse(status_code=404, content={"detail": "Not found"})
 
     # ------------------------------------------------------------------

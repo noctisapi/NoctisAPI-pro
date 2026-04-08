@@ -25,7 +25,10 @@ from typing import Optional
 
 _logger = logging.getLogger(__name__)
 
-TOKEN_PREFIX = "nctx_ls_"
+LEGACY_TOKEN_PREFIX = "nctx_ls_"
+ACCESS_TOKEN_PREFIX = "nctx_at_"
+REFRESH_TOKEN_PREFIX = "nctx_rt_"
+TOKEN_PREFIX = LEGACY_TOKEN_PREFIX  # Backward-compatible public constant.
 _TOKEN_RANDOM_BYTES = 32
 
 # ---------------------------------------------------------------------------
@@ -46,14 +49,19 @@ _DDL = [
     # Consumer identities authorised to pull log exports.
     """
     CREATE TABLE IF NOT EXISTS log_stream_consumers (
-        id           INTEGER PRIMARY KEY AUTOINCREMENT,
-        name         TEXT    NOT NULL,
-        token_hash   TEXT    NOT NULL UNIQUE,
-        enabled      INTEGER NOT NULL DEFAULT 1,
-        created_at   TEXT    NOT NULL,
-        last_used_at TEXT,
-        last_used_ip TEXT,
-        expires_at   TEXT
+        id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+        name                     TEXT    NOT NULL,
+        token_hash               TEXT    NOT NULL UNIQUE,
+        access_token_hash        TEXT,
+        access_token_expires_at  TEXT,
+        refresh_token_hash       TEXT,
+        refresh_token_expires_at TEXT,
+        refresh_token_rotated_at TEXT,
+        enabled                  INTEGER NOT NULL DEFAULT 1,
+        created_at               TEXT    NOT NULL,
+        last_used_at             TEXT,
+        last_used_ip             TEXT,
+        expires_at               TEXT
     )
     """,
     # Redacted, export-safe event records.  cursor IS the rowid.
@@ -78,7 +86,48 @@ def ensure_tables(conn: sqlite3.Connection) -> None:
             conn.execute(stmt)
         except sqlite3.Error as exc:
             _logger.warning("log_export_stream: DDL warning: %s", exc)
+    _ensure_consumer_refresh_columns(conn)
     conn.commit()
+
+
+def _ensure_consumer_refresh_columns(conn: sqlite3.Connection) -> None:
+    """Best-effort schema upgrade for DBs created before refresh-token support."""
+    try:
+        existing = {
+            row["name"] if isinstance(row, sqlite3.Row) else row[1]
+            for row in conn.execute("PRAGMA table_info(log_stream_consumers)").fetchall()
+        }
+    except sqlite3.Error as exc:
+        _logger.warning("log_export_stream: schema introspection failed: %s", exc)
+        return
+    for name, ddl_type in (
+        ("access_token_hash", "TEXT"),
+        ("access_token_expires_at", "TEXT"),
+        ("refresh_token_hash", "TEXT"),
+        ("refresh_token_expires_at", "TEXT"),
+        ("refresh_token_rotated_at", "TEXT"),
+    ):
+        if name not in existing:
+            try:
+                conn.execute(f"ALTER TABLE log_stream_consumers ADD COLUMN {name} {ddl_type}")
+            except sqlite3.Error as exc:
+                _logger.warning("log_export_stream: failed adding column %s: %s", name, exc)
+    for stmt in (
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_log_stream_consumers_access_token_hash
+        ON log_stream_consumers(access_token_hash)
+        WHERE access_token_hash IS NOT NULL
+        """,
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_log_stream_consumers_refresh_token_hash
+        ON log_stream_consumers(refresh_token_hash)
+        WHERE refresh_token_hash IS NOT NULL
+        """,
+    ):
+        try:
+            conn.execute(stmt)
+        except sqlite3.Error as exc:
+            _logger.warning("log_export_stream: index DDL warning: %s", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -179,6 +228,42 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
+def _future_utc(seconds: int) -> str:
+    return datetime.fromtimestamp(time.time() + max(1, seconds), tz=timezone.utc).isoformat(
+        timespec="seconds"
+    ).replace("+00:00", "Z")
+
+
+def _env_seconds(name: str, default: int) -> int:
+    raw = (os.getenv(name) or "").strip()
+    if raw:
+        try:
+            value = int(raw)
+            if value > 0:
+                return value
+        except ValueError:
+            pass
+    return default
+
+
+def get_access_token_seconds() -> int:
+    return _env_seconds("HP_LOG_EXPORT_ACCESS_TOKEN_SECONDS", 3600)
+
+
+def get_refresh_token_seconds() -> int:
+    return _env_seconds("HP_LOG_EXPORT_REFRESH_TOKEN_SECONDS", 90 * 86400)
+
+
+def _is_iso_expired(value: Optional[str]) -> bool:
+    if not value:
+        return False
+    try:
+        exp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return datetime.now(timezone.utc) > exp
+    except Exception:
+        return False
+
+
 def _hash_token(token: str) -> str:
     """Return the SHA-256 hex digest of *token*. This is what is stored in the DB."""
     return hashlib.sha256(token.encode()).hexdigest()
@@ -198,6 +283,19 @@ def generate_consumer_token() -> tuple[str, str]:
     return token, token_hash
 
 
+def _generate_prefixed_token(prefix: str) -> tuple[str, str]:
+    token = prefix + secrets.token_bytes(_TOKEN_RANDOM_BYTES).hex()
+    return token, _hash_token(token)
+
+
+def generate_access_token() -> tuple[str, str]:
+    return _generate_prefixed_token(ACCESS_TOKEN_PREFIX)
+
+
+def generate_refresh_token() -> tuple[str, str]:
+    return _generate_prefixed_token(REFRESH_TOKEN_PREFIX)
+
+
 # ---------------------------------------------------------------------------
 # Consumer management
 # ---------------------------------------------------------------------------
@@ -213,20 +311,47 @@ def create_consumer(
     Returns a dict with ``consumer_id`` and the plaintext ``token`` (shown once).
     Caller must display the token to the operator; it is never retrievable again.
     """
-    token, token_hash = generate_consumer_token()
+    access_token, access_token_hash = generate_access_token()
+    refresh_token, refresh_token_hash = generate_refresh_token()
+    access_expires_at = _future_utc(get_access_token_seconds())
+    refresh_expires_at = _future_utc(get_refresh_token_seconds())
     now = _utc_now()
     conn.execute(
         """
-        INSERT INTO log_stream_consumers(name, token_hash, enabled, created_at, expires_at)
-        VALUES (?, ?, 1, ?, ?)
+        INSERT INTO log_stream_consumers(
+            name, token_hash, access_token_hash, access_token_expires_at,
+            refresh_token_hash, refresh_token_expires_at, refresh_token_rotated_at,
+            enabled, created_at, expires_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
         """,
-        (name, token_hash, now, expires_at),
+        (
+            name,
+            access_token_hash,
+            access_token_hash,
+            access_expires_at,
+            refresh_token_hash,
+            refresh_expires_at,
+            now,
+            now,
+            expires_at,
+        ),
     )
     conn.commit()
     row = conn.execute(
-        "SELECT id FROM log_stream_consumers WHERE token_hash=?", (token_hash,)
+        "SELECT id FROM log_stream_consumers WHERE access_token_hash=?", (access_token_hash,)
     ).fetchone()
-    return {"consumer_id": row[0], "name": name, "token": token, "created_at": now}
+    return {
+        "consumer_id": row[0],
+        "name": name,
+        "token": access_token,
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "expires_in": get_access_token_seconds(),
+        "access_token_expires_at": access_expires_at,
+        "refresh_token_expires_at": refresh_expires_at,
+        "created_at": now,
+    }
 
 
 def authenticate_consumer(
@@ -238,14 +363,19 @@ def authenticate_consumer(
     Returns None (and does not raise) on any failure so the caller can
     return 404 without leaking whether auth succeeded.
     """
-    if not token or not token.startswith(TOKEN_PREFIX):
+    if not token:
         return None
     token_hash = _hash_token(token)
+    is_access_token = token.startswith(ACCESS_TOKEN_PREFIX)
+    is_legacy_token = token.startswith(LEGACY_TOKEN_PREFIX)
+    if not (is_access_token or is_legacy_token):
+        return None
+    lookup_column = "access_token_hash" if is_access_token else "token_hash"
     row = conn.execute(
-        """
-        SELECT id, name, enabled, expires_at
+        f"""
+        SELECT id, name, enabled, expires_at, access_token_expires_at
         FROM log_stream_consumers
-        WHERE token_hash=?
+        WHERE {lookup_column}=?
         """,
         (token_hash,),
     ).fetchone()
@@ -253,14 +383,75 @@ def authenticate_consumer(
         return None
     if not row["enabled"]:
         return None
-    if row["expires_at"]:
-        try:
-            exp = datetime.fromisoformat(row["expires_at"].replace("Z", "+00:00"))
-            if datetime.now(timezone.utc) > exp:
-                return None
-        except Exception:
-            pass
+    if _is_iso_expired(row["expires_at"]):
+        return None
+    if is_access_token and _is_iso_expired(row["access_token_expires_at"]):
+        return None
     return dict(row)
+
+
+def refresh_consumer_tokens(conn: sqlite3.Connection, refresh_token: str) -> Optional[dict]:
+    """
+    Rotate a refresh token and issue a new short-lived access token.
+
+    Returns plaintext tokens once, or None on any auth/expiry failure. The old
+    refresh token is invalidated atomically by replacing its hash.
+    """
+    if not refresh_token or not refresh_token.startswith(REFRESH_TOKEN_PREFIX):
+        return None
+    refresh_hash = _hash_token(refresh_token)
+    row = conn.execute(
+        """
+        SELECT id, name, enabled, expires_at, refresh_token_expires_at
+        FROM log_stream_consumers
+        WHERE refresh_token_hash=?
+        """,
+        (refresh_hash,),
+    ).fetchone()
+    if row is None or not row["enabled"]:
+        return None
+    if _is_iso_expired(row["expires_at"]) or _is_iso_expired(row["refresh_token_expires_at"]):
+        return None
+
+    access_token, access_hash = generate_access_token()
+    new_refresh_token, new_refresh_hash = generate_refresh_token()
+    now = _utc_now()
+    access_expires_at = _future_utc(get_access_token_seconds())
+    refresh_expires_at = _future_utc(get_refresh_token_seconds())
+    cur = conn.execute(
+        """
+        UPDATE log_stream_consumers
+        SET token_hash=?,
+            access_token_hash=?,
+            access_token_expires_at=?,
+            refresh_token_hash=?,
+            refresh_token_expires_at=?,
+            refresh_token_rotated_at=?
+        WHERE id=? AND refresh_token_hash=?
+        """,
+        (
+            access_hash,
+            access_hash,
+            access_expires_at,
+            new_refresh_hash,
+            refresh_expires_at,
+            now,
+            row["id"],
+            refresh_hash,
+        ),
+    )
+    conn.commit()
+    if cur.rowcount == 0:
+        return None
+    return {
+        "consumer_id": row["id"],
+        "name": row["name"],
+        "access_token": access_token,
+        "refresh_token": new_refresh_token,
+        "expires_in": get_access_token_seconds(),
+        "access_token_expires_at": access_expires_at,
+        "refresh_token_expires_at": refresh_expires_at,
+    }
 
 
 def update_last_used(conn: sqlite3.Connection, consumer_id: int, ip: str) -> None:
@@ -303,22 +494,58 @@ def rotate_consumer_token(conn: sqlite3.Connection, consumer_id: int) -> Optiona
     Returns the new plaintext token (shown once) or None if the consumer
     was not found.
     """
-    token, token_hash = generate_consumer_token()
+    result = rotate_consumer_tokens(conn, consumer_id)
+    return result["access_token"] if result else None
+
+
+def rotate_consumer_tokens(conn: sqlite3.Connection, consumer_id: int) -> Optional[dict]:
+    """Rotate both access and refresh tokens for a consumer."""
+    access_token, access_hash = generate_access_token()
+    refresh_token, refresh_hash = generate_refresh_token()
+    now = _utc_now()
+    access_expires_at = _future_utc(get_access_token_seconds())
+    refresh_expires_at = _future_utc(get_refresh_token_seconds())
     cur = conn.execute(
-        "UPDATE log_stream_consumers SET token_hash=? WHERE id=?",
-        (token_hash, consumer_id),
+        """
+        UPDATE log_stream_consumers
+        SET token_hash=?,
+            access_token_hash=?,
+            access_token_expires_at=?,
+            refresh_token_hash=?,
+            refresh_token_expires_at=?,
+            refresh_token_rotated_at=?
+        WHERE id=?
+        """,
+        (
+            access_hash,
+            access_hash,
+            access_expires_at,
+            refresh_hash,
+            refresh_expires_at,
+            now,
+            consumer_id,
+        ),
     )
     conn.commit()
     if cur.rowcount == 0:
         return None
-    return token
+    return {
+        "consumer_id": consumer_id,
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "expires_in": get_access_token_seconds(),
+        "access_token_expires_at": access_expires_at,
+        "refresh_token_expires_at": refresh_expires_at,
+    }
 
 
 def list_consumers(conn: sqlite3.Connection) -> list[dict]:
     """Return all consumers. token_hash is NEVER included in the result."""
     rows = conn.execute(
         """
-        SELECT id, name, enabled, created_at, last_used_at, last_used_ip, expires_at
+        SELECT id, name, enabled, created_at, last_used_at, last_used_ip, expires_at,
+               access_token_expires_at, refresh_token_expires_at, refresh_token_rotated_at,
+               refresh_token_hash IS NOT NULL AS has_refresh_token
         FROM log_stream_consumers
         ORDER BY id
         """
