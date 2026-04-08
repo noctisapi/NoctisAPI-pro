@@ -25,10 +25,9 @@ from typing import Optional
 
 _logger = logging.getLogger(__name__)
 
-LEGACY_TOKEN_PREFIX = "nctx_ls_"
 ACCESS_TOKEN_PREFIX = "nctx_at_"
 REFRESH_TOKEN_PREFIX = "nctx_rt_"
-TOKEN_PREFIX = LEGACY_TOKEN_PREFIX  # Backward-compatible public constant.
+TOKEN_PREFIX = ACCESS_TOKEN_PREFIX
 _TOKEN_RANDOM_BYTES = 32
 
 # ---------------------------------------------------------------------------
@@ -277,10 +276,7 @@ def generate_consumer_token() -> tuple[str, str]:
     Only the hash is ever persisted.  The plaintext must be shown to the
     operator exactly once and then discarded.
     """
-    raw = secrets.token_bytes(_TOKEN_RANDOM_BYTES)
-    token = TOKEN_PREFIX + raw.hex()
-    token_hash = _hash_token(token)
-    return token, token_hash
+    return generate_access_token()
 
 
 def _generate_prefixed_token(prefix: str) -> tuple[str, str]:
@@ -366,11 +362,9 @@ def authenticate_consumer(
     if not token:
         return None
     token_hash = _hash_token(token)
-    is_access_token = token.startswith(ACCESS_TOKEN_PREFIX)
-    is_legacy_token = token.startswith(LEGACY_TOKEN_PREFIX)
-    if not (is_access_token or is_legacy_token):
+    if not token.startswith(ACCESS_TOKEN_PREFIX):
         return None
-    lookup_column = "access_token_hash" if is_access_token else "token_hash"
+    lookup_column = "access_token_hash"
     row = conn.execute(
         f"""
         SELECT id, name, enabled, expires_at, access_token_expires_at
@@ -385,7 +379,7 @@ def authenticate_consumer(
         return None
     if _is_iso_expired(row["expires_at"]):
         return None
-    if is_access_token and _is_iso_expired(row["access_token_expires_at"]):
+    if _is_iso_expired(row["access_token_expires_at"]):
         return None
     return dict(row)
 

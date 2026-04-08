@@ -162,8 +162,6 @@ async def log_poll(request: Request, body: LogPollRequest) -> JSONResponse:
     Authentication:
       Authorization: Bearer nctx_at_<hex>
 
-    Legacy nctx_ls_<hex> tokens remain accepted for existing agents.
-
     On any auth failure the response is 404 to avoid leaking whether
     a consumer identity exists.
 

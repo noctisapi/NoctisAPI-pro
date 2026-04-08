@@ -31,6 +31,9 @@ Config file example (config.json):
   }
 
 Environment variable overrides (all optional):
+  NOCTIS_REFRESH_TOKEN     - initial refresh token (preferred)
+  NOCTIS_TOKEN_URL         - overrides token_url
+  NOCTIS_TOKEN_STATE_FILE  - overrides token_state_file
   NOCTIS_SERVER_URL        — overrides server_url
   NOCTIS_BEARER_TOKEN      — overrides bearer_token (recommended; avoids token in config file)
   NOCTIS_CURSOR_FILE       — overrides cursor_file
@@ -111,8 +114,8 @@ def validate_config(cfg: dict) -> None:
         raise ValueError("server_url is required")
     if not cfg.get("bearer_token") and not cfg.get("refresh_token"):
         raise ValueError("refresh_token or bearer_token is required")
-    if cfg.get("bearer_token") and not cfg["bearer_token"].startswith(("nctx_at_", "nctx_ls_")):
-        _logger.warning("bearer_token does not start with 'nctx_ls_' — may be invalid")
+    if cfg.get("bearer_token") and not cfg["bearer_token"].startswith("nctx_at_"):
+        _logger.warning("bearer_token does not start with 'nctx_at_' - may be invalid")
 
 
 # ---------------------------------------------------------------------------
