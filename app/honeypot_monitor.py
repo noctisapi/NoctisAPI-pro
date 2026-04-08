@@ -82,6 +82,15 @@ def _replace_path_params(path: str) -> str:
     return re.sub(r"\{([^/]+)\}", _repl, path)
 
 
+def _is_honeypot_route(path: str) -> bool:
+    """Return True only for routes that belong to the public honeypot API.
+
+    /pro/* routes are internal panel/log-export infrastructure and must
+    not appear in API Health monitoring.
+    """
+    return bool(path) and not path.startswith("/pro/")
+
+
 def _discover_endpoints() -> List[str]:
     try:
         from fastapi.routing import APIRoute
@@ -93,7 +102,10 @@ def _discover_endpoints() -> List[str]:
     for route in honeypot_public.app.routes:
         if not isinstance(route, APIRoute):
             continue
-        endpoint = _replace_path_params(route.path or "")
+        raw = route.path or ""
+        if not _is_honeypot_route(raw):
+            continue
+        endpoint = _replace_path_params(raw)
         if not endpoint:
             continue
         endpoints.append(_normalize_endpoint(endpoint))
@@ -222,7 +234,10 @@ def _default_checks() -> List[Dict[str, Any]]:
     for route in honeypot_public.app.routes:
         if not isinstance(route, APIRoute):
             continue
-        path = _normalize_endpoint(route.path or "")
+        raw = route.path or ""
+        if not _is_honeypot_route(raw):
+            continue
+        path = _normalize_endpoint(raw)
         if not path:
             continue
         path = _replace_path_params(path)
