@@ -6168,7 +6168,6 @@ def log_export_download_agent():
         media_type="text/x-python",
         filename="noctis_agent.py",
     )
-    )
 
 
 @app.put(
