@@ -860,6 +860,132 @@ def classification_summary(limit: int = 1000):
         conn.close()
 
 
+@app.post("/admin/classification/backfill", response_class=JSONResponse)
+def classification_backfill(batch: int = 500):
+    """Re-classify existing events that have no attack_type in extra_json.
+
+    Processes up to *batch* events per call (oldest first).
+    Also refreshes typical_behavior for every actor that had events updated.
+    Returns counts of processed, skipped, and errored events.
+    """
+    from datetime import datetime as _dt
+    from app.internal.analysis_engine import AttackAnalyzer, RequestEvent, compute_typical_behavior
+
+    analyzer = AttackAnalyzer()
+    conn = db()
+    try:
+        cur = conn.cursor()
+
+        # Fetch unclassified events, oldest first, with full context
+        rows = cur.execute(
+            """
+            SELECT id, actor_id, ts, path, method, ua, status, extra_json
+            FROM events
+            WHERE json_extract(extra_json, '$.attack_type') IS NULL
+            ORDER BY id ASC
+            LIMIT ?
+            """,
+            (max(1, min(batch, 5000)),),
+        ).fetchall()
+
+        processed = 0
+        errored = 0
+        actors_touched: set[str] = set()
+
+        for row in rows:
+            try:
+                event_id  = row["id"]
+                actor_id  = row["actor_id"]
+                ts        = row["ts"] or ""
+                path      = row["path"] or "/"
+                method    = row["method"] or "GET"
+                ua        = row["ua"] or ""
+                status    = int(row["status"] or 200)
+                extra     = json.loads(row["extra_json"] or "{}")
+
+                # Derive headers from extra_json if stored, else empty
+                headers   = extra.get("headers") or {}
+
+                # Fetch recent history for this actor up to this event
+                history = cur.execute(
+                    "SELECT ts, path, status FROM events WHERE actor_id=? AND id < ? ORDER BY id DESC LIMIT 6",
+                    (actor_id, event_id),
+                ).fetchall()
+
+                interval_ms = 0.0
+                if history:
+                    try:
+                        dt_prev = _dt.fromisoformat(str(history[0]["ts"] or "").replace("Z", "+00:00"))
+                        dt_cur  = _dt.fromisoformat(ts.replace("Z", "+00:00"))
+                        interval_ms = max(0.0, (dt_cur - dt_prev).total_seconds() * 1000.0)
+                    except Exception:
+                        pass
+
+                recent_statuses = tuple(int(h["status"]) for h in history if h["status"] is not None)
+                recent_paths    = tuple(str(h["path"]) for h in history if h["path"])
+                intervals: list[float] = []
+                for i in range(len(history) - 1):
+                    try:
+                        t0 = _dt.fromisoformat(str(history[i]["ts"] or "").replace("Z", "+00:00"))
+                        t1 = _dt.fromisoformat(str(history[i+1]["ts"] or "").replace("Z", "+00:00"))
+                        intervals.append(abs((t0 - t1).total_seconds() * 1000.0))
+                    except Exception:
+                        pass
+
+                ae = RequestEvent(
+                    path=path, method=method, ua=ua, headers=headers,
+                    query_params={}, status=status, body_size=0,
+                    session_request_count=len(history),
+                    interval_ms=interval_ms,
+                    recent_statuses=recent_statuses,
+                    recent_paths=recent_paths,
+                    recent_intervals_ms=tuple(intervals),
+                )
+                result = analyzer.analyze(ae)
+
+                extra["attack_type"]       = result.attack_type
+                extra["attack_confidence"] = result.confidence_score
+                extra["attack_signals"]    = result.signals
+                cur.execute(
+                    "UPDATE events SET extra_json=? WHERE id=?",
+                    (json.dumps(extra, ensure_ascii=False), event_id),
+                )
+                actors_touched.add(actor_id)
+                processed += 1
+            except Exception:
+                errored += 1
+
+        conn.commit()
+
+        # Refresh typical_behavior for all touched actors
+        for actor_id in actors_touched:
+            try:
+                rows_at = cur.execute(
+                    "SELECT json_extract(extra_json, '$.attack_type') AS at FROM events WHERE actor_id=? AND json_extract(extra_json, '$.attack_type') IS NOT NULL",
+                    (actor_id,),
+                ).fetchall()
+                types = [r["at"] for r in rows_at if r["at"] in ("automated", "targeted")]
+                if types:
+                    tb = compute_typical_behavior(types)
+                    cur.execute("UPDATE actors SET typical_behavior=? WHERE actor_id=?", (tb, actor_id))
+            except Exception:
+                pass
+        conn.commit()
+
+        remaining = cur.execute(
+            "SELECT COUNT(*) FROM events WHERE json_extract(extra_json, '$.attack_type') IS NULL"
+        ).fetchone()[0]
+
+        return {
+            "processed": processed,
+            "errored": errored,
+            "actors_refreshed": len(actors_touched),
+            "remaining_unclassified": remaining,
+        }
+    finally:
+        conn.close()
+
+
 # ensure schema on startup for panel
 ensure_schema(db())
 
