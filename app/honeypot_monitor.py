@@ -237,10 +237,11 @@ def _default_checks() -> List[Dict[str, Any]]:
         if enabled:
             checks: List[Dict[str, Any]] = []
             for ep in enabled:
-                path = _replace_path_params(_normalize_endpoint(ep.path or ""))
+                path = _replace_path_params(_normalize_endpoint(ep.path_pattern or ""))
                 if not path:
                     continue
-                method = (ep.method or "GET").upper()
+                method = ep.method.value if hasattr(ep.method, "value") else str(ep.method or "GET")
+                method = method.upper()
                 if method in {"HEAD", "OPTIONS"}:
                     continue
                 checks.append(_make_check(method, path))
