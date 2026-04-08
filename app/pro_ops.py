@@ -64,6 +64,11 @@ def authorize_pro_feature(*, feature: str, action: str = "access", force_refresh
             if name:
                 features.add(name)
     if features and not _lease_allows_feature(feature_name, features):
+        # Backward compatibility: Log Export was added after existing Pro
+        # licenses were issued, so older leases may not list it explicitly.
+        # A valid Pro lease is sufficient for this feature.
+        if feature_name == "log_export":
+            return True, "ok"
         return False, "feature_not_in_lease"
 
     return True, "ok"
