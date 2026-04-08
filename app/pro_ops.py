@@ -7,10 +7,11 @@ import time
 from app import pro_license
 
 
-_ALLOWLIST = {"cases", "campaigns", "replay", "advanced_scoring", "file_pipeline", "api_mutation", "analytics"}
+_ALLOWLIST = {"cases", "campaigns", "replay", "advanced_scoring", "file_pipeline", "api_mutation", "analytics", "webhooks", "log_export"}
 _LEASE_FEATURE_ALIASES = {
     "api_mutation": {"api_mutation", "advanced_scoring", "campaigns"},
     "analytics": {"analytics", "advanced_scoring", "campaigns"},
+    "log_export": {"log_export", "cases", "campaigns", "api_mutation", "analytics"},
 }
 _CACHE_LOCK = threading.Lock()
 _CACHE: dict[str, int] = {}
