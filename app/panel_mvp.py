@@ -379,6 +379,33 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             "Database schema missing Alembic migrations. Run `alembic upgrade head` before launching the admin panel."
         ) from exc
 
+    # Forward-compatible column guards: add any columns introduced by migrations
+    # that may not yet be present on older deployments.  Safe to call repeatedly.
+    _ensure_columns(conn, "actors", {
+        "typical_behavior": "TEXT",
+    })
+    _ensure_columns(conn, "cases", {
+        "attack_type":            "TEXT",
+        "confidence_score":       "REAL NOT NULL DEFAULT 0.0",
+        "analysis_signals_json":  "TEXT",
+    })
+    _ensure_columns(conn, "campaigns", {
+        "automated_ratio": "REAL NOT NULL DEFAULT 0.0",
+        "targeted_ratio":  "REAL NOT NULL DEFAULT 0.0",
+    })
+
+
+def _ensure_columns(conn: sqlite3.Connection, table: str, columns: dict) -> None:
+    """Add *columns* to *table* if they are missing.  No-op for existing columns."""
+    existing = {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    for col, typedef in columns.items():
+        if col not in existing:
+            try:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typedef}")
+                conn.commit()
+            except Exception:
+                pass
+
 
 honeypot_monitor = HoneypotAvailabilityMonitor(db)
 
