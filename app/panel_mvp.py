@@ -74,6 +74,13 @@ _CAMPAIGN_AUTO_INTERVAL = int(os.getenv("HP_CAMPAIGN_AUTO_RECOMPUTE_INTERVAL", "
 # Used to identify internal panelâ†’public requests so they are not logged as actors.
 _HP_MONITOR_SECRET = os.getenv("HP_MONITOR_SECRET", "").strip()
 
+
+def _public_base_url_for_display() -> str:
+    value = (HP_PUBLIC_BASE_URL or "your-domain.com").strip().rstrip("/")
+    if value.startswith(("http://", "https://")):
+        return value
+    return f"https://{value}"
+
 # ---------------------------------------------------------------------------
 # Panel authentication
 # ---------------------------------------------------------------------------
@@ -5749,7 +5756,7 @@ def dashboard_log_export(request: Request):
             "stats": stats,
             "retention_label": retention_label,
             "now_iso": now_iso,
-            "public_host": HP_PUBLIC_BASE_URL or "your-domain.com",
+            "public_base_url": _public_base_url_for_display(),
             **_license_context(),
         },
     )

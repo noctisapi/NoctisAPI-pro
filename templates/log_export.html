@@ -339,7 +339,7 @@ python agents/noctis_agent.py --config agent_config.json
 
 # agent_config.json
 {
-  "server_url":              "https://{{ public_host }}/pro/internal/log-poll",
+  "server_url":              "{{ public_base_url }}/pro/internal/log-poll",
   "cursor_file":             "/var/lib/noctis-agent/cursor.json",
   "output_path":             "/var/log/noctisapi/events.jsonl",
   "poll_wait_seconds":       25,
