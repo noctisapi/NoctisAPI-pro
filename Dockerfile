@@ -41,6 +41,7 @@ COPY migrations/   ./migrations/
 COPY scripts/      ./scripts/
 COPY static/       ./static/
 COPY templates/    ./templates/
+COPY agents/       ./agents/
 COPY alembic.ini   ./alembic.ini
 COPY main.py       ./main.py
 COPY main_panel.py ./main_panel.py

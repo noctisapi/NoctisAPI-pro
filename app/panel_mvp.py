@@ -6168,20 +6168,6 @@ def log_export_download_agent():
         media_type="text/x-python",
         filename="noctis_agent.py",
     )
-    if new_tokens is None:
-        raise HTTPException(status_code=404, detail="consumer not found")
-    return JSONResponse(
-        content={
-            "ok": True,
-            "consumer_id": consumer_id,
-            "token": new_tokens["access_token"],
-            "access_token": new_tokens["access_token"],
-            "refresh_token": new_tokens["refresh_token"],
-            "expires_in": new_tokens["expires_in"],
-            "access_token_expires_at": new_tokens["access_token_expires_at"],
-            "refresh_token_expires_at": new_tokens["refresh_token_expires_at"],
-            "note": "Save these tokens now. They will not be shown again.",
-        }
     )
 
 
