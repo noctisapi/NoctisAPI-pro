@@ -315,6 +315,17 @@ def normalize_template_payload(raw: dict[str, Any], *, existing_template_id: Opt
     }
 
 
+def auth_warnings(payload: dict[str, Any]) -> list[str]:
+    endpoints = [item for item in payload.get("endpoints") or [] if bool(item.get("enabled", True))]
+    modes = {str((item.get("auth") or {}).get("mode") or "none") for item in endpoints}
+    warnings: list[str] = []
+    if "bearer_required" in modes and "token_issuer" not in modes:
+        warnings.append("Bearer auth is required by at least one endpoint, but this API has no Bearer token issuer.")
+    if "api_key_required" in modes and "api_key_issuer" not in modes:
+        warnings.append("API key auth is required by at least one endpoint, but this API has no API key issuer.")
+    return warnings
+
+
 def list_templates(conn: sqlite3.Connection, *, enabled_only: bool = False) -> list[dict[str, Any]]:
     ensure_tables(conn)
     sql = f"SELECT template_id, name, description, payload_json, enabled, created_at, updated_at FROM {TABLE_NAME}"

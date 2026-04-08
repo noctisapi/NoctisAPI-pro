@@ -2950,6 +2950,7 @@ def dashboard_api_modular_save_custom_template(payload: dict = Body(default={}))
             normalized = custom_api_templates.normalize_template_payload(payload)
             custom_api_templates.validate_template_against_registry(normalized, _api_modular_registry())
             saved = custom_api_templates.save_template(conn, payload)
+            warnings = custom_api_templates.auth_warnings(normalized)
         except custom_api_templates.CustomTemplateError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         except Exception as exc:
@@ -2959,7 +2960,7 @@ def dashboard_api_modular_save_custom_template(payload: dict = Body(default={}))
 
     reset_provider()
     invalidate_runtime_cache()
-    return {"saved": True, "template": saved}
+    return {"saved": True, "template": saved, "warnings": warnings}
 
 
 @app.post("/dashboard/api-modular/custom-template/delete", response_class=JSONResponse)
