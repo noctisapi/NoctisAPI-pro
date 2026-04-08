@@ -779,6 +779,60 @@ def honeypot_history(endpoint: Optional[str] = None, limit: int = 20):
     return {"endpoint": target, "history": rows}
 
 
+@app.get("/admin/classification/summary", response_class=JSONResponse)
+def classification_summary(limit: int = 1000):
+    """Return attack classification stats aggregated from the most recent events.
+
+    Counts automated vs targeted across the last *limit* classified events,
+    and returns the top-5 actors for each class.
+    """
+    conn = db()
+    try:
+        cur = conn.cursor()
+        rows = cur.execute(
+            """
+            SELECT actor_id,
+                   json_extract(extra_json, '$.attack_type')       AS attack_type,
+                   json_extract(extra_json, '$.attack_confidence') AS attack_confidence
+            FROM events
+            WHERE json_extract(extra_json, '$.attack_type') IS NOT NULL
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (max(1, min(limit, 10_000)),),
+        ).fetchall()
+
+        total = len(rows)
+        auto_rows  = [r for r in rows if r["attack_type"] == "automated"]
+        tgt_rows   = [r for r in rows if r["attack_type"] == "targeted"]
+
+        # Top actors per class (by event count)
+        def _top_actors(actor_rows, n=5):
+            counts: dict[str, int] = {}
+            for r in actor_rows:
+                counts[r["actor_id"]] = counts.get(r["actor_id"], 0) + 1
+            return [
+                {"actor_id": aid, "event_count": cnt}
+                for aid, cnt in sorted(counts.items(), key=lambda x: -x[1])[:n]
+            ]
+
+        return {
+            "total_classified": total,
+            "automated": {
+                "count": len(auto_rows),
+                "ratio": round(len(auto_rows) / total, 4) if total else 0.0,
+                "top_actors": _top_actors(auto_rows),
+            },
+            "targeted": {
+                "count": len(tgt_rows),
+                "ratio": round(len(tgt_rows) / total, 4) if total else 0.0,
+                "top_actors": _top_actors(tgt_rows),
+            },
+        }
+    finally:
+        conn.close()
+
+
 # ensure schema on startup for panel
 ensure_schema(db())
 
@@ -3243,6 +3297,7 @@ def dashboard(request: Request):
             SELECT
               a.actor_id, a.first_seen, a.last_seen, a.score,
               a.err_total, a.err_consecutive, a.last_status, a.last_error_ts,
+              a.typical_behavior,
               le.ip  AS last_ip,
               le.ua  AS last_ua,
               le.extra_json AS last_extra_json,
@@ -3307,6 +3362,11 @@ def dashboard(request: Request):
             a["err_total"] = err_total
             a["err_consecutive"] = err_consec
             a["err_badge"] = f"errÃ—{err_total}" if err_total > 0 else ""
+
+            # attack classification badge
+            tb = a.get("typical_behavior")
+            if tb in ("automated", "targeted", "mixed"):
+                a["badges"].append(f"behavior:{tb}")
 
         return templates.TemplateResponse(
             "dashboard.html",
@@ -3377,7 +3437,7 @@ def dashboard_cases(request: Request):
         cur = conn.cursor()
         total = cur.execute(f"SELECT COUNT(*) FROM cases {where}", params).fetchone()[0]
         cur.execute(
-            f"SELECT id, title, severity, status, created_at, updated_at, techniques_json FROM cases {where} ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+            f"SELECT id, title, severity, status, created_at, updated_at, techniques_json, attack_type, confidence_score FROM cases {where} ORDER BY updated_at DESC LIMIT ? OFFSET ?",
             params + [per_page, offset],
         )
         cases_raw = cur.fetchall()
@@ -3488,6 +3548,46 @@ def dashboard_case_detail(case_id: int, request: Request):
             conn.commit()
         except Exception:
             conn.rollback()
+
+        # ── Attack classification: derive from events' per-request labels ──────
+        # attack_type is immutable once set; only compute if still NULL.
+        if not case.get("attack_type"):
+            try:
+                from app.internal.analysis_engine import compute_typical_behavior as _ctb
+                _ev_types = [
+                    json.loads(e.get("extra_json") or "{}").get("attack_type")
+                    for e in events
+                ]
+                _ev_types = [t for t in _ev_types if t in ("automated", "targeted")]
+                if _ev_types:
+                    _case_at = _ctb(_ev_types)
+                    _confs = [
+                        float(json.loads(e.get("extra_json") or "{}").get("attack_confidence") or 0.0)
+                        for e in events
+                    ]
+                    _avg_conf = round(sum(_confs) / max(len(_confs), 1), 4)
+                    # Collect per-signal averages for analysis_signals_json
+                    _sigs: dict = {}
+                    for e in events:
+                        for k, v in (json.loads(e.get("extra_json") or "{}").get("attack_signals") or {}).items():
+                            _sigs.setdefault(k, []).append(float(v))
+                    _agg_sigs = {k: round(sum(vs) / len(vs), 4) for k, vs in _sigs.items()}
+                    cur.execute(
+                        "UPDATE cases SET attack_type=?, confidence_score=?, analysis_signals_json=? WHERE id=?",
+                        (_case_at, _avg_conf, json.dumps(_agg_sigs, ensure_ascii=False), case_id),
+                    )
+                    conn.commit()
+                    case["attack_type"] = _case_at
+                    case["confidence_score"] = _avg_conf
+                    case["analysis_signals"] = _agg_sigs
+            except Exception:
+                pass
+        else:
+            try:
+                case["analysis_signals"] = json.loads(case.get("analysis_signals_json") or "{}")
+            except Exception:
+                case["analysis_signals"] = {}
+        # ─────────────────────────────────────────────────────────────────────
 
         replay_sessions = []
         replay_steps = []
@@ -4425,6 +4525,8 @@ def list_campaigns(request: Request):
                   c.request_count,
                   c.session_count,
                   c.ip_diversity,
+                  c.automated_ratio,
+                  c.targeted_ratio,
                   COUNT(l.actor_id) AS member_count
                 FROM campaigns c
                 LEFT JOIN campaign_actor_links l ON l.campaign_id = c.campaign_id
@@ -4909,6 +5011,31 @@ def actor(actor_id: str, request: Request):
             a["latest_session_id"] = actor_replay["session_id"]
             a["latest_session_started_fmt"] = actor_replay["started_fmt"]
             a["latest_session_stage"] = actor_replay["stage_max"]
+
+        # ── Typical behavior: derive from events if column still NULL ────────
+        if not a.get("typical_behavior"):
+            try:
+                from app.internal.analysis_engine import compute_typical_behavior as _ctb
+                _ev_types = [
+                    json.loads(e.get("extra_json") or "{}").get("attack_type")
+                    for e in events
+                ]
+                _ev_types = [t for t in _ev_types if t in ("automated", "targeted")]
+                if _ev_types:
+                    _tb = _ctb(_ev_types)
+                    a["typical_behavior"] = _tb
+                    # Persist for next load (best-effort)
+                    try:
+                        cur.execute(
+                            "UPDATE actors SET typical_behavior=? WHERE actor_id=?",
+                            (_tb, actor_id),
+                        )
+                        conn.commit()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        # ─────────────────────────────────────────────────────────────────────
 
         actor_campaign = None
         if _has_feature(licensing.Feature.CAMPAIGNS, action="actor_detail_campaign") and campaigns_pro.can_render_verified_campaigns(
