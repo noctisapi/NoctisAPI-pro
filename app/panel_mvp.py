@@ -165,6 +165,24 @@ app.add_middleware(RequestTimeoutMiddleware, timeout=get_request_timeout())
 app.add_middleware(_PanelAuthMiddleware)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
+_template_response_impl = templates.TemplateResponse
+
+
+def _compat_template_response(*args, **kwargs):
+    """Accept the legacy TemplateResponse(name, context, ...) call shape."""
+    if len(args) >= 2 and isinstance(args[0], str) and isinstance(args[1], dict):
+        template_name = args[0]
+        context = args[1]
+        request = context.get("request")
+        rest = args[2:]
+        try:
+            return _template_response_impl(request, template_name, context, *rest, **kwargs)
+        except TypeError:
+            return _template_response_impl(template_name, context, *rest, **kwargs)
+    return _template_response_impl(*args, **kwargs)
+
+
+templates.TemplateResponse = _compat_template_response
 
 
 def _license_context() -> dict:
