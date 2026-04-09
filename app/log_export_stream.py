@@ -603,6 +603,7 @@ def _build_export_payload(
     status: int,
     latency_ms: int,
     actor_id: str,
+    source_ip: Optional[str],
     country: Optional[str],
     trap_flags: list,
 ) -> dict:
@@ -610,7 +611,7 @@ def _build_export_payload(
     Build a redacted export payload.
 
     Deliberately excludes: full headers, User-Agent, token values,
-    geographic precision beyond country code, request/response bodies.
+    request/response bodies.
     """
     actor_hash = None
     if actor_id:
@@ -622,6 +623,7 @@ def _build_export_payload(
         "status": status,
         "latency_ms": latency_ms,
         "actor_id_hash": actor_hash,
+        "source_ip": str(source_ip or "").strip(),
         "country": country,
         "trap_flags": trap_flags or [],
     }
@@ -636,6 +638,7 @@ def try_emit_export_event(
     status: int,
     latency_ms: int,
     actor_id: str,
+    source_ip: Optional[str],
     country: Optional[str],
     trap_flags: Optional[list],
 ) -> None:
@@ -657,6 +660,7 @@ def try_emit_export_event(
             status=status,
             latency_ms=latency_ms,
             actor_id=actor_id,
+            source_ip=source_ip,
             country=country,
             trap_flags=trap_flags or [],
         )

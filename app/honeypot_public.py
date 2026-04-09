@@ -2508,6 +2508,7 @@ async def log_all_requests(request: Request, call_next):
                         status=status_code,
                         latency_ms=latency_ms,
                         actor_id=actor_id,
+                        source_ip=_client_ip(request),
                         country=_geo_for_export.get("country_iso2"),
                         trap_flags=(hp_event.get("trap_flags") if hp_event else None),
                     )
