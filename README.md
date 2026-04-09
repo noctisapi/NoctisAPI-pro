@@ -193,6 +193,79 @@ docker compose -f compose/docker-compose.dev.yml down
 - The admin panel can inspect the public OpenAPI document and compare it with
   the effective modular runtime state.
 
+## How Stages and Behavior Labels Work
+
+Two different classifications are shown in the product:
+
+- `Stage` is the actor's cumulative threat level.
+- `Automated` / `Targeted` is a per-request behavior classification.
+
+### Stage (0-8)
+
+The numeric `Stage` is derived from the actor's cumulative score, not from a
+single request. Higher-signal actions add more score, and the score is then
+mapped to a fixed 0-8 ladder.
+
+Examples of score-producing events include:
+
+- public recon such as `/docs`, `/openapi.json`, `/.env`, and `/config.json`
+- authentication activity such as login, MFA, token issuance, and token usage
+- access to internal/admin surfaces
+- backup and secret access
+- vault, cloud metadata, and console escalation paths
+
+Current score-to-stage mapping:
+
+| Score range | Stage label |
+| --- | --- |
+| `< 10` | `0-Idle` |
+| `10-19` | `1-Curious` |
+| `20-31` | `2-Exploring` |
+| `32-47` | `3-Probing` |
+| `48-67` | `4-Targeting` |
+| `68-91` | `5-Aggressive` |
+| `92-119` | `6-Exploiting` |
+| `120-154` | `7-Persistent` |
+| `>= 155` | `8-Critical` |
+
+### Automated vs Targeted
+
+`Automated` / `Targeted` is computed by a deterministic heuristic classifier.
+It does not use ML, external services, or randomness.
+
+The classifier combines eight normalized signals:
+
+- Automated-leaning signals:
+  - request frequency
+  - path entropy or random-looking URLs
+  - minimal or tool-like headers
+  - known scanner or script-like user agents
+  - highly uniform request timing
+- Targeted-leaning signals:
+  - logical endpoint progression
+  - multi-step or stateful behavior
+  - adaptation after errors or blocking responses
+
+Internally, each signal produces a value in `[0, 1]`, weighted signals are
+combined into a final score, and the result is classified as:
+
+- `targeted` when the final score is `>= 0.5`
+- `automated` otherwise
+
+The stored event payload also includes:
+
+- `attack_confidence`: confidence in the automated vs targeted decision
+- `attack_signals`: the individual signal scores used to reach that decision
+
+### Important distinction
+
+This `Stage` ladder is different from the per-request attack phase stored as
+`attack_phase` (`recon`, `access`, `collection`, `exfiltration`, `impact`).
+In short:
+
+- `Stage` answers: "How far has this actor progressed overall?"
+- `attack_phase` answers: "What kind of activity is this request performing?"
+
 ## License
 
 This repo contains the PRO build and its licensing layer. Feature availability
