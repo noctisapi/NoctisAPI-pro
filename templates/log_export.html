@@ -387,6 +387,7 @@ python agents/noctis_agent.py --config agent_config.json
       <div class="token-value mono" id="tokenValue"></div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
         <button class="btn btn-small copy-btn" type="button" onclick="copyToken()">Copy</button>
+        <button class="btn btn-small btn-outline" type="button" onclick="downloadBundle('create')">Download ready bundle</button>
         <a class="btn btn-small btn-outline" href="/pro/log-export/agent.py" download="noctis_agent.py">Download agent .py</a>
         <span id="copyFeedback" class="feedback-ok" style="display:none;">Copied!</span>
       </div>
@@ -413,6 +414,7 @@ python agents/noctis_agent.py --config agent_config.json
       <div class="token-value mono" id="rotateTokenValue"></div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
         <button class="btn btn-small copy-btn" type="button" onclick="copyRotatedToken()">Copy</button>
+        <button class="btn btn-small btn-outline" type="button" onclick="downloadBundle('rotate')">Download ready bundle</button>
         <a class="btn btn-small btn-outline" href="/pro/log-export/agent.py" download="noctis_agent.py">Download agent .py</a>
         <span id="rotateCopyFeedback" class="feedback-ok" style="display:none;">Copied!</span>
       </div>
@@ -423,6 +425,8 @@ python agents/noctis_agent.py --config agent_config.json
 
 
 <script>
+let lastCreatedConsumer = null;
+let lastRotatedConsumer = null;
 /* ── Filter ── */
 function filterTable() {
   const q = (document.getElementById('searchInput').value || '').toLowerCase();
@@ -504,6 +508,11 @@ async function doCreate() {
     }
     // Show token reveal
     document.getElementById('createForm').style.display = 'none';
+    lastCreatedConsumer = {
+      consumer_id: data.consumer_id,
+      name: data.name || name,
+      refresh_token: data.refresh_token || '',
+    };
     document.getElementById('tokenValue').textContent = formatTokenBundle(data);
     document.getElementById('tokenReveal').classList.add('visible');
     document.getElementById('doneRow').style.display = '';
@@ -572,6 +581,13 @@ async function rotateConsumer(id, btn) {
       btn.disabled = false;
       return;
     }
+    const row = btn.closest('tr');
+    const rowName = row ? ((row.querySelector('.cons-name-cell') || {}).textContent || '').trim() : '';
+    lastRotatedConsumer = {
+      consumer_id: id,
+      name: rowName || ('consumer-' + id),
+      refresh_token: data.refresh_token || '',
+    };
     document.getElementById('rotateTokenValue').textContent = formatTokenBundle(data);
     document.getElementById('rotateModal').classList.add('open');
   } catch (e) {
@@ -599,6 +615,39 @@ function copyRotatedToken() {
 }
 
 /* ── Delete consumer ── */
+async function downloadBundle(kind) {
+  const payload = kind === 'rotate' ? lastRotatedConsumer : lastCreatedConsumer;
+  if (!payload || !payload.refresh_token) {
+    alert('No refresh token is available for this bundle.');
+    return;
+  }
+  try {
+    const res = await fetch('/pro/log-export/agent-bundle.zip', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      alert('Error: ' + (text || res.status));
+      return;
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    const disposition = res.headers.get('Content-Disposition') || '';
+    const match = disposition.match(/filename=\"([^\"]+)\"/i);
+    link.href = url;
+    link.download = (match && match[1]) || 'noctis_agent_bundle.zip';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (e) {
+    alert('Network error: ' + e.message);
+  }
+}
+
 async function deleteConsumer(id, btn) {
   if (!confirm('Delete consumer #' + id + '?\n\nThis permanently removes the token. Any agent using it will stop receiving events.')) return;
   btn.disabled = true;

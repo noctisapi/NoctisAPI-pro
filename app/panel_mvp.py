@@ -1,8 +1,10 @@
 # panel_mvp.py
 import hashlib
 import hmac as _hmac
+import io
 import logging
 import os
+import re
 import secrets as _secrets
 import time
 import threading
@@ -10,6 +12,7 @@ import json
 import tempfile
 import sqlite3
 import urllib.request
+import zipfile
 from pathlib import Path
 from app.tls_config import get_ssl_context
 from app.geoip import close_reader as _close_geoip_reader
@@ -6048,6 +6051,84 @@ def _require_log_export_feature() -> None:
         raise HTTPException(status_code=403, detail=f"feature not available: {reason}")
 
 
+def _sanitize_bundle_name(value: str) -> str:
+    text = re.sub(r"[^A-Za-z0-9._-]+", "-", str(value or "").strip()).strip("-._")
+    return text or "consumer"
+
+
+def _build_log_export_bundle(
+    *,
+    consumer_name: str,
+    refresh_token: str,
+    public_base_url: str,
+) -> tuple[str, bytes]:
+    agent_path = Path(__file__).resolve().parent.parent / "agents" / "noctis_agent.py"
+    if not agent_path.exists():
+        raise HTTPException(status_code=404, detail="agent not found")
+    if not refresh_token.startswith(_les.REFRESH_TOKEN_PREFIX):
+        raise HTTPException(status_code=400, detail="invalid refresh token")
+
+    safe_name = _sanitize_bundle_name(consumer_name)
+    bundle_root = f"noctis_agent_{safe_name}"
+    server_url = public_base_url.rstrip("/") + "/pro/internal/log-poll"
+    token_url = public_base_url.rstrip("/") + "/pro/internal/log-token/refresh"
+    config = {
+        "server_url": server_url,
+        "token_url": token_url,
+        "refresh_token": refresh_token,
+        "cursor_file": "./state/cursor.json",
+        "token_state_file": "./state/token.json",
+        "output_path": "./output/events.jsonl",
+        "poll_wait_seconds": 25,
+        "max_events": 100,
+        "request_timeout_seconds": 35,
+    }
+    run_sh = """#!/usr/bin/env sh
+set -eu
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+cd "$SCRIPT_DIR"
+mkdir -p state output
+exec python3 noctis_agent.py --config agent_config.json
+"""
+    run_bat = """@echo off
+setlocal
+cd /d "%~dp0"
+if not exist state mkdir state
+if not exist output mkdir output
+python noctis_agent.py --config agent_config.json
+pause
+"""
+    readme = f"""NoctisAPI Log Export Agent Bundle
+================================
+
+Consumer: {consumer_name}
+
+Files:
+- noctis_agent.py
+- agent_config.json
+- run.sh
+- run.bat
+
+Usage:
+- Linux/macOS: chmod +x run.sh && ./run.sh
+- Windows: double-click run.bat
+
+This bundle includes the initial refresh token in agent_config.json.
+Treat the extracted folder as a secret and do not share it.
+"""
+    payload = io.BytesIO()
+    with zipfile.ZipFile(payload, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(f"{bundle_root}/noctis_agent.py", agent_path.read_text(encoding="utf-8"))
+        zf.writestr(
+            f"{bundle_root}/agent_config.json",
+            json.dumps(config, ensure_ascii=False, indent=2) + "\n",
+        )
+        zf.writestr(f"{bundle_root}/run.sh", run_sh)
+        zf.writestr(f"{bundle_root}/run.bat", run_bat.replace("\n", "\r\n"))
+        zf.writestr(f"{bundle_root}/README.txt", readme.replace("\n", "\r\n"))
+    return f"{bundle_root}.zip", payload.getvalue()
+
+
 @app.get("/dashboard/log-export", include_in_schema=False, response_class=HTMLResponse)
 def dashboard_log_export(request: Request):
     pro_enabled, _reason = pro_ops.authorize_pro_feature(
@@ -6204,6 +6285,28 @@ def log_export_download_agent():
         path=str(agent_path),
         media_type="text/x-python",
         filename="noctis_agent.py",
+    )
+
+
+@app.post("/pro/log-export/agent-bundle.zip", include_in_schema=False)
+async def log_export_download_agent_bundle(request: Request):
+    """Build a ready-to-run agent bundle using the freshly issued refresh token."""
+    _require_log_export_feature()
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid JSON body")
+    consumer_name = str(body.get("name") or "").strip() or "consumer"
+    refresh_token = str(body.get("refresh_token") or "").strip()
+    filename, content = _build_log_export_bundle(
+        consumer_name=consumer_name,
+        refresh_token=refresh_token,
+        public_base_url=_public_base_url_for_display(),
+    )
+    return Response(
+        content=content,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
