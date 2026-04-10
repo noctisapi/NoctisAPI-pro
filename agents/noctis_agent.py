@@ -21,6 +21,7 @@ Config file example (config.json):
     "server_url":              "https://your-domain.com/pro/internal/log-poll",
     "token_url":               "https://your-domain.com/pro/internal/log-token/refresh",
     "refresh_token":           "nctx_rt_<hex>",
+    "private_key_file":        "./agent_private_key.pem",
     "cursor_file":             "/var/lib/noctis-agent/cursor.json",
     "token_state_file":        "/var/lib/noctis-agent/token.json",
     "output_path":             "/var/log/noctisapi/events.jsonl",
@@ -32,6 +33,7 @@ Config file example (config.json):
 
 Environment variable overrides (all optional):
   NOCTIS_REFRESH_TOKEN     - initial refresh token (preferred)
+  NOCTIS_PRIVATE_KEY_FILE  - private key for decrypting encrypted payloads
   NOCTIS_TOKEN_URL         - overrides token_url
   NOCTIS_TOKEN_STATE_FILE  - overrides token_state_file
   NOCTIS_SERVER_URL        — overrides server_url
@@ -42,6 +44,7 @@ Environment variable overrides (all optional):
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import logging
 import os
@@ -64,6 +67,8 @@ _DEFAULTS = {
     "token_url": "",
     "bearer_token": "",
     "refresh_token": "",
+    "private_key_file": "",
+    "encryption_key_id": "",
     "cursor_file": "/var/lib/noctis-agent/cursor.json",
     "token_state_file": "/var/lib/noctis-agent/token.json",
     "output_path": "/var/log/noctisapi/events.jsonl",
@@ -105,6 +110,8 @@ def load_config(path: Optional[str]) -> dict:
         cfg["token_state_file"] = os.environ["NOCTIS_TOKEN_STATE_FILE"].strip()
     if os.environ.get("NOCTIS_OUTPUT_PATH"):
         cfg["output_path"] = os.environ["NOCTIS_OUTPUT_PATH"].strip()
+    if os.environ.get("NOCTIS_PRIVATE_KEY_FILE"):
+        cfg["private_key_file"] = os.environ["NOCTIS_PRIVATE_KEY_FILE"].strip()
 
     return cfg
 
@@ -188,6 +195,7 @@ def poll(
     max_events: int,
     wait_seconds: int,
     timeout_seconds: int,
+    private_key_file: str = "",
 ) -> dict:
     """
     POST to /pro/internal/log-poll and return the parsed JSON body.
@@ -218,7 +226,8 @@ def poll(
     with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
         raw = resp.read()
 
-    return json.loads(raw)
+    body = json.loads(raw)
+    return decrypt_poll_payload(body, private_key_file)
 
 
 def derive_token_url(server_url: str, configured_token_url: str) -> str:
@@ -248,6 +257,45 @@ def refresh_tokens(token_url: str, refresh_token: str, timeout_seconds: int) -> 
     if not isinstance(body, dict) or not body.get("access_token") or not body.get("refresh_token"):
         raise ValueError("token refresh response did not include access_token and refresh_token")
     return body
+
+
+def decrypt_poll_payload(body: dict, private_key_file: str) -> dict:
+    if not isinstance(body, dict) or not body.get("encrypted"):
+        return body
+    if not private_key_file:
+        raise ValueError("encrypted log-export response requires private_key_file")
+
+    try:
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric.x25519 import (
+            X25519PrivateKey,
+            X25519PublicKey,
+        )
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+    except ImportError:
+        raise RuntimeError("cryptography package is required to decrypt log-export payloads")
+
+    private_pem = Path(private_key_file).read_bytes()
+    private_key = serialization.load_pem_private_key(private_pem, password=None)
+    if not isinstance(private_key, X25519PrivateKey):
+        raise ValueError("private_key_file must contain an X25519 private key")
+
+    peer_public = X25519PublicKey.from_public_bytes(
+        base64.b64decode(str(body.get("ephemeral_public_key") or ""))
+    )
+    salt = base64.b64decode(str(body.get("salt") or ""))
+    nonce = base64.b64decode(str(body.get("nonce") or ""))
+    ciphertext = base64.b64decode(str(body.get("ciphertext") or ""))
+    shared_secret = private_key.exchange(peer_public)
+    aes_key = HKDF(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=salt,
+        info=b"noctisapi-log-export-v1",
+    ).derive(shared_secret)
+    plaintext = AESGCM(aes_key).decrypt(nonce, ciphertext, None)
+    return json.loads(plaintext.decode())
 
 
 # ---------------------------------------------------------------------------
@@ -288,6 +336,7 @@ def run_agent(cfg: dict) -> None:
     cursor_file = cfg["cursor_file"]
     token_state_file = cfg["token_state_file"]
     output_path = cfg["output_path"]
+    private_key_file = str(cfg.get("private_key_file") or "")
     poll_wait = int(cfg["poll_wait_seconds"])
     max_events = int(cfg["max_events"])
     timeout = int(cfg["request_timeout_seconds"])
@@ -341,6 +390,7 @@ def run_agent(cfg: dict) -> None:
                 max_events=max_events,
                 wait_seconds=poll_wait,
                 timeout_seconds=timeout,
+                private_key_file=private_key_file,
             )
         except urllib.error.HTTPError as exc:
             status = exc.code

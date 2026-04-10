@@ -14,6 +14,7 @@ Strict separation requirements:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import sqlite3
@@ -111,6 +112,10 @@ def _log_export_enabled() -> bool:
         force_refresh=False,
     )
     return bool(ok)
+
+
+def _build_poll_response(cursor: int, events: list[dict]) -> dict:
+    return {"ok": True, "cursor": cursor, "events": events}
 
 
 @router.post(
@@ -234,10 +239,15 @@ async def log_poll(request: Request, body: LogPollRequest) -> JSONResponse:
     if events:
         new_cursor = events[-1]["cursor"]
         _update_last_used_bg(consumer_id, client_ip)
-        return JSONResponse(
-            status_code=200,
-            content={"ok": True, "cursor": new_cursor, "events": events},
-        )
+        payload = _build_poll_response(new_cursor, events)
+        if consumer.get("encryption_public_key"):
+            encrypted = log_export_stream.encrypt_payload_for_consumer(
+                consumer_public_key_pem=str(consumer["encryption_public_key"]),
+                plaintext=json.dumps(payload, ensure_ascii=False).encode(),
+                key_id=str(consumer.get("encryption_key_id") or ""),
+            )
+            return JSONResponse(status_code=200, content=encrypted)
+        return JSONResponse(status_code=200, content=payload)
 
     # ------------------------------------------------------------------
     # 6. Long poll — wait up to wait_seconds for new events.
@@ -262,19 +272,29 @@ async def log_poll(request: Request, body: LogPollRequest) -> JSONResponse:
         if events:
             new_cursor = events[-1]["cursor"]
             _update_last_used_bg(consumer_id, client_ip)
-            return JSONResponse(
-                status_code=200,
-                content={"ok": True, "cursor": new_cursor, "events": events},
-            )
+            payload = _build_poll_response(new_cursor, events)
+            if consumer.get("encryption_public_key"):
+                encrypted = log_export_stream.encrypt_payload_for_consumer(
+                    consumer_public_key_pem=str(consumer["encryption_public_key"]),
+                    plaintext=json.dumps(payload, ensure_ascii=False).encode(),
+                    key_id=str(consumer.get("encryption_key_id") or ""),
+                )
+                return JSONResponse(status_code=200, content=encrypted)
+            return JSONResponse(status_code=200, content=payload)
 
     # ------------------------------------------------------------------
     # 7. Timeout — return empty events array with unchanged cursor.
     # ------------------------------------------------------------------
     _update_last_used_bg(consumer_id, client_ip)
-    return JSONResponse(
-        status_code=200,
-        content={"ok": True, "cursor": cursor, "events": []},
-    )
+    payload = _build_poll_response(cursor, [])
+    if consumer.get("encryption_public_key"):
+        encrypted = log_export_stream.encrypt_payload_for_consumer(
+            consumer_public_key_pem=str(consumer["encryption_public_key"]),
+            plaintext=json.dumps(payload, ensure_ascii=False).encode(),
+            key_id=str(consumer.get("encryption_key_id") or ""),
+        )
+        return JSONResponse(status_code=200, content=encrypted)
+    return JSONResponse(status_code=200, content=payload)
 
 
 def _update_last_used_bg(consumer_id: int, ip: str) -> None:

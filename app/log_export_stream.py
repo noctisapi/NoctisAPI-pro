@@ -29,6 +29,8 @@ ACCESS_TOKEN_PREFIX = "nctx_at_"
 REFRESH_TOKEN_PREFIX = "nctx_rt_"
 TOKEN_PREFIX = ACCESS_TOKEN_PREFIX
 _TOKEN_RANDOM_BYTES = 32
+_ENCRYPTION_ALG = "X25519-AES-256-GCM"
+_ENCRYPTION_INFO = b"noctisapi-log-export-v1"
 
 # ---------------------------------------------------------------------------
 # Schema
@@ -56,6 +58,8 @@ _DDL = [
         refresh_token_hash       TEXT,
         refresh_token_expires_at TEXT,
         refresh_token_rotated_at TEXT,
+        encryption_public_key    TEXT,
+        encryption_key_id        TEXT,
         enabled                  INTEGER NOT NULL DEFAULT 1,
         created_at               TEXT    NOT NULL,
         last_used_at             TEXT,
@@ -105,6 +109,8 @@ def _ensure_consumer_refresh_columns(conn: sqlite3.Connection) -> None:
         ("refresh_token_hash", "TEXT"),
         ("refresh_token_expires_at", "TEXT"),
         ("refresh_token_rotated_at", "TEXT"),
+        ("encryption_public_key", "TEXT"),
+        ("encryption_key_id", "TEXT"),
     ):
         if name not in existing:
             try:
@@ -168,6 +174,20 @@ def _fernet() -> object:
 
     _FERNET_INSTANCE = Fernet(key)
     return _FERNET_INSTANCE
+
+
+def _crypto_modules():
+    try:
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric.x25519 import (
+            X25519PrivateKey,
+            X25519PublicKey,
+        )
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+    except ImportError:
+        raise RuntimeError("cryptography package is required for log_export_stream")
+    return hashes, serialization, X25519PrivateKey, X25519PublicKey, AESGCM, HKDF
 
 
 def _reset_fernet_cache() -> None:
@@ -292,6 +312,82 @@ def generate_refresh_token() -> tuple[str, str]:
     return _generate_prefixed_token(REFRESH_TOKEN_PREFIX)
 
 
+def generate_consumer_encryption_keypair() -> dict[str, str]:
+    hashes, serialization, X25519PrivateKey, _X25519PublicKey, _AESGCM, _HKDF = _crypto_modules()
+    private_key = X25519PrivateKey.generate()
+    public_key = private_key.public_key()
+    return {
+        "key_id": "nctx_key_" + secrets.token_hex(8),
+        "private_key_pem": private_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        ).decode(),
+        "public_key_pem": public_key.public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode(),
+    }
+
+
+def set_consumer_encryption_public_key(
+    conn: sqlite3.Connection,
+    consumer_id: int,
+    *,
+    public_key_pem: str,
+    key_id: str,
+) -> bool:
+    cur = conn.execute(
+        """
+        UPDATE log_stream_consumers
+        SET encryption_public_key=?, encryption_key_id=?
+        WHERE id=?
+        """,
+        (str(public_key_pem or "").strip(), str(key_id or "").strip(), consumer_id),
+    )
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def encrypt_payload_for_consumer(
+    *,
+    consumer_public_key_pem: str,
+    plaintext: bytes,
+    key_id: str = "",
+) -> dict:
+    hashes, serialization, X25519PrivateKey, X25519PublicKey, AESGCM, HKDF = _crypto_modules()
+    public_key = serialization.load_pem_public_key(consumer_public_key_pem.encode())
+    if not isinstance(public_key, X25519PublicKey):
+        raise ValueError("consumer public key must be an X25519 public key")
+
+    ephemeral_private = X25519PrivateKey.generate()
+    shared_secret = ephemeral_private.exchange(public_key)
+    salt = secrets.token_bytes(16)
+    nonce = secrets.token_bytes(12)
+    aes_key = HKDF(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=salt,
+        info=_ENCRYPTION_INFO,
+    ).derive(shared_secret)
+    ciphertext = AESGCM(aes_key).encrypt(nonce, plaintext, None)
+    return {
+        "ok": True,
+        "encrypted": True,
+        "alg": _ENCRYPTION_ALG,
+        "key_id": str(key_id or "").strip(),
+        "ephemeral_public_key": base64.b64encode(
+            ephemeral_private.public_key().public_bytes(
+                encoding=serialization.Encoding.Raw,
+                format=serialization.PublicFormat.Raw,
+            )
+        ).decode(),
+        "salt": base64.b64encode(salt).decode(),
+        "nonce": base64.b64encode(nonce).decode(),
+        "ciphertext": base64.b64encode(ciphertext).decode(),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Consumer management
 # ---------------------------------------------------------------------------
@@ -367,7 +463,8 @@ def authenticate_consumer(
     lookup_column = "access_token_hash"
     row = conn.execute(
         f"""
-        SELECT id, name, enabled, expires_at, access_token_expires_at
+        SELECT id, name, enabled, expires_at, access_token_expires_at,
+               encryption_public_key, encryption_key_id
         FROM log_stream_consumers
         WHERE {lookup_column}=?
         """,
@@ -539,7 +636,9 @@ def list_consumers(conn: sqlite3.Connection) -> list[dict]:
         """
         SELECT id, name, enabled, created_at, last_used_at, last_used_ip, expires_at,
                access_token_expires_at, refresh_token_expires_at, refresh_token_rotated_at,
-               refresh_token_hash IS NOT NULL AS has_refresh_token
+               refresh_token_hash IS NOT NULL AS has_refresh_token,
+               encryption_public_key IS NOT NULL AND LENGTH(TRIM(encryption_public_key)) > 0 AS encryption_enabled,
+               encryption_key_id
         FROM log_stream_consumers
         ORDER BY id
         """

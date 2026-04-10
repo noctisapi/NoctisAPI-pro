@@ -6061,6 +6061,8 @@ def _build_log_export_bundle(
     consumer_name: str,
     refresh_token: str,
     public_base_url: str,
+    private_key_pem: str,
+    key_id: str,
 ) -> tuple[str, bytes]:
     agent_path = Path(__file__).resolve().parent.parent / "agents" / "noctis_agent.py"
     if not agent_path.exists():
@@ -6076,6 +6078,8 @@ def _build_log_export_bundle(
         "server_url": server_url,
         "token_url": token_url,
         "refresh_token": refresh_token,
+        "private_key_file": "./agent_private_key.pem",
+        "encryption_key_id": key_id,
         "cursor_file": "./state/cursor.json",
         "token_state_file": "./state/token.json",
         "output_path": "./output/events.jsonl",
@@ -6123,6 +6127,7 @@ Treat the extracted folder as a secret and do not share it.
             f"{bundle_root}/agent_config.json",
             json.dumps(config, ensure_ascii=False, indent=2) + "\n",
         )
+        zf.writestr(f"{bundle_root}/agent_private_key.pem", private_key_pem)
         zf.writestr(f"{bundle_root}/run.sh", run_sh)
         zf.writestr(f"{bundle_root}/run.bat", run_bat.replace("\n", "\r\n"))
         zf.writestr(f"{bundle_root}/README.txt", readme.replace("\n", "\r\n"))
@@ -6296,12 +6301,31 @@ async def log_export_download_agent_bundle(request: Request):
         body = await request.json()
     except Exception:
         raise HTTPException(status_code=400, detail="invalid JSON body")
+    try:
+        consumer_id = int(body.get("consumer_id"))
+    except Exception:
+        raise HTTPException(status_code=400, detail="consumer_id is required")
     consumer_name = str(body.get("name") or "").strip() or "consumer"
     refresh_token = str(body.get("refresh_token") or "").strip()
+    conn = db()
+    try:
+        _les.ensure_tables(conn)
+        keys = _les.generate_consumer_encryption_keypair()
+        if not _les.set_consumer_encryption_public_key(
+            conn,
+            consumer_id,
+            public_key_pem=keys["public_key_pem"],
+            key_id=keys["key_id"],
+        ):
+            raise HTTPException(status_code=404, detail="consumer not found")
+    finally:
+        conn.close()
     filename, content = _build_log_export_bundle(
         consumer_name=consumer_name,
         refresh_token=refresh_token,
         public_base_url=_public_base_url_for_display(),
+        private_key_pem=keys["private_key_pem"],
+        key_id=keys["key_id"],
     )
     return Response(
         content=content,
