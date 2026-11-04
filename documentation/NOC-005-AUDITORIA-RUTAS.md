@@ -31,11 +31,12 @@ inspeccionaron a fondo (secciones 2 y 3) porque "oculto de OpenAPI" no implica "
 | Business API lure | `/api/v1/users*`, `/api/v1/orders*`, `/api/v1/accounts`, `/api/v1/transactions`, `/api/v1/payments`, `/api/v1/reports/{id}` | public-decoy | Capa modular (catálogo/ResponseFactory o legacy) — ver `CLAUDE.md` |
 | Consola/root lure | `/console/*`, `/root/shell`, `/root/console` | public-decoy | Sin auth real; el propio nombre es el cebo |
 | Files lure | `/files*`, `/import`, `/backup/*` | public-decoy | `require_backup_token` contra secretos auto-emitidos — señuelo correcto |
-| Admin secretos/infra lure | `/admin/secrets`, `/infra/vault`, `/cloud/metadata` | public-decoy | Sin auth real; devuelven datos fabricados de alta tentación |
+| Admin secretos (lure encadenado) | `/admin/secrets` | public-decoy | `require_admin_secret` contra un secreto de cebo **previamente emitido** (p. ej. vía `/backup/download`) — correctamente señuelo, es un escalón más de la cadena de engaño |
+| Infra/cloud lure | `/infra/vault`, `/cloud/metadata` | public-decoy | Sin auth real; devuelven datos fabricados de alta tentación |
 | Legacy admin (oculto) | `/v1/admin/login`, `/v1/admin/status`, `/v1/admin/rotate`, `/v1/export/users`, `/v1/export/audit` | public-decoy | `require_bearer` (igual que el resto); verificado — correctamente señuelo a pesar del nombre |
-| **Health** | `/health`, `/ready`, `/version` | **operational real** (ver hallazgo §2) | **Ninguno** — sin auth, sin distinción monitor/atacante |
+| **Health** | `/health`, `/ready`, `/version` | `/health` operational real (inocuo); `/ready`/`/version` eran operational real (ver hallazgo §2) → **corregidas a señuelo en este PR** | `/health`: ninguno, inocuo. `/ready`/`/version`: ninguno antes del fix — ahora son señuelo, no necesitan auth |
 | Health (señuelo) | `/status` | public-decoy | Correcto: jitter + actor tracking, sin datos reales |
-| **PRO analytics** | `/pro/analytics/endpoints`, `/interest`, `/fingerprinting`, `/overview` | **admin real** (ver hallazgo §3) | `require_admin_secret` — **efectivo solo en apariencia** (ver hallazgo §3) |
+| **PRO analytics** | `/pro/analytics/endpoints`, `/interest`, `/fingerprinting`, `/overview` | admin real | `require_admin_secret` era **efectivo solo en apariencia** (ver hallazgo §3) → **corregido en este PR**: ahora `require_internal_admin_token` (HMAC contra `HP_PANEL_TOKEN` real) |
 
 ### `app/pro_router.py` (mismo proceso/puerto que el anterior, pero separado del señuelo)
 
@@ -92,10 +93,18 @@ de alto valor para buscar vulnerabilidades conocidas de esa versión — y (b) s
 datos está degradada, sin autenticación y sin que esto se trate como señal de ataque más allá de
 `kind="health"` en el log (`app/honeypot_public.py:2356-2358`).
 
-**No corregido en este PR** (fuera de alcance de una Issue de auditoría) — recomendación: que
-`/ready` y `/version` del puerto público dejen de usar `app/health.py` y pasen a devolver una
-respuesta señuelo equivalente a `/status`, reservando `app/health.py` para el panel/healthchecks
-internos exclusivamente.
+**Corregido en este PR** (autorizado explícitamente, fuera del alcance original de auditoría):
+`/ready` y `/version` en `app/honeypot_public.py` ya no llaman a `app/health.py`. Pasan a
+devolver una respuesta señuelo con la misma forma pero sin datos reales — `/ready` siempre 200
+con un `checks`/`latency_ms` fabricado, `/version` solo expone `version`/`service` (sin
+`build_sha`/`build_time`/`env`). `/health` no se tocó: `liveness()` ya era inocuo (`{"status":
+"ok"}`, nada que filtrar). `app/health.py` queda reservado para el panel interno y
+`scripts/check_app_ready.py`, que nunca lo exponen por HTTP público.
+
+Verificado con `TestClient` contra `app/honeypot_public.py` tras migrar un DB temporal:
+`GET /ready` → `200 {"status": "ok", "checks": {"database": "ok"}, "latency_ms": 5}` siempre,
+independientemente del estado real de la DB; `GET /version` → `200 {"version": "1.0.0",
+"service": "platform-api"}`, sin `build_sha`/`env`/`build_time`.
 
 ## 3. Hallazgo — `/pro/analytics/*` es un endpoint administrativo real alcanzable con un secreto de cebo
 
@@ -142,22 +151,36 @@ activa (`_require_feature` devuelve 404 en instancias CORE o sin esa feature) �
 despliegues sin PRO, pero sí a cualquier instancia PRO con analítica habilitada, que es
 presumiblemente la mayoría de los despliegues comerciales.
 
-**No corregido en este PR** (fuera de alcance de una Issue de auditoría) — recomendación: que
-`require_admin_secret` valide contra un espacio de secretos administrativos real y separado del
-de cebo (p. ej. comparando contra un secreto de proceso/instalación, no contra `issued_secrets`),
-o que `/pro/analytics/*` se mueva a `app/pro_router.py` (que ya tiene un modelo de auth real
-independiente del señuelo) en vez de vivir directamente en `app/honeypot_public.py`.
+**Corregido en este PR** (autorizado explícitamente, fuera del alcance original de auditoría):
+nueva función `require_internal_admin_token()` (`app/honeypot_public.py`) que valida la cabecera
+`X-Admin-Secret` por comparación de tiempo constante (`hmac.compare_digest`) contra
+`HP_PANEL_TOKEN` — el mismo secreto real que ya usa el panel — y **nunca** consulta
+`issued_secrets`. Las 4 rutas `/pro/analytics/*` pasan a depender de esta función en vez de
+`require_admin_secret`. `require_admin_secret` **no se tocó** y sigue protegiendo `/admin/secrets`
+exactamente igual que antes — esa ruta es un señuelo encadenado legítimo (entrega más secretos
+falsos de "vault"/"root" tras recibir uno válido) y debía seguir aceptando secretos de cebo.
+
+Verificado con un secreto de cebo real, emitido directamente vía
+`_get_or_create_secret(conn, "attacker-actor-1", "admin_secret", "adm")` (simulando exactamente
+lo que recibiría un atacante en `/backup/download`):
+
+| Ruta | Con el secreto de cebo | Antes del fix |
+|---|---|---|
+| `GET /pro/analytics/overview` | **401 Unauthorized** | 200 con datos reales |
+| `GET /admin/secrets` | 200 (sin cambios — señuelo intacto) | 200 (igual) |
+| `GET /pro/analytics/overview` con `HP_PANEL_TOKEN` real | Pasa la auth (404 solo por falta de licencia PRO/ANALYTICS en el entorno de prueba) | N/A |
 
 ## 4. Resumen de controles de acceso efectivos (no solo ocultación)
 
 | Mecanismo | ¿Protege de verdad? |
 |---|---|
-| `include_in_schema=False` (ocultar de OpenAPI) | No es control de acceso — solo oculta de la documentación. Confirmado en código: varias rutas con esto activado son decoy correctamente controladas por otros medios (`/v1/admin/*`), pero **ninguna ruta depende de esto como único control** salvo quizá la intención original de `/pro/analytics/*`, que sí lo trata como si fuera suficiente (hallazgo §3). |
-| `require_bearer` / `require_backup_token` / `require_api_key` contra `issued_secrets` | Correcto **cuando** el endpoint es señuelo (el objetivo es que el atacante pueda "entrar" y seguir siendo observado). Incorrecto cuando protege un endpoint real (hallazgo §3). |
-| `require_admin_secret` | Mismo problema que arriba — ver hallazgo §3. |
+| `include_in_schema=False` (ocultar de OpenAPI) | No es control de acceso — solo oculta de la documentación. Confirmado en código: varias rutas con esto activado son decoy correctamente controladas por otros medios (`/v1/admin/*`). La propia intención original de `/pro/analytics/*` lo trataba como si bastara (hallazgo §3) — ya corregido con un control de acceso real propio. |
+| `require_bearer` / `require_backup_token` / `require_api_key` contra `issued_secrets` | Correcto **cuando** el endpoint es señuelo (el objetivo es que el atacante pueda "entrar" y seguir siendo observado). Nunca debe gatear un endpoint real — por eso `/pro/analytics/*` pasó a `require_internal_admin_token` en vez de reutilizar este mecanismo. |
+| `require_admin_secret` | Correcto para lo que protege hoy (`/admin/secrets`, señuelo encadenado). Ya no protege ningún endpoint real — ese era el problema del hallazgo §3, corregido. |
+| `require_internal_admin_token` (nuevo) | HMAC de tiempo constante contra `HP_PANEL_TOKEN`; nunca consulta `issued_secrets`. Protege `/pro/analytics/*`. |
 | Cookie de sesión HMAC del panel (`_PanelAuthMiddleware`) | Correcto para su propósito actual; limitaciones ya documentadas como riesgos R3/R4 en NOC-001 (token único compartido, sin RBAC). |
 | Bearer token validado contra DB en `pro_router.py` | Correcto — modelo de auth independiente del señuelo, diseñado para esto. |
-| Binding `127.0.0.1` (panel) | Correcto, es la única protección real de `/health`/`/ready` del panel — pero nótese que **no existe binding equivalente para el puerto público**, de ahí el hallazgo §2. |
+| Binding `127.0.0.1` (panel) | Correcto para el panel. El puerto público no tiene binding equivalente, pero ya no expone estado real por ello (hallazgo §2, corregido). |
 
 ## 5. Criterios de aceptación
 
@@ -169,14 +192,45 @@ independiente del señuelo) en vez de vivir directamente en `app/honeypot_public
 
 ## 6. Pruebas
 
-Auditoría pura — no se ha modificado ningún archivo de `app/`. No se reclama ejecución de la
-suite de tests como evidencia de esta Issue: esta rama parte de `main`, donde `tests/` no está
-versionado todavía (pendiente de NOC-002/PR #63), igual que se documentó en NOC-004.
+Esta Issue empezó como auditoría pura, pero los dos hallazgos se corrigieron en la misma rama
+tras autorización explícita. Verificación realizada:
+
+1. **Suite completa**: la rama de NOC-002 (PR #63) ya versiona `tests/`; se tomó prestado
+   temporalmente ese directorio (`git checkout noc-002-functional-test-baseline -- tests/`),
+   se ejecutó la suite completa contra el código ya corregido de esta rama, y se descartó antes
+   de este commit (no se añade `tests/` a esta PR — eso sigue siendo responsabilidad de #63):
+   ```bash
+   python -m pytest tests/ -q
+   # 1017 passed, 1 skipped, 2 xfailed   (idéntico al baseline de NOC-002 — sin regresiones)
+   ```
+2. **Smoke test dirigido** (`TestClient` contra `app/honeypot_public.app`, DB temporal migrada
+   con `alembic upgrade head`), ningún test existente cubre estas rutas, así que se verificó a
+   mano:
+   - `GET /health` → `200 {"status": "ok"}` (sin cambios).
+   - `GET /ready` → `200 {"status": "ok", "checks": {"database": "ok"}, "latency_ms": 5}` siempre.
+   - `GET /version` → `200 {"version": "1.0.0", "service": "platform-api"}`, sin `build_sha`/`env`/`build_time`.
+   - Un secreto de cebo real, emitido vía `_get_or_create_secret(conn, "attacker-actor-1", "admin_secret", "adm")`
+     (igual que recibiría un atacante en `/backup/download`):
+     - `GET /pro/analytics/overview` con ese secreto → **401** (antes: 200 con datos reales).
+     - `GET /admin/secrets` con ese mismo secreto → **200**, payload de señuelo sin cambios — la
+       cadena de engaño sigue intacta.
+     - `GET /pro/analytics/overview` con `HP_PANEL_TOKEN` real → pasa la autenticación (404 solo
+       por falta de licencia PRO/ANALYTICS en el entorno de prueba, esperado).
 
 ## 7. Efectos en seguridad / compatibilidad / despliegue / rollback
 
-- **Seguridad**: esta Issue no cambia comportamiento — documenta dos hallazgos reales (secciones
-  2 y 3) que **siguen activos en el código actual** y afectan a cualquier instancia desplegada
-  hoy. Se recomienda tratarlos como su propia Issue de corrección, priorizada, no como parte del
-  trabajo de migración de NOC-006 en adelante.
-- **Compatibilidad/Despliegue/Rollback**: no aplica — ningún archivo de aplicación fue modificado.
+- **Seguridad**: corrige dos vulnerabilidades reales activas en el código actual (secciones 2 y
+  3) — fuga de estado real por `/ready`/`/version` públicos, y bypass de autenticación de
+  `/pro/analytics/*` vía secreto de cebo. Ningún otro endpoint señuelo se modificó;
+  `require_admin_secret` y la cadena `/admin/secrets` quedan exactamente igual.
+- **Compatibilidad**: ningún llamador legítimo depende del contrato roto — se verificó que
+  `app/panel_mvp.py` calcula su propia analítica PRO en proceso (no llama a
+  `/pro/analytics/*` por HTTP) y que `app/honeypot_monitor.py` excluye explícitamente `/pro/*`
+  de sus comprobaciones; ningún test existente cubre estas rutas (confirmado por búsqueda en el
+  código de los tests de la rama de NOC-002).
+- **Despliegue**: sin cambios de infraestructura; requiere que `HP_PANEL_TOKEN` esté configurado
+  en el entorno de la app pública igual que ya lo está para el panel (mismo `.env.prod`,
+  variable ya compartida entre ambos servicios vía `env_file`).
+- **Rollback**: revertir este commit restaura el comportamiento anterior (incluidas ambas
+  vulnerabilidades) — aceptable como rollback de emergencia, pero no recomendado dado que
+  reabriría los dos hallazgos.

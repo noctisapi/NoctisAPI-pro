@@ -1,5 +1,6 @@
 # honeypot_public.py
 import copy
+import hmac
 import logging
 import os
 import sys
@@ -1339,6 +1340,26 @@ def require_admin_secret(request: Request) -> str:
     return adm
 
 
+def require_internal_admin_token(request: Request) -> str:
+    """Real auth for genuinely internal endpoints that happen to be defined in this
+    app (e.g. /pro/analytics/*) rather than in app/pro_router.py.
+
+    Deliberately does NOT consult issued_secrets / require_admin_secret: that table
+    only ever holds decoy values handed to attackers as bait (see
+    _get_or_create_secret, called from the /backup/download lure), so a lure secret
+    must never be able to satisfy this check. Validates against HP_PANEL_TOKEN --
+    the same real secret the admin panel itself uses -- with a constant-time
+    comparison. Fails closed (401) if HP_PANEL_TOKEN is not configured.
+    """
+    provided = (request.headers.get("x-admin-secret") or "").strip()
+    panel_token = os.environ.get("HP_PANEL_TOKEN", "").strip()
+    if not panel_token or not provided or not hmac.compare_digest(
+        provided.encode("utf-8"), panel_token.encode("utf-8")
+    ):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return provided
+
+
 def require_vault_token(request: Request) -> str:
     v = (request.headers.get("x-vault-token") or "").strip()[:200]
     if _is_monitor(request):
@@ -2592,16 +2613,32 @@ async def health(request: Request):
 
 @app.get("/ready", tags=["Health"], response_class=JSONResponse)
 async def ready(request: Request):
-    """Readiness check — verifies the database is reachable and schema is initialised."""
-    payload = _health.readiness(DB_PATH)
-    status_code = 200 if payload["status"] == "ok" else 503
-    return JSONResponse(payload, status_code=status_code)
+    """Decoy readiness check.
+
+    Mirrors the real response shape but never reflects actual database state —
+    unlike /health (harmless liveness), a real readiness check would leak
+    internal operational state (DB degraded/up) to anonymous internet clients.
+    The real check lives on the internal admin panel only
+    (app/status_checks.py::ensure_ready(), bound to 127.0.0.1).
+    """
+    await _sleep_jitter()
+    return JSONResponse({
+        "status": "ok",
+        "checks": {"database": "ok"},
+        "latency_ms": random.randint(2, 12),
+    })
 
 
 @app.get("/version", tags=["Health"], response_class=JSONResponse)
 async def version(request: Request):
-    """Return application version and build metadata."""
-    return JSONResponse(_health.version_info())
+    """Decoy version endpoint.
+
+    Deliberately does not reveal the real build SHA, build time, or deployment
+    environment — those are real operational data, not fit for the public
+    decoy surface. See app/health.py::version_info() for the real values,
+    used only by internal healthchecks/the admin panel.
+    """
+    return JSONResponse({"version": APP_VERSION, "service": "platform-api"})
 
 
 @app.get("/status", tags=["Health"], response_class=JSONResponse)
@@ -4301,7 +4338,7 @@ async def pro_analytics_endpoints(
     request: Request,
     hours: int = 24,
     limit: int = 25,
-    adm: str = Depends(require_admin_secret),
+    adm: str = Depends(require_internal_admin_token),
 ):
     _require_feature(licensing.Feature.ANALYTICS, action="pro_analytics")
     conn = _db()
@@ -4323,7 +4360,7 @@ async def pro_analytics_interest(
     request: Request,
     hours: int = 24,
     limit: int = 25,
-    adm: str = Depends(require_admin_secret),
+    adm: str = Depends(require_internal_admin_token),
 ):
     _require_feature(licensing.Feature.ANALYTICS, action="pro_analytics")
     conn = _db()
@@ -4345,7 +4382,7 @@ async def pro_analytics_fingerprinting(
     request: Request,
     hours: int = 24,
     limit: int = 25,
-    adm: str = Depends(require_admin_secret),
+    adm: str = Depends(require_internal_admin_token),
 ):
     _require_feature(licensing.Feature.ANALYTICS, action="pro_analytics")
     conn = _db()
@@ -4366,7 +4403,7 @@ async def pro_analytics_fingerprinting(
 async def pro_analytics_overview(
     request: Request,
     hours: int = 24,
-    adm: str = Depends(require_admin_secret),
+    adm: str = Depends(require_internal_admin_token),
 ):
     _require_feature(licensing.Feature.ANALYTICS, action="pro_analytics")
     window_hours = max(1, min(int(hours), 168))
