@@ -1,6 +1,8 @@
 # ADR 0003 — Descubrimiento de Traefik: File Provider por defecto, Docker Socket Proxy solo como contingencia documentada
 
-**Estado**: Propuesta (NOC-004) — criterio vinculante para NOC-007, NOC-008 y NOC-009.
+**Estado**: Implementada (NOC-004 la propuso; NOC-007/008/009 la ejecutaron y verificaron). File
+Provider en producción desde NOC-007; socket retirado desde NOC-008; configuración de
+contingencia de Socket Proxy evaluada y verificada, sin desplegar, desde NOC-009.
 
 ## Contexto
 
@@ -38,6 +40,14 @@ ya fija como criterios de aceptación:
 Mientras File Provider cubra el caso — y hoy no hay ninguna señal en el backlog de que no lo
 haga — **no se implanta** Socket Proxy. No es un "por ahora", es la posición por defecto hasta
 que una necesidad concreta y documentada diga lo contrario.
+
+**Verificado (NOC-009), no solo propuesto**: se evaluó `tecnativa/docker-socket-proxy` con
+`CONTAINERS=1` y todo lo demás (incluyendo `POST`, `EXEC`) explícitamente en `0`, montando el
+socket real solo en el proxy (nunca en Traefik), sin puerto publicado. Con esa configuración:
+`GET /containers/json` → `200`; `POST /containers/create` → `403`; `POST
+/containers/{id}/exec` → `403`. La configuración de referencia (no desplegada por defecto) está
+en `compose/traefik/docker-socket-proxy.optional.yml`; detalle completo de la verificación en
+`documentation/NOC-009-SOCKET-PROXY-CONTINGENCIA.md`.
 
 ## Alternativas consideradas
 
