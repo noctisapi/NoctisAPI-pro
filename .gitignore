@@ -17,6 +17,7 @@ ENV/
 .env.*
 # example files should be committed
 !.env.prod.example
+!.env.staging.example
 !dist/.env.example
 
 # Logs
