@@ -46,8 +46,6 @@ Thumbs.db
 # Claude Code agent memory
 .claude/
 
-# Tests (local only, not shipped in the public image)
-tests/
 
 # Internal probes (local only)
 scripts/probe_actor_flow.py
