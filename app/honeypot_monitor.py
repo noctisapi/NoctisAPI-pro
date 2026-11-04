@@ -23,6 +23,10 @@ HONEYPOT_CHECK_MAX_ROWS = int(os.getenv("HONEYPOT_CHECK_MAX_ROWS", "10000"))
 HONEYPOT_MONITORED_ENDPOINTS_RAW = os.getenv("HONEYPOT_MONITORED_ENDPOINTS", "")
 HONEYPOT_MONITOR_UA = os.getenv("HONEYPOT_MONITOR_UA", "HealthCheck/1.0")
 HONEYPOT_MONITOR_XFF = os.getenv("HONEYPOT_MONITOR_XFF", "127.0.0.1")
+# Must match the real secret app.honeypot_public._is_monitor() compares against
+# (constant-time) -- never hardcode a guessable literal here. Unset means this
+# monitor is simply never recognized as internal, same as any other caller.
+HP_MONITOR_SECRET = os.getenv("HP_MONITOR_SECRET", "").strip()
 
 
 def _utc_now_iso() -> str:
@@ -427,7 +431,9 @@ class HoneypotAvailabilityMonitor:
         return result
 
     def _base_headers(self) -> Dict[str, str]:
-        headers = {"User-Agent": HONEYPOT_MONITOR_UA, "X-Internal-Monitor": "1"}
+        headers = {"User-Agent": HONEYPOT_MONITOR_UA}
+        if HP_MONITOR_SECRET:
+            headers["X-Internal-Monitor"] = HP_MONITOR_SECRET
         if HONEYPOT_MONITOR_XFF:
             headers["X-Forwarded-For"] = HONEYPOT_MONITOR_XFF
         return headers
