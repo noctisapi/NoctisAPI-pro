@@ -105,7 +105,6 @@ services:
       - "443:443"
       - "127.0.0.1:8081:8081"
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
       - traefik_dynamic_config:/etc/traefik/dynamic:ro
       - traefik_letsencrypt:/letsencrypt
     depends_on:
