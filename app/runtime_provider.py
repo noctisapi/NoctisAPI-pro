@@ -117,6 +117,7 @@ class RuntimeConfigProvider:
     def invalidate(self) -> None:
         """Force cache invalidation. Next get_config() will rebuild from DB."""
         with self._lock:
+            self._cached = None
             self._cached_at = 0.0
         logger.debug("RuntimeConfigProvider: cache invalidated")
 

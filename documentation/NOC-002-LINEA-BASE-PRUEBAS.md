@@ -28,7 +28,7 @@ los tests en git" fue el error: son dos mecanismos distintos para dos problemas 
   intacta vía `.dockerignore`, sin cambios).
 - Se restauran los 41 archivos de test al control de versiones (`git add tests/`).
 
-Sin este cambio, el workflow de CI de la sección 3 habría ejecutado `pytest tests/` sobre un
+Sin este cambio, el workflow de CI de la sección 4 habría ejecutado `pytest tests/` sobre un
 checkout vacío y no habría encontrado ningún test que correr.
 
 ## 2. Hallazgo secundario: versión de dependencias no reproducible
@@ -62,7 +62,39 @@ Los 8 fallos que desaparecen son puramente de desviación de entorno
 (`tests/test_panel_api_modular_v2.py` × 5, `tests/test_panel_replay.py` × 3) — no indican ningún
 problema de la aplicación.
 
-## 3. Corrección de reproducibilidad (este PR)
+## 3. Fallos específicos del runner de CI, encontrados tras abrir el PR (corregidos en este mismo PR)
+
+El primer run de `.github/workflows/tests.yml` sobre este PR (GitHub Actions, `ubuntu-latest`)
+mostró **2 fallos adicionales** que no habían aparecido ni en la máquina de desarrollo (con
+desviación de versiones) ni en el venv local limpio de la sección 2 — ninguno de los dos es
+flaky ni depende de la versión de `fastapi`/`starlette`:
+
+### 3.1 `app/runtime_provider.py::RuntimeConfigProvider.invalidate()` — bug real de la aplicación
+
+`tests/test_runtime_provider.py::TestCaching::test_invalidate_forces_rebuild` falló con
+`assert 1 == 2`. Causa: `invalidate()` solo reseteaba `self._cached_at = 0.0`, y `get_config()`
+decide si reconstruir comparando `(time.monotonic() - self._cached_at) < self._cache_ttl`. En un
+proceso que lleva corriendo menos tiempo que `HP_RUNTIME_CACHE_TTL` (60s por defecto) desde que
+arrancó — como el runner de CI, que ejecuta toda la suite en ~10s — `time.monotonic()` todavía no
+ha superado esos 60s, así que `(now - 0.0) < 60` sigue siendo cierto y la caché **no se invalida
+de verdad**. Esto no es solo un artefacto de test: en producción, si un admin invalida la caché
+de runtime (tras cambiar la configuración desde el panel) durante el primer minuto de vida del
+proceso, el cambio no se aplicaría hasta que el TTL expire por sí solo.
+
+**Corregido**: `invalidate()` ahora también pone `self._cached = None`, que por sí solo fuerza el
+rebuild en la siguiente llamada a `get_config()`, sin depender de la aritmética de `monotonic()`.
+
+### 3.2 `tests/test_licensing_client.py::test_compute_client_identity_returns_expected_shape` — bug de aislamiento del test
+
+Fallaba con `PermissionError: [Errno 13] Permission denied: '/var/lib/myapp'`. A diferencia de
+los demás tests de ese archivo, este llamaba a `compute_client_identity()` sin fijar
+`INSTANCE_ID_PATH` a un directorio temporal, así que caía al default de
+`honey_licensing/client.py:101` (`/var/lib/myapp/instance_id`) — una ruta que solo existe y es
+escribible dentro del contenedor Docker (volumen montado), no en un runner de CI desnudo.
+**Corregido**: el test ahora fija `INSTANCE_ID_PATH` a un `tempfile.TemporaryDirectory()` y lo
+restaura al terminar, igual que ya hacían el resto de tests del archivo. Cambio solo en el test.
+
+## 4. Corrección de reproducibilidad (este PR)
 
 - `requirements-dev.txt` (nuevo): fija `pytest==8.3.4` sobre `requirements.txt`, para que
   cualquier máquina o pipeline instale exactamente las mismas versiones.
@@ -77,7 +109,7 @@ pip install -r requirements-dev.txt
 python -m pytest tests/ -q
 ```
 
-## 4. Baseline por área crítica (cobertura existente)
+## 5. Baseline por área crítica (cobertura existente)
 
 | Área (pedida por la Issue) | Archivos de test | Mecanismo |
 |---|---|---|
@@ -91,16 +123,16 @@ python -m pytest tests/ -q
 Las 6 áreas que pide la Issue ya tenían cobertura representativa; no se identificó ningún área
 sin ningún test. `tests/` ya mantiene ~1:1 un archivo de test por módulo de `app/` (41 archivos).
 
-## 5. Dos fallos reales corregidos en este PR (bugs de test, no de aplicación)
+## 6. Dos fallos reales de datos de prueba caducados, corregidos en este PR
 
-### 5.1 `tests/test_api_modular.py::test_analytics_functions`
+### 6.1 `tests/test_api_modular.py::test_analytics_functions`
 
 Usaba timestamps fijos de `2026-02-25`. Con la fecha actual, esos eventos ya caían fuera de la
 ventana `window_hours=2000` (~83 días) que el propio test pedía, así que las funciones de
 analítica devolvían listas vacías — no por un bug de `api_modular.py`, sino porque el dato de
 prueba caducó. **Corregido**: los timestamps ahora se generan relativos a `datetime.now()`.
 
-### 5.2 `tests/test_panel_geo_flags.py` (2 tests)
+### 6.2 `tests/test_panel_geo_flags.py` (2 tests)
 
 Fallaban con `sqlite3.OperationalError: no such column: a.typical_behavior`. El fixture de este
 archivo construye el esquema de la tabla `actors` a mano (`_init_db()`) en vez de correr las
@@ -110,7 +142,7 @@ migraciones reales, y quedó desincronizado de la migración
 falten en el fixture. **Corregido**: se añadió `typical_behavior TEXT` al `CREATE TABLE actors`
 del fixture. Cambio solo en el test; no se tocó `app/panel_mvp.py` ni ninguna migración.
 
-## 6. Dos fallos reales SIN corregir — requieren una decisión de producto/seguridad
+## 7. Dos fallos reales SIN corregir — requieren una decisión de producto/seguridad
 
 `tests/test_pro_license.py::TestIsProEnabled`:
 - `test_gate_allows_pro_when_online_ok`
@@ -152,7 +184,7 @@ only by a backend-validated, RS256-signed lease... There is no manual tier overr
 Ambas lecturas tocan directamente el comportamiento de licenciamiento en producción. Dejo los dos
 tests en rojo (documentados aquí, no silenciados ni borrados) hasta que se tome esa decisión.
 
-## 7. Resultado final de este PR
+## 8. Resultado final de este PR
 
 ```bash
 pip install -r requirements-dev.txt
@@ -160,30 +192,36 @@ python -m pytest tests/ -q
 # 2 failed, 1017 passed, 1 skipped
 ```
 
-Los 2 fallos restantes son los descritos en la sección 6, documentados a propósito como
-bloqueados en espera de decisión — no son flaky ni dependen del entorno.
+Verificado tanto en un venv local limpio como en el runner de GitHub Actions
+(`.github/workflows/tests.yml`). Los 2 fallos restantes son los descritos en la sección 7,
+documentados a propósito como bloqueados en espera de decisión — no son flaky ni dependen del
+entorno.
 
-## 8. Criterios de aceptación
+## 9. Criterios de aceptación
 
-- [x] Se documentan comandos y resultados iniciales (secciones 1, 4 y 7).
+- [x] Se documentan comandos y resultados iniciales (secciones 1, 5 y 8).
 - [x] Se incorporan pruebas faltantes para los flujos críticos — no se encontró ningún área sin
-      cobertura (sección 4); se corrigieron 2 pruebas rotas que impedían confiar en la línea base
-      (sección 5).
+      cobertura (sección 5); se corrigieron 4 pruebas rotas que impedían confiar en la línea base
+      (secciones 3 y 6), incluyendo un bug real de aplicación en `runtime_provider.py` (sección 3.1).
 - [x] Los tests son reproducibles en CI o entorno local controlado — restaurado el versionado de
-      `tests/` (sección 1) + `requirements-dev.txt` + `.github/workflows/tests.yml` (sección 3).
-- [ ] Los 2 fallos de licenciamiento (sección 6) quedan pendientes de una decisión de producto;
+      `tests/` (sección 1) + `requirements-dev.txt` + `.github/workflows/tests.yml` (sección 4);
+      verificado en vivo contra el runner real de GitHub Actions (sección 3).
+- [ ] Los 2 fallos de licenciamiento (sección 7) quedan pendientes de una decisión de producto;
       no se marcan como resueltos.
 
-## 9. Efectos en seguridad / compatibilidad / despliegue / rollback
+## 10. Efectos en seguridad / compatibilidad / despliegue / rollback
 
 - **Seguridad**: restaurar `tests/` al control de versiones no cambia el comportamiento en
-  tiempo de ejecución; la imagen Docker sigue sin tests vía `.dockerignore`. La contradicción de
-  licenciamiento de la sección 6 es puramente un hallazgo documentado, sin cambio de código de
-  licenciamiento.
-- **Compatibilidad**: sin impacto; no se ha tocado ningún endpoint ni esquema de producción.
+  tiempo de ejecución; la imagen Docker sigue sin tests vía `.dockerignore`. El fix de
+  `invalidate()` (sección 3.1) es el único cambio de comportamiento de aplicación de este PR:
+  hace que la invalidación de caché de runtime sea efectiva inmediatamente tras el arranque del
+  proceso, en vez de quedar sujeta a que ya haya pasado el TTL — un cambio estrictamente más
+  correcto, sin downside identificado. La contradicción de licenciamiento de la sección 7 es
+  puramente un hallazgo documentado, sin cambio de código de licenciamiento.
+- **Compatibilidad**: sin impacto en endpoints ni esquema de producción.
 - **Despliegue**: sin impacto; `tests.yml` no interfiere con `ghcr.yml` (que solo construye en
   tags/manual tras el cambio de la Issue anterior). La imagen de producción no crece: `tests/`
   sigue excluida del build vía `.dockerignore`.
-- **Rollback**: trivial — revertir este PR quita el workflow de CI, el pin de
-  `requirements-dev.txt`, y vuelve a quitar `tests/` del control de versiones; no afecta nada
-  desplegado.
+- **Rollback**: trivial para los cambios de tests/CI/`.gitignore`. El único cambio de código de
+  aplicación (`app/runtime_provider.py::invalidate()`, sección 3.1) es una línea aislada y
+  revertible sin efectos secundarios conocidos.

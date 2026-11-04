@@ -74,7 +74,16 @@ class TestFingerprint(unittest.TestCase):
                 os.environ["INSTANCE_FINGERPRINT_SHA256"] = old
 
     def test_compute_client_identity_returns_expected_shape(self):
-        ident = compute_client_identity()
+        old = os.environ.get("INSTANCE_ID_PATH")
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                os.environ["INSTANCE_ID_PATH"] = os.path.join(tmp, "instance_id")
+                ident = compute_client_identity()
+            finally:
+                if old is None:
+                    os.environ.pop("INSTANCE_ID_PATH", None)
+                else:
+                    os.environ["INSTANCE_ID_PATH"] = old
         self.assertIn("instance_id", ident)
         self.assertIn("instance_id_path", ident)
         self.assertIn("instance_fingerprint_sha256", ident)
