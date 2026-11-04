@@ -8,6 +8,8 @@ services:
     volumes:
       - hp_prod_data:/data
       - hp_prod_myapp:/var/lib/myapp
+    networks:
+      - net-internal
     restart: "no"
 
   app:
@@ -32,6 +34,8 @@ services:
       - ../data/siem:/var/log/noctisapi
     expose:
       - "8000"
+    networks:
+      - net-edge
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -86,7 +90,10 @@ services:
       - ../.env.prod
     environment:
       - PYTHONPATH=/app
-      - HONEYPOT_MONITOR_BASE_URL=http://app:8000
+      # Routed through Traefik's internal entrypoint, not straight to `app`,
+      # so admin never needs to be on the same Docker network as the public
+      # decoy surface (see NOC-011 / net-edge vs net-internal below).
+      - HONEYPOT_MONITOR_BASE_URL=http://traefik:8081
       - HP_PANEL_TOKEN=${HP_PANEL_TOKEN}
     command: ["python", "main_panel.py"]
     volumes:
@@ -97,6 +104,8 @@ services:
       - "9001"
     ports:
       - "127.0.0.1:9001:9001"
+    networks:
+      - net-internal
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -123,11 +132,25 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - traefik_letsencrypt:/letsencrypt
+    networks:
+      - net-edge
+      - net-internal
     depends_on:
       app:
         condition: service_healthy
       admin:
         condition: service_started
+
+networks:
+  # app only: reachable from traefik, can reach the internet (ASN/geo lookups,
+  # egress proxy), but is never on the same network as admin/migrate.
+  net-edge:
+    name: hp-prod-edge
+  # admin + migrate: traefik bridges both networks so admin can reach the
+  # public decoy's /health through traefik's internal entrypoint (never
+  # directly), but app has no network path to admin at all.
+  net-internal:
+    name: hp-prod-internal
 
 volumes:
   hp_prod_data:
