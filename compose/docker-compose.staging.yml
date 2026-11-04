@@ -1,0 +1,57 @@
+services:
+  migrate:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    env_file:
+      - ../${HP_ENV_FILE:-.env.staging}
+    volumes:
+      - hp_staging_data:/data
+      - hp_staging_myapp:/var/lib/myapp
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    env_file:
+      - ../${HP_ENV_FILE:-.env.staging}
+    volumes:
+      - hp_staging_data:/data
+      - hp_staging_myapp:/var/lib/myapp
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:8200:8000"
+    command: ["python", "main.py"]
+    healthcheck:
+      test:
+        ["CMD", "python", "scripts/check_app_ready.py"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+  admin:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    env_file:
+      - ../${HP_ENV_FILE:-.env.staging}
+    volumes:
+      - hp_staging_data:/data
+      - hp_staging_myapp:/var/lib/myapp
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:9201:9001"
+    command: ["python", "main_panel.py"]
+    restart: unless-stopped
+
+volumes:
+  hp_staging_data:
+  hp_staging_myapp:

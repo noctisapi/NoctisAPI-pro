@@ -23,5 +23,34 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
 
+      - name: Check dependency resolution
+        run: pip check
+
       - name: Run test suite
         run: python -m pytest tests/ -q
+
+  compose-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate dev compose
+        run: |
+          touch .env.dev
+          docker compose -f compose/docker-compose.dev.yml config --quiet
+
+      - name: Validate prod compose
+        env:
+          HP_PUBLIC_HOST: ci-placeholder.invalid
+          HP_PANEL_TOKEN: ci-placeholder-token
+          ACME_EMAIL: ci@example.invalid
+          APP_VERSION: ci-placeholder
+        run: |
+          touch .env.prod
+          docker compose -f compose/docker-compose.prod.yml config --quiet
+
+      - name: Validate staging compose
+        run: |
+          cp .env.staging.example .env.staging
+          docker compose -f compose/docker-compose.staging.yml config --quiet
