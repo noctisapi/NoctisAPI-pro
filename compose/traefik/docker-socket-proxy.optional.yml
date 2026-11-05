@@ -1,0 +1,80 @@
+# OPTIONAL contingency override — NOT used by default and NOT referenced by any
+# `make`/`docker compose` command in this repo. See ADR 0003
+# (documentation/adr/0003-traefik-file-provider-vs-docker-socket-proxy.md) and
+# NOC-009 (documentation/NOC-009-SOCKET-PROXY-CONTINGENCIA.md) for the full
+# rationale and the negative-test evidence behind this configuration.
+#
+# File Provider (compose/docker-compose.prod.yml, since NOC-007) already covers
+# every routing need this deployment has. This file exists only for the case
+# where dynamic Docker-based discovery becomes genuinely necessary again in the
+# future — it is deliberately not wired into docker-compose.prod.yml.
+#
+# To use it (only if that day comes):
+#   docker compose -f compose/docker-compose.prod.yml \
+#                   -f compose/traefik/docker-socket-proxy.optional.yml \
+#                   --env-file .env.prod up -d
+#
+# This adds a minimal-privilege proxy in front of the real Docker socket and
+# points Traefik's Docker provider at the PROXY, never at the real socket
+# directly. The proxy exposes read-only container listing only: every write
+# method (POST), EXEC, and every other resource category is explicitly
+# disabled. It has no published port -- reachable only from other services on
+# this compose project's private network.
+
+services:
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:0.3.0
+    restart: unless-stopped
+    environment:
+      # Read-only container listing -- the only thing Traefik's Docker
+      # provider needs to discover routes from container labels.
+      - CONTAINERS=1
+      # Everything else: explicitly off. POST=0 blocks every write operation
+      # (create/start/stop/remove/exec/...) regardless of which resource it
+      # targets -- this is the primary safety net, not just a convenience.
+      - POST=0
+      - EXEC=0
+      - IMAGES=0
+      - NETWORKS=0
+      - VOLUMES=0
+      - BUILD=0
+      - COMMIT=0
+      - CONFIGS=0
+      - DISTRIBUTION=0
+      - EVENTS=0
+      - INFO=0
+      - NODES=0
+      - PLUGINS=0
+      - SECRETS=0
+      - SERVICES=0
+      - SESSION=0
+      - SWARM=0
+      - SYSTEM=0
+      - TASKS=0
+      - VERSION=0
+      - AUTH=0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    # No `ports:` -- never publish this, on any interface. Other services
+    # reach it by service name on the compose project's private network only.
+
+  traefik:
+    # Adds Docker-based discovery back ALONGSIDE File Provider (both can run
+    # at once) -- pointed at the proxy above, never at the real socket.
+    command:
+      - "--api.dashboard=false"
+      - "--providers.file.directory=/etc/traefik/dynamic"
+      - "--providers.file.watch=true"
+      - "--providers.docker=true"
+      - "--providers.docker.endpoint=tcp://docker-socket-proxy:2375"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.webinternal.address=:8081"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
+      - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+    depends_on:
+      docker-socket-proxy:
+        condition: service_started
