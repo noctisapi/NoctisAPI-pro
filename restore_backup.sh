@@ -36,6 +36,23 @@ DATA_VOLUME="$(_compose_config | python3 -c "import json,sys; print(json.load(sy
 MYAPP_VOLUME="$(_compose_config | python3 -c "import json,sys; print(json.load(sys.stdin)['volumes']['hp_prod_myapp']['name'])")"
 APP_IMAGE="$(_compose_config | python3 -c "import json,sys; print(json.load(sys.stdin)['services']['app']['image'])")"
 
+# NOC-027: hard check, not just a printed warning -- refuse to restore into
+# a volume any container is still actively using. Overwriting a volume
+# out from under a running app/admin/migrate is exactly the "accidental
+# overwrite" this Issue's acceptance criterion is about; a reminder to
+# stop the stack first is not the same as actually enforcing it.
+_assert_volume_not_in_use() {
+  local volume="$1"
+  local using
+  using="$(docker ps -q --filter "volume=${volume}")"
+  if [[ -n "${using}" ]]; then
+    echo "ERROR: volume ${volume} is in use by a running container:" >&2
+    docker ps --filter "volume=${volume}" --format '  {{.Names}} ({{.Image}})' >&2
+    echo "Stop the stack first: docker compose -f ${COMPOSE_FILE} --env-file ${ENV_FILE} down" >&2
+    exit 1
+  fi
+}
+
 DECRYPTED="${BACKUP_FILE}"
 if [[ "${BACKUP_FILE}" == *.enc ]]; then
   DECRYPTED="${BACKUP_FILE%.enc}.restore"
@@ -56,8 +73,8 @@ if [[ "${BACKUP_FILE}" == *.enc ]]; then
 fi
 
 if [[ "${KIND}" == "db" ]]; then
+  _assert_volume_not_in_use "${DATA_VOLUME}"
   echo "[restore] WARNING: this overwrites the live database in volume ${DATA_VOLUME}." >&2
-  echo "[restore] make sure the stack is stopped first (docker compose ... down)." >&2
   read -r -p "Type 'yes' to continue: " CONFIRM
   [[ "${CONFIRM}" == "yes" ]] || { echo "[restore] aborted" >&2; exit 1; }
   docker run --rm \
@@ -67,8 +84,8 @@ if [[ "${KIND}" == "db" ]]; then
     sh -c "cp '/backups/$(basename "${DECRYPTED}")' ${APP_DB_PATH}"
   echo "[restore] restored into volume ${DATA_VOLUME} at ${APP_DB_PATH}" >&2
 else
+  _assert_volume_not_in_use "${MYAPP_VOLUME}"
   echo "[restore] WARNING: this overwrites /var/lib/myapp in volume ${MYAPP_VOLUME}." >&2
-  echo "[restore] make sure the stack is stopped first (docker compose ... down)." >&2
   read -r -p "Type 'yes' to continue: " CONFIRM
   [[ "${CONFIRM}" == "yes" ]] || { echo "[restore] aborted" >&2; exit 1; }
   docker run --rm \

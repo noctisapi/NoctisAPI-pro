@@ -318,7 +318,46 @@ docker compose --env-file .env.prod -f compose/docker-compose.prod.yml up -d
 ```
 
 Asks for a typed `yes` confirmation before overwriting the live volume —
-there's no undo once you confirm.
+there's no undo once you confirm. It also **refuses outright** (not just
+a warning) if any container is still actively using the target volume —
+run `docker compose ... down` first; see §11c for a drill that exercises
+this for real before you ever need it against a real incident.
+
+---
+
+## 11c. Disaster-recovery drill (NOC-027)
+
+`scripts/dr_drill.py` proves the backups in §11b actually let you get
+back to operating, not just that they're produced without error: against
+a fully isolated, throwaway compose project (never `hp_prod_data`/
+`hp_prod_myapp`), it writes a known marker into the live DB and
+`/var/lib/myapp`, backs both up, **genuinely destroys the volumes**
+(`docker compose down -v`, not just stopping containers), restores from
+the backup into fresh volumes, brings the stack back up, and verifies
+the marker survived byte-for-byte and the Alembic migration state is
+intact.
+
+```bash
+docker build -t noctisapi-pro:drill .
+python scripts/dr_drill.py --app-image noctisapi-pro:drill
+```
+
+Exits non-zero (with the specific failed check) if anything doesn't
+verify. Add `--keep` to leave the throwaway project up for inspection
+after a failure instead of tearing it down.
+
+**Measured RTO/RPO** (this repo's own verification run, a 2-vCPU dev
+machine — re-run on your own staging to get numbers for your hardware):
+
+| Metric | Measured | Meaning |
+|---|---|---|
+| RTO (disaster → restored → serving again) | **45–57s** | Wall-clock time from `docker compose down -v` to the app answering health checks again on the restored data. |
+| RPO (this drill) | **~0s** | The gap between the last backup and the simulated loss — near-zero by construction, since the drill restores from a backup taken seconds earlier. |
+| RPO (real deployment) | **up to ~24h, worst case** | Bounded by backup cadence (§11b's daily 02:15 UTC cron), not by this drill — the real number depends on how long since the last *successful* scheduled backup. |
+
+Run this drill after any change to `backup_sqlite.sh`/`restore_backup.sh`/
+`scripts/backup_tool.py`, and periodically against a real staging
+instance — not just once at implementation time.
 
 ---
 
