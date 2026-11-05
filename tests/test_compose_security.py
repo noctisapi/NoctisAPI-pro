@@ -167,5 +167,39 @@ class TestManagedOverrideStatic(unittest.TestCase):
         self.assertEqual(offenders, [])
 
 
+class TestEveryLongRunningServiceHasAHealthcheck(unittest.TestCase):
+    """NOC-028: admin had no healthcheck at all before this, and traefik's
+    was added alongside it -- regression guard so a future edit can't
+    silently drop one again. migrate/traefik-config are one-shot (they're
+    supposed to exit, not stay healthy) and are deliberately excluded."""
+
+    def test_app_admin_cloudflared_traefik_all_define_a_healthcheck(self):
+        compose = _load_compose("docker-compose.prod.yml")
+        missing = [
+            name
+            for name in ("app", "admin", "cloudflared", "traefik")
+            if "healthcheck" not in compose["services"][name]
+        ]
+        self.assertEqual(missing, [], f"service(s) missing a healthcheck: {missing}")
+
+    def test_app_and_admin_healthchecks_also_check_the_http_server(self):
+        compose = _load_compose("docker-compose.prod.yml")
+        for name, port in (("app", "8000"), ("admin", "9001")):
+            test_cmd = compose["services"][name]["healthcheck"]["test"]
+            self.assertIn("--http-port", test_cmd, f"{name}'s healthcheck doesn't check its HTTP server")
+            self.assertIn(port, test_cmd, f"{name}'s healthcheck doesn't check port {port}")
+
+    def test_traefik_ping_entrypoint_is_never_published(self):
+        compose = _load_compose("docker-compose.prod.yml")
+        traefik = compose["services"]["traefik"]
+        published = [str(p) for p in traefik.get("ports", [])]
+        self.assertFalse(
+            any("8082" in p for p in published),
+            "the ping entrypoint must stay internal to the container -- the "
+            "healthcheck reaches it over the container's own loopback, no "
+            "port mapping needed or wanted",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
