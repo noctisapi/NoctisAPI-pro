@@ -83,5 +83,49 @@ class TestDockerSocketNotMounted(unittest.TestCase):
         self.assertEqual(offenders, [])
 
 
+class TestAdminReachableOnlyThroughCloudflareTunnel(unittest.TestCase):
+    """NOC-016: the admin console must never publish a port -- the
+    cloudflared sidecar is the only route to it, on net-internal only.
+    """
+
+    def test_admin_publishes_no_ports(self):
+        compose = _load_compose("docker-compose.prod.yml")
+        admin = compose["services"]["admin"]
+        self.assertNotIn(
+            "ports",
+            admin,
+            "admin must not publish any port -- it should only be reachable "
+            "through the cloudflared sidecar over net-internal",
+        )
+
+    def test_cloudflared_service_exists_and_is_hardened(self):
+        compose = _load_compose("docker-compose.prod.yml")
+        services = compose["services"]
+        self.assertIn("cloudflared", services)
+        cloudflared = services["cloudflared"]
+        self.assertEqual(cloudflared.get("cap_drop"), ["ALL"])
+        self.assertTrue(cloudflared.get("read_only"))
+        self.assertIn("no-new-privileges:true", cloudflared.get("security_opt", []))
+        self.assertNotIn(
+            "ports",
+            cloudflared,
+            "cloudflared must not publish any port either -- it only makes "
+            "outbound connections to Cloudflare's edge",
+        )
+
+    def test_cloudflared_is_scoped_to_net_internal_only(self):
+        compose = _load_compose("docker-compose.prod.yml")
+        cloudflared = compose["services"]["cloudflared"]
+        self.assertEqual(cloudflared.get("networks"), ["net-internal"])
+
+    def test_cloudflared_token_is_not_hardcoded(self):
+        compose = _load_compose("docker-compose.prod.yml")
+        cloudflared = compose["services"]["cloudflared"]
+        env = cloudflared.get("environment", [])
+        token_entries = [e for e in env if str(e).startswith("TUNNEL_TOKEN=")]
+        self.assertEqual(len(token_entries), 1)
+        self.assertEqual(token_entries[0], "TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}")
+
+
 if __name__ == "__main__":
     unittest.main()
