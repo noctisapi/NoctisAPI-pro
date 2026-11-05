@@ -33,7 +33,10 @@ sudo ufw allow OpenSSH
 sudo ufw allow 80/tcp
 sudo ufw allow 443/tcp
 sudo ufw --force enable
-# Port 9001 (admin panel) stays 127.0.0.1-only — access via SSH tunnel only
+# The admin port (9001) is never published on any interface, not even
+# 127.0.0.1 — it has no firewall rule because it has nothing to allow or
+# block from the outside. It's reached only through the cloudflared sidecar
+# (NOC-016); see step 8.
 ```
 
 ---
@@ -62,6 +65,7 @@ nano .env.prod
 |---|---|
 | `HP_PUBLIC_HOST` | Your public API domain (e.g. `api.example.com`) |
 | `HP_ADMIN_HOST` | Your admin panel domain (e.g. `admin.example.com`) |
+| `CLOUDFLARE_TUNNEL_TOKEN` | Per-installation tunnel token from the Cloudflare Zero Trust dashboard — see step 8 |
 | `HP_PUBLIC_BASE_URL` | Full public URL (e.g. `https://api.example.com`) |
 | `HONEYPOT_PUBLIC_BASE_URL` | Same as above |
 | `ACME_EMAIL` | Your email for Let's Encrypt |
@@ -152,14 +156,29 @@ curl -sS https://<your-api-host>/health
 
 ## 8. Access the admin panel
 
-The admin panel runs on port 9001 **bound to localhost only** (`127.0.0.1:9001`).
-Access it via SSH tunnel from your local machine:
+The admin port is never published on any interface. It's reached exclusively
+through a per-installation Cloudflare Tunnel (`cloudflared`, NOC-016) — without
+one configured, there is no public route to it at all.
 
-```bash
-# On your local machine:
-ssh -L 9001:127.0.0.1:9001 user@your-server-ip
-# Then open http://localhost:9001
-```
+One-time setup, per installation:
+
+1. In the [Cloudflare Zero Trust dashboard](https://one.dash.cloudflare.com/),
+   go to **Networks → Tunnels → Create a tunnel**, choose the "Cloudflared"
+   connector type, and name it (e.g. `hp-app-prod`).
+2. Add a **Public Hostname** for the tunnel: hostname = your `HP_ADMIN_HOST`
+   (from `.env.prod`), service = `HTTP`, URL = `admin:9001` (the Docker
+   service name — `cloudflared` reaches it over `net-internal`, never the
+   public internet).
+3. Copy the tunnel token Cloudflare shows you and set it as
+   `CLOUDFLARE_TUNNEL_TOKEN` in `.env.prod`.
+4. (Recommended) Put a [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/)
+   policy in front of that Public Hostname so only authorized identities ever
+   reach the tunnel — tracked separately as NOC-017, not required for the
+   tunnel itself to work.
+5. Redeploy (`docker compose ... up -d`) so `cloudflared` picks up the token.
+
+Then just visit `https://<HP_ADMIN_HOST>` from anywhere — no SSH, no VPN, no
+published port.
 
 ---
 
@@ -205,8 +224,10 @@ docker logs compose-migrate-1
 docker compose --env-file .env.prod -f compose/docker-compose.prod.yml up -d
 ```
 
-**Port 9001 already allocated:**
-An old container is still running. Run `docker compose ... down` first.
+**Admin panel unreachable at `https://<HP_ADMIN_HOST>`:**
+Check `docker logs compose-cloudflared-1` — almost always a missing or
+invalid `CLOUDFLARE_TUNNEL_TOKEN`, or the Public Hostname in the Cloudflare
+dashboard not pointing at `admin:9001`.
 
 **Admin panel shows old UI after update:**
 ```bash

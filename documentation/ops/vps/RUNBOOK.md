@@ -82,7 +82,7 @@ Traefik handles certificates automatically via ACME HTTP-01.
 3. Verify:
    - `curl -i https://<SUBDOMAIN>.duckdns.org/health`
    - `curl -i https://<SUBDOMAIN>.duckdns.org/docs`
-   - Admin panel is available via SSH tunnel on `127.0.0.1:9001`
+   - Admin panel is available at `https://<HP_ADMIN_HOST>` through the Cloudflare Tunnel (NOC-016) — no SSH tunnel, no published port. See `documentation/ops/vps/DEPLOY.md` step 8 if it's not configured yet.
 4. If you see `attempt to write a readonly database`, fix volume ownership once:
    - `docker compose -f compose/docker-compose.prod.yml --env-file .env.prod run --rm --user 0:0 app sh -c "chown -R 10001:0 /data /var/lib/myapp"`
    - then re-run `bash /opt/hp-app/ops/vps/deploy.sh`

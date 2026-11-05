@@ -46,6 +46,7 @@ jobs:
           HP_PANEL_TOKEN: ci-placeholder-token
           ACME_EMAIL: ci@example.invalid
           APP_VERSION: ci-placeholder
+          CLOUDFLARE_TUNNEL_TOKEN: ci-placeholder-tunnel-token
         run: |
           touch .env.prod
           docker compose -f compose/docker-compose.prod.yml config --quiet
