@@ -8,10 +8,18 @@ set -eu
 : "${HP_PUBLIC_HOST:?HP_PUBLIC_HOST must be set}"
 : "${HP_PUBLIC_RATELIMIT_AVG:?HP_PUBLIC_RATELIMIT_AVG must be set}"
 : "${HP_PUBLIC_RATELIMIT_BURST:?HP_PUBLIC_RATELIMIT_BURST must be set}"
+: "${HP_PUBLIC_MAX_BODY_BYTES:=26214400}"
 
 OUT="/etc/traefik/dynamic/dynamic.yml"
 
 cat > "$OUT" <<EOF
+tls:
+  options:
+    default:
+      # NOC-014: reduce the proxy's own attack surface -- no legitimate
+      # client needs TLS 1.0/1.1 today, and this is decided purely by
+      # protocol negotiation, so it never changes any HTTP decoy behavior.
+      minVersion: VersionTLS12
 http:
   routers:
     hp-api:
@@ -23,6 +31,7 @@ http:
         certResolver: letsencrypt
       middlewares:
         - hp-public-ratelimit
+        - hp-body-limit
     hp-health:
       rule: "Host(\`${HP_PUBLIC_HOST}\`) && (Path(\`/health\`) || Path(\`/status\`))"
       entryPoints:
@@ -62,6 +71,15 @@ http:
       rateLimit:
         average: 30
         burst: 60
+    hp-body-limit:
+      # NOC-014: app/honeypot_public.py::_extract_upload has no size cap of
+      # its own (the bait upload endpoint deliberately accepts whatever an
+      # attacker sends, for analysis) -- cap it here instead, generous enough
+      # to not break that lure but bounded against pure memory-exhaustion
+      # abuse. Override via HP_PUBLIC_MAX_BODY_BYTES if a deployment needs a
+      # different ceiling.
+      buffering:
+        maxRequestBodyBytes: ${HP_PUBLIC_MAX_BODY_BYTES}
     hp-monitor-ratelimit:
       rateLimit:
         average: 30
