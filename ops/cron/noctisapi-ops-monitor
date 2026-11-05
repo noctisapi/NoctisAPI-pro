@@ -1,0 +1,15 @@
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# Every 10 minutes (NOC-028): container health, disk, memory, CPU load,
+# HP_PUBLIC_HOST's certificate, and backup freshness.
+#
+# Add HP_OPS_ALERT_WEBHOOK_URL=... to the line below to get alerted on
+# failure -- a DEDICATED webhook, deliberately separate from
+# HP_ALERT_WEBHOOK_URL (the honeypot's own attacker-event channel,
+# app/alert_dispatcher.py). Never point both at the same destination --
+# that would centralize attacker telemetry into (or infra alerts out of)
+# a channel meant for the other. cron env vars here are NOT expanded
+# from .env.prod or any shell profile; put the real value directly on
+# this line, same as the other cron jobs in this directory.
+*/10 * * * * root cd /opt/hp-app && python scripts/ops_monitor.py --backup-dir /var/backups/noctisapi >> /var/log/noctisapi-ops-monitor.log 2>&1

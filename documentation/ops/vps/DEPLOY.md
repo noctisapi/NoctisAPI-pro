@@ -361,6 +361,43 @@ instance — not just once at implementation time.
 
 ---
 
+## 11d. Operational monitoring and alerts (NOC-028)
+
+```bash
+sudo cp ops/cron/noctisapi-ops-monitor /etc/cron.d/hp-app-ops-monitor
+```
+
+Every 10 minutes, `scripts/ops_monitor.py` checks:
+
+- **Container health** — every service's own Docker healthcheck
+  (`app`/`admin`/`cloudflared`/`traefik` all have one; `admin` and
+  `traefik`'s are new as of this Issue — `admin` had none at all before,
+  and `cloudflared` crash-looping on a bad token used to be
+  indistinguishable from healthy to anything watching from outside the
+  container). `migrate`/`traefik-config` are one-shot and are judged by
+  exit code instead.
+- **Disk, memory, CPU load** on the host.
+- **`HP_PUBLIC_HOST`'s TLS certificate** — reuses `scripts/verify_domain.py`
+  (NOC-024) rather than a second implementation of the same check.
+- **Backup freshness** — age of the newest file in the backup directory
+  against the expected daily cadence (§11b).
+
+Add `HP_OPS_ALERT_WEBHOOK_URL=...` to the cron line to get alerted on any
+failure. This is a **separate webhook from `HP_ALERT_WEBHOOK_URL`**
+(the honeypot's own attacker-event channel, `app/alert_dispatcher.py`) —
+on purpose: this script never reads honeypot event/actor data, and
+mixing the two channels would centralize attacker telemetry into (or
+dilute infra alerts with) a channel meant for the other thing entirely.
+
+**Monitors don't expose anything publicly**: this all runs via cron on
+the VPS itself — nothing here is a server or a new endpoint. The one new
+network surface, Traefik's `/ping` (its own healthcheck), is bound to a
+dedicated entrypoint that is never added to `ports:` at all — reached
+only from inside the `traefik` container's own network namespace, the
+same way the Docker healthcheck mechanism always works.
+
+---
+
 ## 12. systemd auto-start (optional)
 
 ```bash

@@ -61,7 +61,10 @@ services:
         condition: service_completed_successfully
     healthcheck:
       test:
-        ["CMD", "python", "scripts/check_app_ready.py"]
+        # NOC-028: also checks the HTTP server itself answers, not just
+        # the DB migration state -- uvicorn can hang/crash while the DB
+        # file on disk stays perfectly fine.
+        ["CMD", "python", "scripts/check_app_ready.py", "--http-port", "8000"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -105,6 +108,16 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+    healthcheck:
+      # NOC-028: admin had no healthcheck at all before this -- Docker
+      # (and anything watching container health, like scripts/ops_monitor.py)
+      # couldn't tell a hung/crashed admin from a healthy one.
+      test:
+        ["CMD", "python", "scripts/check_app_ready.py", "--http-port", "9001"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
     restart: unless-stopped
 
   cloudflared:
@@ -192,6 +205,14 @@ services:
       - "--entrypoints.web.address=:80"
       - "--entrypoints.websecure.address=:443"
       - "--entrypoints.webinternal.address=:8081"
+      # NOC-028: a dedicated ping entrypoint for the container healthcheck
+      # below -- never published in `ports:` at all (not even on
+      # loopback), since the HEALTHCHECK CMD runs inside this same
+      # container's own network namespace and reaches it without any
+      # port mapping. /ping is served only here, never on web/websecure.
+      - "--entrypoints.traefik.address=:8082"
+      - "--ping=true"
+      - "--ping.entrypoint=traefik"
       # NOC-014: bound how long Traefik itself will wait on a slow/stalled
       # client (slow-loris style) before giving up -- independent of, and
       # slightly more generous than, the app's own REQUEST_TIMEOUT/
@@ -214,6 +235,13 @@ services:
       - "80:80"
       - "443:443"
       - "127.0.0.1:8081:8081"
+    healthcheck:
+      test:
+        ["CMD", "traefik", "healthcheck", "--ping", "--ping.entrypoint=traefik", "--entrypoints.traefik.address=:8082"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     volumes:
       - traefik_dynamic_config:/etc/traefik/dynamic:ro
       - traefik_letsencrypt:/letsencrypt
