@@ -250,12 +250,43 @@ After logging into the admin panel, go to **Environment → License** and upload
 
 ---
 
-## 10. Update
+## 10. Update (NOC-029: staged, with automatic rollback)
 
 ```bash
 cd /opt/hp-app
 git pull
-docker build -t ghcr.io/0x-unkwn0wn/noctisapi-pro:latest .
+docker build -t ghcr.io/0x-unkwn0wn/noctisapi-pro:<new-version> .
+# edit .env.prod: APP_VERSION=<new-version> (MANAGED_APP_VERSION for the managed variant)
+make upgrade              # self-hosted
+make managed-upgrade      # managed variant
+```
+
+`scripts/upgrade.py` (what the targets above run) does, in order: take a
+pre-upgrade backup (the same operations as §11b's `backup_sqlite.sh`,
+run directly via `docker run` rather than by shelling out to it), inspect
+the new image's pending Alembic migrations and abort before touching
+anything if one is marked `irreversible = True` (see
+`migrations/README` — re-run with `--force` only after reviewing it),
+pull, run migrations, switch `app`/`admin` to the new image, and wait
+for them to report healthy (reusing §11d's `ops_monitor.check_containers`).
+
+If a migration fails or the post-upgrade health check times out
+(`--health-timeout`, default 120s), it automatically rolls back: stops
+the new containers, restores the pre-upgrade backup, and redeploys the
+previous image — logged to stderr and recorded (success or
+`rolled_back`, with the reason) in
+`compose/secrets/deployment-manifest.json`'s `upgrade_history`, alongside
+the currently-deployed image and its resolved digest.
+
+A rollback restores data but not uptime: expect the same downtime as the
+upgrade itself while it reverts. If the rollback itself fails (printed as
+`CRITICAL`), the stack is left down — intervene manually using §11b/§11c's
+backup/restore tooling directly.
+
+The old manual path (no backup, no rollback, no migration check) still
+works if you need it:
+
+```bash
 docker compose --env-file .env.prod -f compose/docker-compose.prod.yml up -d --force-recreate
 ```
 ---

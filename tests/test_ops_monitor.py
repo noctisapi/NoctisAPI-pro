@@ -84,6 +84,21 @@ class TestCheckContainers(unittest.TestCase):
         self.assertEqual(len(checks), 1)
         self.assertFalse(checks[0].ok)
 
+    @patch("subprocess.run")
+    def test_accepts_a_list_of_compose_files_for_the_managed_override(self, mock_run):
+        """NOC-029: scripts/upgrade.py --managed needs two -f flags merged,
+        same as `make managed-*`'s COMPOSE_MANAGED -- a single Path must
+        keep working unchanged for every existing caller."""
+        mock_run.return_value = _compose_ps_result(
+            [{"Service": "app", "State": "running", "Health": "healthy", "ExitCode": 0}]
+        )
+        checks = ops_monitor.check_containers([Path("prod.yml"), Path("managed.yml")], Path(".env"))
+        self.assertTrue(checks[0].ok)
+        called_cmd = mock_run.call_args[0][0]
+        self.assertEqual(called_cmd.count("-f"), 2)
+        self.assertIn("prod.yml", called_cmd)
+        self.assertIn("managed.yml", called_cmd)
+
 
 class TestCheckDisk(unittest.TestCase):
     @patch("shutil.disk_usage")
