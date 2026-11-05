@@ -81,6 +81,26 @@ _RECORD_ATTRS: frozenset[str] = frozenset(
     )
 )
 
+# ---------------------------------------------------------------------------
+# NOC-025 safety net: no code path today passes HP_SEED, a tunnel token, or
+# similar through extra=, but formatters redact by key name anyway, in case
+# a future change ever does -- "no hay secretos... en logs" as an enforced
+# guarantee, not just a convention every caller has to remember on their own.
+# A false-positive match (redacting a benign field that happens to contain
+# one of these words) is an acceptable cost; a missed secret is not.
+# ---------------------------------------------------------------------------
+
+_SENSITIVE_KEY_SUBSTRINGS = ("seed", "token", "secret", "password", "private_key", "api_key")
+
+_REDACTED = "***REDACTED***"
+
+
+def _redact_if_sensitive(key: str, value):
+    lowered = key.lower()
+    if any(s in lowered for s in _SENSITIVE_KEY_SUBSTRINGS):
+        return _REDACTED
+    return value
+
 
 # ---------------------------------------------------------------------------
 # JSON formatter
@@ -127,7 +147,7 @@ class JsonFormatter(logging.Formatter):
                 continue
             if key in _reserved:
                 continue  # never overwrite timestamp, level, logger, message
-            doc[key] = value
+            doc[key] = _redact_if_sensitive(key, value)
 
         # request_id: honour explicit extra= value first, ContextVar as fallback
         if "request_id" not in doc:
@@ -167,7 +187,7 @@ class TextFormatter(logging.Formatter):
                 continue
             if key in ("message", "asctime"):
                 continue
-            extras.append(f"{key}={value!r}")
+            extras.append(f"{key}={_redact_if_sensitive(key, value)!r}")
 
         rid = _REQUEST_ID_CTX.get("")
         if rid:

@@ -278,7 +278,7 @@ sudo systemctl enable --now hp-app.service
 
 ---
 
-## 13. Managed variant (NOC-023)
+## 13. Managed variant (NOC-023/NOC-025)
 
 This whole document describes the **self-hosted** path — a customer
 clones the repo and runs `docker-compose.prod.yml` themselves. That path
@@ -302,14 +302,23 @@ Traefik/Cloudflare config, the admin console itself — comes from
 `docker-compose.prod.yml` unchanged; the override doesn't duplicate it.
 
 ```bash
-mkdir -p compose/secrets
-python3 -c "import secrets; print(secrets.token_hex(32))" > compose/secrets/hp_seed.txt
+python scripts/init_deployment.py --public-host <HP_PUBLIC_HOST> --admin-host <HP_ADMIN_HOST>
+# generates compose/secrets/hp_seed.txt (once, never overwritten on a
+# later run) and compose/secrets/deployment-manifest.json -- see
+# compose/secrets/README.md for what's secret and what isn't, and the
+# rotation procedure for each.
+
 # .env.prod as in step 3, plus:
 echo "MANAGED_APP_VERSION=1.4.2" >> .env.prod   # an exact tag, never "latest"
 
 make managed-pull
 make managed-up
 ```
+
+Re-run `scripts/init_deployment.py` after every upgrade/redeploy — it's
+idempotent (step 4 of `test_init_deployment.py` covers this directly):
+the seed and `deployment_id` are left untouched, only the manifest's host
+fields and `updated_at` refresh.
 
 (`make managed-*` targets layer both compose files with one `--env-file
 .env.prod`, same as `make prod-*` does for the self-hosted path.)
