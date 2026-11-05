@@ -263,8 +263,62 @@ docker compose --env-file .env.prod -f compose/docker-compose.prod.yml up -d --f
 ## 11. Data retention (optional)
 
 ```bash
-sudo cp ops/cron/noctisapi-core-retention /etc/cron.d/hp-app-retention
+sudo cp ops/cron/noctisapi-retention /etc/cron.d/hp-app-retention
 ```
+
+Prunes old *rows* inside the live database (events, sessions, campaign
+jobs — `scripts/prune_retention.py`). For pruning old *backup files*, see
+step 11b below — a different retention policy for a different thing.
+
+---
+
+## 11b. Encrypted backups (NOC-026)
+
+```bash
+sudo cp ops/cron/noctisapi-backup /etc/cron.d/hp-app-backup
+```
+
+Daily, at 02:15 UTC: a consistent SQLite snapshot (`sqlite3 .backup` — the
+WAL-safe online backup API, doesn't block or interfere with concurrent
+writes from `app`/`admin`) plus an archive of `/var/lib/myapp` (license +
+instance-id state), both encrypted with `HP_BACKUP_ENCRYPTION_KEY`
+(generated once by `scripts/init_deployment.py`, same file-backed-secret
+pattern as `HP_SEED` — see `compose/secrets/README.md`), written to
+`/var/backups/noctisapi` — a **separate** path from the Docker volumes
+backed up (`hp_prod_data`/`hp_prod_myapp`), so a problem with one doesn't
+take out the other. Old backups are pruned both by age (`KEEP_DAYS`,
+default 14) and by a hard count cap (`MAX_BACKUPS`, default 60) per
+artifact type — the count cap catches a cron frequency change or a stuck
+retention setting before the backup directory grows unbounded.
+
+For real off-site separation (recommended — this only separates
+backups from live data *on the same VPS*), sync `/var/backups/noctisapi`
+to storage you control with your own `rsync`/`rclone`/cloud-CLI setup; the
+files are already encrypted, so a remote storage provider never sees
+plaintext.
+
+**Access control**: the backup directory is `chmod 700`, each backup file
+`chmod 600` — root-only by default, same as the rest of `/opt/hp-app`.
+
+**Alarms**: `backup_sqlite.sh` runs under `set -euo pipefail` and exits
+non-zero on any failure (SQLite integrity check failed, encryption
+failed, etc.) — cron already emails root on a non-empty stderr by
+default on most distros; add your own `MAILTO=` to the cron file, or
+check `/var/log/noctisapi-backup.log` / wire the cron job's exit code
+into whatever ops monitoring you already run, the same pattern
+`scripts/verify_domain.py` (NOC-024) uses.
+
+**Restoring**:
+
+```bash
+docker compose --env-file .env.prod -f compose/docker-compose.prod.yml down
+./restore_backup.sh db    /var/backups/noctisapi/<timestamp>-honeypot.db.enc
+./restore_backup.sh myapp /var/backups/noctisapi/<timestamp>-myapp.tar.enc
+docker compose --env-file .env.prod -f compose/docker-compose.prod.yml up -d
+```
+
+Asks for a typed `yes` confirmation before overwriting the live volume —
+there's no undo once you confirm.
 
 ---
 
