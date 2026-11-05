@@ -156,7 +156,12 @@ class TestAuthGate:
     def test_valid_session_cookie_passes_the_gate(self, monkeypatch, tmp_path):
         client, conn, startup, shutdown = _client(monkeypatch, tmp_path)
         try:
-            user_id = panel_auth.create_user(conn, "alice", "a-long-enough-password")
+            # role="owner": this test is about the auth gate specifically,
+            # not RBAC (NOC-019) -- an unclassified path like the one below
+            # fails closed to OWNER by design, so grant it to isolate what's
+            # under test. See test_panel_rbac.py for the fail-closed default
+            # itself and test_panel_rbac_middleware.py for per-role checks.
+            user_id = panel_auth.create_user(conn, "alice", "a-long-enough-password", role="owner")
             token = panel_auth.create_session(conn, user_id)
             client.cookies.set(panel_mvp._PANEL_SESSION_COOKIE, token)
             resp = client.get("/__nonexistent_probe__", follow_redirects=False)
@@ -254,6 +259,53 @@ class TestResetPassword:
                 follow_redirects=False,
             )
             assert "error=1" in resp.headers["location"]
+        finally:
+            _restore(startup, shutdown, conn)
+
+
+class TestRoleFlowsFromLoginThroughRBAC:
+    """End-to-end: a real login establishes a session, _PanelAuthMiddleware
+    attaches that user's role, and _PanelRBACMiddleware (NOC-019) enforces
+    it -- proving the two middlewares actually hand off to each other, not
+    just that each works in isolation (see test_panel_rbac_middleware.py
+    for the isolated middleware tests and test_panel_rbac.py for the matrix
+    itself)."""
+
+    def test_viewer_session_is_denied_an_admin_tier_route(self, monkeypatch, tmp_path):
+        client, conn, startup, shutdown = _client(monkeypatch, tmp_path)
+        try:
+            panel_auth.create_user(conn, "vera", "a-long-enough-password", role="viewer")
+            client.post(
+                "/login", data={"username": "vera", "password": "a-long-enough-password"}, follow_redirects=False
+            )
+            resp = client.post("/dashboard/environment/settings", json={"key": "x", "value": "y"})
+            assert resp.status_code == 403
+        finally:
+            _restore(startup, shutdown, conn)
+
+    def test_viewer_session_reaches_a_viewer_tier_route(self, monkeypatch, tmp_path):
+        client, conn, startup, shutdown = _client(monkeypatch, tmp_path)
+        try:
+            panel_auth.create_user(conn, "vera", "a-long-enough-password", role="viewer")
+            client.post(
+                "/login", data={"username": "vera", "password": "a-long-enough-password"}, follow_redirects=False
+            )
+            resp = client.get("/dashboard/api-modular/resolve", follow_redirects=False)
+            # Not the 403 RBAC would return, nor the 302 the auth gate
+            # would return if unauthenticated -- it reached the handler.
+            assert resp.status_code not in (302, 403)
+        finally:
+            _restore(startup, shutdown, conn)
+
+    def test_owner_session_reaches_the_same_admin_tier_route(self, monkeypatch, tmp_path):
+        client, conn, startup, shutdown = _client(monkeypatch, tmp_path)
+        try:
+            panel_auth.create_user(conn, "olivia", "a-long-enough-password", role="owner")
+            client.post(
+                "/login", data={"username": "olivia", "password": "a-long-enough-password"}, follow_redirects=False
+            )
+            resp = client.post("/dashboard/environment/settings", json={"key": "x", "value": "y"})
+            assert resp.status_code != 403
         finally:
             _restore(startup, shutdown, conn)
 

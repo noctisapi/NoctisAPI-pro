@@ -194,10 +194,15 @@ One-time setup, per installation:
    docker compose --env-file .env.prod -f compose/docker-compose.prod.yml \
      exec admin python scripts/panel_user.py create-user --username ops
    ```
-   Use `scripts/panel_user.py reset-password --username <name>` to issue a
-   one-time recovery link for an existing account, and `list-users` /
-   `deactivate-user` / `revoke-sessions` to manage access. There is no
-   self-service invite UI yet — all of this is operator-run.
+   This first account defaults to role `owner` (NOC-019: owner/admin/analyst/viewer,
+   each a superset of the ones below it — see `app/panel_rbac.py` for the
+   full permission matrix). Pass `--role admin|analyst|viewer` for
+   additional accounts, or change one later with `set-role --username
+   <name> --role <role>`. Use `scripts/panel_user.py reset-password
+   --username <name>` to issue a one-time recovery link for an existing
+   account, and `list-users` / `deactivate-user` / `revoke-sessions` to
+   manage access. There is no self-service invite UI yet — all of this is
+   operator-run.
 
 Then just visit `https://<HP_ADMIN_HOST>` from anywhere — no SSH, no VPN, no
 published port.
@@ -254,6 +259,11 @@ dashboard not pointing at `admin:9001`.
 **Admin panel redirects to `/login` and no credentials work (NOC-018):**
 There is no shared-token login anymore. Create (or recover) an account with
 `scripts/panel_user.py` — see step 8.6 above.
+
+**Admin panel logs in fine but specific actions return `403 Forbidden` (NOC-019):**
+That account's role doesn't meet the minimum required for that action —
+check `scripts/panel_user.py list-users` and the matrix in `app/panel_rbac.py`.
+Promote with `scripts/panel_user.py set-role --username <name> --role <role>`.
 
 **Admin panel returns `401 Unauthorized` on every request (NOC-017):**
 `CF_ACCESS_TEAM_DOMAIN`/`CF_ACCESS_AUD` are set but don't match the Access

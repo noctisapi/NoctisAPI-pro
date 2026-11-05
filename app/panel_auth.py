@@ -29,6 +29,8 @@ import time
 from datetime import datetime, timezone
 from typing import Optional
 
+from app.panel_rbac import DEFAULT_ROLE, VALID_ROLES
+
 PANEL_SESSION_TTL_SECONDS = 8 * 3600  # 8 hours
 PASSWORD_RESET_TTL_SECONDS = 3600  # 1 hour
 _TOKEN_RANDOM_BYTES = 32
@@ -44,6 +46,7 @@ _DDL = [
         username      TEXT    NOT NULL UNIQUE,
         password_hash TEXT    NOT NULL,
         is_active     INTEGER NOT NULL DEFAULT 1,
+        role          TEXT    NOT NULL DEFAULT 'viewer',
         created_at    TEXT    NOT NULL,
         last_login_at TEXT
     )
@@ -80,7 +83,18 @@ def ensure_tables(conn: sqlite3.Connection) -> None:
     """Idempotently create panel identity/session tables. Safe to call repeatedly."""
     for stmt in _DDL:
         conn.execute(stmt)
+    _ensure_role_column(conn)
     conn.commit()
+
+
+def _ensure_role_column(conn: sqlite3.Connection) -> None:
+    """Forward-compat guard for panel_users rows created before NOC-019."""
+    try:
+        existing = {row[1] for row in conn.execute("PRAGMA table_info(panel_users)").fetchall()}
+    except sqlite3.Error:
+        return
+    if "role" not in existing:
+        conn.execute(f"ALTER TABLE panel_users ADD COLUMN role TEXT NOT NULL DEFAULT '{DEFAULT_ROLE}'")
 
 
 # ---------------------------------------------------------------------------
@@ -182,21 +196,39 @@ class UsernameTakenError(Exception):
     pass
 
 
-def create_user(conn: sqlite3.Connection, username: str, password: str, *, is_active: bool = True) -> int:
+def create_user(
+    conn: sqlite3.Connection,
+    username: str,
+    password: str,
+    *,
+    is_active: bool = True,
+    role: str = DEFAULT_ROLE,
+) -> int:
     username = username.strip()
     if not username:
         raise ValueError("username must not be empty")
     if not password:
         raise ValueError("password must not be empty")
+    role = role.strip().lower()
+    if role not in VALID_ROLES:
+        raise ValueError(f"unknown role: {role!r}")
     try:
         cur = conn.execute(
-            "INSERT INTO panel_users(username, password_hash, is_active, created_at) VALUES (?, ?, ?, ?)",
-            (username, hash_password(password), 1 if is_active else 0, _utc_now()),
+            "INSERT INTO panel_users(username, password_hash, is_active, role, created_at) VALUES (?, ?, ?, ?, ?)",
+            (username, hash_password(password), 1 if is_active else 0, role, _utc_now()),
         )
     except sqlite3.IntegrityError as exc:
         raise UsernameTakenError(username) from exc
     conn.commit()
     return int(cur.lastrowid)
+
+
+def set_user_role(conn: sqlite3.Connection, user_id: int, role: str) -> None:
+    role = role.strip().lower()
+    if role not in VALID_ROLES:
+        raise ValueError(f"unknown role: {role!r}")
+    conn.execute("UPDATE panel_users SET role = ? WHERE id = ?", (role, user_id))
+    conn.commit()
 
 
 def get_user_by_username(conn: sqlite3.Connection, username: str) -> Optional[sqlite3.Row]:
@@ -276,7 +308,7 @@ def verify_session(conn: sqlite3.Connection, raw_token: str) -> Optional[sqlite3
     row = conn.execute(
         """
         SELECT s.id AS session_id, s.expires_at, s.revoked_at,
-               u.id AS id, u.username AS username, u.is_active AS is_active
+               u.id AS id, u.username AS username, u.is_active AS is_active, u.role AS role
         FROM panel_sessions s
         JOIN panel_users u ON u.id = s.user_id
         WHERE s.token_hash = ?

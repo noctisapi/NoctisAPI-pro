@@ -6,9 +6,13 @@ There is no self-service sign-up or invite UI yet (that's NOC-020) and no
 SMTP integration for self-service password recovery -- an operator with
 container/host access runs this to create accounts and issue reset links.
 
+Roles (NOC-019) are owner/admin/analyst/viewer, each a superset of the ones
+below it -- see app/panel_rbac.py for exactly what each one can do.
+
 Run inside a container (recommended):
   docker compose exec admin python /app/scripts/panel_user.py create-user --username ops
   docker compose exec admin python /app/scripts/panel_user.py list-users
+  docker compose exec admin python /app/scripts/panel_user.py set-role --username ops --role admin
   docker compose exec admin python /app/scripts/panel_user.py reset-password --username ops
   docker compose exec admin python /app/scripts/panel_user.py deactivate-user --username ops
   docker compose exec admin python /app/scripts/panel_user.py revoke-sessions --username ops
@@ -27,6 +31,7 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 from app import panel_auth  # noqa: E402
+from app import panel_rbac  # noqa: E402
 
 
 def _db(db_path: str) -> sqlite3.Connection:
@@ -54,13 +59,34 @@ def cmd_create_user(args: argparse.Namespace) -> int:
     conn = _db(args.db)
     try:
         try:
-            panel_auth.create_user(conn, args.username, password)
+            panel_auth.create_user(conn, args.username, password, role=args.role)
         except panel_auth.UsernameTakenError:
             print(f"Username '{args.username}' already exists.", file=sys.stderr)
             return 1
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
     finally:
         conn.close()
-    print(f"User '{args.username}' created.")
+    print(f"User '{args.username}' created with role '{args.role}'.")
+    return 0
+
+
+def cmd_set_role(args: argparse.Namespace) -> int:
+    conn = _db(args.db)
+    try:
+        user = panel_auth.get_user_by_username(conn, args.username)
+        if not user:
+            print(f"No such user: {args.username}", file=sys.stderr)
+            return 1
+        try:
+            panel_auth.set_user_role(conn, user["id"], args.role)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+    finally:
+        conn.close()
+    print(f"User '{args.username}' is now role '{args.role}'.")
     return 0
 
 
@@ -76,7 +102,7 @@ def cmd_list_users(args: argparse.Namespace) -> int:
     for u in users:
         status = "active" if u["is_active"] else "deactivated"
         last_login = u["last_login_at"] or "never"
-        print(f"{u['id']:>4}  {u['username']:<24} {status:<12} last_login={last_login}")
+        print(f"{u['id']:>4}  {u['username']:<24} {u['role']:<8} {status:<12} last_login={last_login}")
     return 0
 
 
@@ -146,10 +172,23 @@ def main() -> int:
     p_create = sub.add_parser("create-user", help="Create a new panel user account")
     p_create.add_argument("--username", required=True)
     p_create.add_argument("--password", default="", help="Omit to be prompted securely")
+    p_create.add_argument(
+        "--role",
+        default="owner",
+        choices=panel_rbac.VALID_ROLES,
+        help="Defaults to 'owner' -- this CLI is operator-only, so the first account it "
+        "creates is assumed to be the instance owner. Pass --role for additional "
+        "non-owner accounts (NOC-019: owner/admin/analyst/viewer).",
+    )
     p_create.set_defaults(func=cmd_create_user)
 
     p_list = sub.add_parser("list-users", help="List panel user accounts")
     p_list.set_defaults(func=cmd_list_users)
+
+    p_role = sub.add_parser("set-role", help="Change an existing user's role")
+    p_role.add_argument("--username", required=True)
+    p_role.add_argument("--role", required=True, choices=panel_rbac.VALID_ROLES)
+    p_role.set_defaults(func=cmd_set_role)
 
     p_deact = sub.add_parser("deactivate-user", help="Deactivate a user and revoke all their sessions")
     p_deact.add_argument("--username", required=True)

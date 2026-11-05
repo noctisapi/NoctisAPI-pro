@@ -63,6 +63,7 @@ from honey_licensing.offline_license import LicenseVerifier, load_public_key_pem
 from app.server_config import RequestTimeoutMiddleware, get_request_timeout
 from app import cloudflare_access
 from app import panel_auth
+from app import panel_rbac
 
 APP_NAME = "noctisapi-panel"
 DB_PATH = os.getenv("HP_DB_PATH", "/data/honeypot.db")
@@ -122,7 +123,10 @@ def _make_session_token() -> str:
         panel_auth.ensure_tables(conn)
         user = panel_auth.get_user_by_username(conn, "_test_system_user_")
         if user is None:
-            panel_auth.create_user(conn, "_test_system_user_", _secrets.token_hex(16))
+            # role="owner" so pre-existing tests that only need "a valid
+            # authenticated cookie" are never incidentally blocked by
+            # NOC-019 RBAC on whatever endpoint they happen to exercise.
+            panel_auth.create_user(conn, "_test_system_user_", _secrets.token_hex(16), role="owner")
             user = panel_auth.get_user_by_username(conn, "_test_system_user_")
         return panel_auth.create_session(conn, user["id"])
     finally:
@@ -207,6 +211,7 @@ class _PanelAuthMiddleware:
             state["panel_user_id"] = user_row["id"]
             state["panel_username"] = user_row["username"]
             state["panel_session_token"] = session_token
+            state["panel_role"] = user_row["role"]
             scope["state"] = state
             await self._app(scope, receive, send)
             return
@@ -221,8 +226,47 @@ class _PanelAuthMiddleware:
         await send({"type": "http.response.body", "body": b"", "more_body": False})
 
 
+class _PanelRBACMiddleware:
+    """ASGI middleware that enforces the NOC-019 permission matrix
+    (app.panel_rbac.ROUTE_RULES) on every panel request. Must run after
+    _PanelAuthMiddleware has attached scope["state"]["panel_role"] -- see
+    the add_middleware() ordering below, where this is added before (so it
+    ends up *inner* to / running *after*) _PanelAuthMiddleware. A path with
+    no entry in the matrix fails closed (denied to everyone but OWNER)."""
+
+    def __init__(self, app_inner):
+        self._app = app_inner
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self._app(scope, receive, send)
+            return
+
+        path = scope.get("path", "")
+        if path.startswith("/static/") or path in _PANEL_AUTH_BYPASS:
+            await self._app(scope, receive, send)
+            return
+
+        state = scope.get("state") or {}
+        user_role = state.get("panel_role")
+        required = panel_rbac.required_role_for(scope.get("method", "GET"), path)
+        if panel_rbac.has_permission(user_role, required):
+            await self._app(scope, receive, send)
+            return
+
+        resp_headers = [(b"content-type", b"application/json")]
+        await send({"type": "http.response.start", "status": 403, "headers": resp_headers})
+        await send(
+            {"type": "http.response.body", "body": b'{"detail":"insufficient role"}', "more_body": False}
+        )
+
+
 app = FastAPI(title=APP_NAME)
 app.add_middleware(RequestTimeoutMiddleware, timeout=get_request_timeout())
+# _PanelRBACMiddleware is added before (so it ends up inner to / runs
+# after) _PanelAuthMiddleware -- it depends on the role _PanelAuthMiddleware
+# attaches to scope["state"] when it resolves the session.
+app.add_middleware(_PanelRBACMiddleware)
 app.add_middleware(_PanelAuthMiddleware)
 # Added last so it runs first (outermost) -- Access verification happens
 # before the panel even considers a session cookie.
