@@ -1,8 +1,8 @@
 """Cloudflare Access JWT verification for the admin console (NOC-017).
 
-Defense-in-depth on top of the existing HP_PANEL_TOKEN session gate
-(app.panel_mvp._PanelAuthMiddleware), not a replacement for it -- individual
-user identity and backend RBAC are NOC-018/NOC-019's job. This module's only
+Defense-in-depth on top of the per-user session gate
+(app.panel_mvp._PanelAuthMiddleware, NOC-018), not a replacement for it --
+backend RBAC is NOC-019's job. This module's only
 claim is: when Cloudflare Access is configured for this installation, every
 request reaching the panel carries a cryptographically valid Access JWT,
 verified against Cloudflare's own JWKS for that team -- never a bare
