@@ -51,6 +51,18 @@ jobs:
           touch .env.prod
           docker compose -f compose/docker-compose.prod.yml config --quiet
 
+      - name: Validate managed compose (NOC-023)
+        env:
+          HP_PUBLIC_HOST: ci-placeholder.invalid
+          HP_PANEL_TOKEN: ci-placeholder-token
+          ACME_EMAIL: ci@example.invalid
+          APP_VERSION: ci-placeholder
+          CLOUDFLARE_TUNNEL_TOKEN: ci-placeholder-tunnel-token
+          MANAGED_APP_VERSION: ci-placeholder
+        run: |
+          touch .env.prod
+          docker compose -f compose/docker-compose.prod.yml -f compose/docker-compose.managed.yml config --quiet
+
       - name: Validate staging compose
         run: |
           cp .env.staging.example .env.staging

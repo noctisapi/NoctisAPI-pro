@@ -38,6 +38,10 @@ compose/nginx/certs/
 *.key
 *.crt
 
+# NOC-023: Managed deployment Docker secrets (real file content, never committed)
+compose/secrets/*
+!compose/secrets/README.md
+
 # OS / editor
 .DS_Store
 Thumbs.db
