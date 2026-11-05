@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .audit-status-ok   { color: #5ab87e; font-weight: 600; }
+  .audit-status-fail { color: #e08080; font-weight: 700; }
+  .audit-filter-bar { display: flex; align-items: center; gap: 10px; margin: 16px 0; font-size: 0.82rem; }
+</style>
+
+<div style="padding-top:24px;">
+  <h1 style="margin:0; font-size:1.4rem;">Audit Log</h1>
+  <p class="muted" style="margin:4px 0 0 0; font-size:0.82rem;">
+    Every configuration/access change and authorization failure (NOC-021). Method, path and
+    result only -- never a token, password, or request body.
+  </p>
+
+  <div class="audit-filter-bar">
+    <a class="btn btn-small {{ 'btn-primary' if not failures_only else '' }}" href="/dashboard/audit-log">All</a>
+    <a class="btn btn-small {{ 'btn-primary' if failures_only else '' }}" href="/dashboard/audit-log?failures_only=true">Failures only</a>
+  </div>
+
+  <div class="card">
+    <div class="card-body" style="padding:0;">
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th style="width:140px;">Time (UTC)</th>
+              <th>Actor</th>
+              <th style="width:70px;">Method</th>
+              <th>Path</th>
+              <th style="width:70px;">Result</th>
+              <th style="width:160px;">Request ID</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for e in entries %}
+            <tr>
+              <td class="muted" style="font-size:0.8rem; white-space:nowrap;">{{ e.created_at }}</td>
+              <td>{{ e.actor_username or "—" }} <span class="muted">{{ "(" + e.actor_role + ")" if e.actor_role else "" }}</span></td>
+              <td class="mono">{{ e.method }}</td>
+              <td class="mono" style="font-size:0.78rem;">{{ e.path }}</td>
+              <td class="{{ 'audit-status-fail' if e.status_code and e.status_code >= 400 else 'audit-status-ok' }}">
+                {{ e.status_code or "—" }}
+              </td>
+              <td class="muted" style="font-size:0.72rem;">{{ e.request_id }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="6" class="muted">No audit entries yet.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

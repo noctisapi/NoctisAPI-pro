@@ -179,6 +179,10 @@ ROUTE_RULES: List[Tuple[str, str, Role]] = [
     # "issues or revokes access for another principal" tier as license
     # upload and log-export consumer tokens above -- OWNER only.
     ("GET", "/dashboard/members", _AD),
+    # Administrative audit log (NOC-021): coarse-grained, never contains a
+    # secret by construction (method+path+status only) -- same visibility
+    # tier as Members.
+    ("GET", "/dashboard/audit-log", _AD),
     ("POST", "/dashboard/members/invite", _O),
     ("POST", "/dashboard/members/{user_id}/role", _O),
     ("POST", "/dashboard/members/{user_id}/deactivate", _O),

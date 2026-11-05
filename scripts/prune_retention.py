@@ -11,6 +11,10 @@ TABLES = {
     "honeypot_checks": ("ts", "HP_RETENTION_CHECKS_DAYS", 14),
     "tokens": ("created_ts", "HP_RETENTION_TOKENS_DAYS", 90),
     "campaign_jobs": ("created_at", "HP_RETENTION_JOBS_DAYS", 30),
+    # NOC-021: kept longer than operational data by default -- security
+    # audit trails are typically retained for investigation windows well
+    # past a normal operational retention period.
+    "panel_audit_log": ("created_at", "HP_RETENTION_PANEL_AUDIT_DAYS", 180),
 }
 
 def table_exists(conn: sqlite3.Connection, name: str) -> bool:
