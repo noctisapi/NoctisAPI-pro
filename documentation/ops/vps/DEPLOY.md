@@ -90,6 +90,40 @@ nano .env.prod
 
 ---
 
+### 3b. DNS for `HP_PUBLIC_HOST` (NOC-024)
+
+Any domain or client-authorized subdomain works — `HP_PUBLIC_HOST` isn't
+restricted to a particular zone. Point it at this VPS **before** the first
+deploy, so Traefik's ACME HTTP-01 challenge (`compose/docker-compose.prod.yml`)
+succeeds on first boot instead of retrying in its logs:
+
+- **A record** (IPv4) and/or **AAAA record** (IPv6) at your DNS provider,
+  resolving `HP_PUBLIC_HOST` directly to this VPS's public IP.
+- If your registrar only offers a CNAME (delegating to another hostname
+  you control), that hostname must itself resolve to this VPS's IP —
+  the HTTP-01 challenge connects to whatever address the name ultimately
+  resolves to, on port 80.
+- **No CDN or reverse proxy in front of `HP_PUBLIC_HOST`** (e.g. Cloudflare's
+  orange-cloud proxying) — the challenge must reach Traefik directly.
+  `HP_ADMIN_HOST` is the opposite case: it's *supposed* to go through
+  Cloudflare (the Tunnel, step 8), which is why it isn't in this section.
+
+Verify DNS and the issued certificate after deploying:
+
+```bash
+python scripts/verify_domain.py --host <HP_PUBLIC_HOST> --expected-ip <this VPS's public IP>
+```
+
+Exits non-zero with a specific reason (doesn't resolve, resolves
+somewhere else, certificate invalid or expiring soon) rather than a raw
+error — safe to wire into your own deploy pipeline as a post-deploy gate.
+Re-run it any time you suspect DNS or renewal drifted; `--skip-tls` checks
+DNS alone, `--no-ip-check` is for domains that aren't expected to resolve
+straight to this VPS (e.g. spot-checking `HP_ADMIN_HOST`'s own resolution
+through Cloudflare).
+
+---
+
 ## 4. Prepare data directories
 
 ```bash
