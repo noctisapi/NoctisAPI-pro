@@ -94,6 +94,7 @@ services:
       - HP_PUBLIC_HOST=${HP_PUBLIC_HOST}
       - HP_PUBLIC_RATELIMIT_AVG=${HP_PUBLIC_RATELIMIT_AVG:-120}
       - HP_PUBLIC_RATELIMIT_BURST=${HP_PUBLIC_RATELIMIT_BURST:-240}
+      - HP_PUBLIC_MAX_BODY_BYTES=${HP_PUBLIC_MAX_BODY_BYTES:-26214400}
     command: ["sh", "/render/render-dynamic-config.sh"]
     restart: "no"
 
@@ -107,6 +108,20 @@ services:
       - "--entrypoints.web.address=:80"
       - "--entrypoints.websecure.address=:443"
       - "--entrypoints.webinternal.address=:8081"
+      # NOC-014: bound how long Traefik itself will wait on a slow/stalled
+      # client (slow-loris style) before giving up -- independent of, and
+      # slightly more generous than, the app's own REQUEST_TIMEOUT/
+      # KEEPALIVE_TIMEOUT/IDLE_TIMEOUT (server_config.py), which only start
+      # once Traefik has already forwarded a request.
+      - "--entrypoints.web.transport.respondingTimeouts.readTimeout=30s"
+      - "--entrypoints.web.transport.respondingTimeouts.writeTimeout=60s"
+      - "--entrypoints.web.transport.respondingTimeouts.idleTimeout=180s"
+      - "--entrypoints.websecure.transport.respondingTimeouts.readTimeout=30s"
+      - "--entrypoints.websecure.transport.respondingTimeouts.writeTimeout=60s"
+      - "--entrypoints.websecure.transport.respondingTimeouts.idleTimeout=180s"
+      - "--entrypoints.webinternal.transport.respondingTimeouts.readTimeout=30s"
+      - "--entrypoints.webinternal.transport.respondingTimeouts.writeTimeout=60s"
+      - "--entrypoints.webinternal.transport.respondingTimeouts.idleTimeout=180s"
       - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
       - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
       - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}"
