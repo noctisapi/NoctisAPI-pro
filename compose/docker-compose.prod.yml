@@ -1,6 +1,11 @@
 services:
   migrate:
     image: ${HP_IMAGE:-ghcr.io/0x-unkwn0wn/noctisapi-pro}:${APP_VERSION}
+    # Stays root, capabilities un-dropped: it must chown fresh volumes to the
+    # 10001:0 app/admin run as (CAP_CHOWN) before writing into them itself as
+    # root (CAP_DAC_OVERRIDE), which is exactly what dropping capabilities
+    # here would break. Not a real exposure: short-lived, processes no
+    # attacker-reachable input, and runs before app/admin/traefik even start.
     user: "0:0"
     command: ["sh", "-c", "chown -R 10001:0 /data /var/lib/myapp && alembic upgrade head"]
     env_file:
@@ -10,6 +15,9 @@ services:
       - hp_prod_myapp:/var/lib/myapp
     networks:
       - net-internal
+    mem_limit: 256m
+    cpus: 1.0
+    pids_limit: 64
     restart: "no"
 
   app:
@@ -36,6 +44,9 @@ services:
       - "8000"
     networks:
       - net-edge
+    mem_limit: ${HP_APP_MEM_LIMIT:-512m}
+    cpus: 1.0
+    pids_limit: 128
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -66,7 +77,6 @@ services:
       # so admin never needs to be on the same Docker network as the public
       # decoy surface (see NOC-011 / net-edge vs net-internal below).
       - HONEYPOT_MONITOR_BASE_URL=http://traefik:8081
-      - HP_PANEL_TOKEN=${HP_PANEL_TOKEN}
     command: ["python", "main_panel.py"]
     volumes:
       - hp_prod_data:/data
@@ -78,6 +88,9 @@ services:
       - "127.0.0.1:9001:9001"
     networks:
       - net-internal
+    mem_limit: ${HP_ADMIN_MEM_LIMIT:-512m}
+    cpus: 1.0
+    pids_limit: 128
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -87,6 +100,11 @@ services:
     image: alpine:3.20
     # Only renders a file into a shared volume -- needs no network at all.
     network_mode: "none"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     volumes:
       - ./traefik/render-dynamic-config.sh:/render/render-dynamic-config.sh:ro
       - traefik_dynamic_config:/etc/traefik/dynamic
@@ -95,11 +113,32 @@ services:
       - HP_PUBLIC_RATELIMIT_AVG=${HP_PUBLIC_RATELIMIT_AVG:-120}
       - HP_PUBLIC_RATELIMIT_BURST=${HP_PUBLIC_RATELIMIT_BURST:-240}
     command: ["sh", "/render/render-dynamic-config.sh"]
+    mem_limit: 64m
+    cpus: 0.25
+    pids_limit: 16
     restart: "no"
 
   traefik:
     image: traefik:v3.7.16
     restart: unless-stopped
+    # Stays root (its image's default and needed to bind :80/:443 inside its
+    # own netns), but with every other capability dropped -- only
+    # NET_BIND_SERVICE is actually used. Going fully non-root would need
+    # remapping its entrypoints to high ports plus a chown-on-boot step for
+    # the letsencrypt volume (the migrate pattern) -- left for a future
+    # Issue if it's ever worth the added moving part.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,noexec,nosuid
+    mem_limit: 256m
+    cpus: 1.0
+    pids_limit: 128
     command:
       - "--api.dashboard=false"
       - "--providers.file.directory=/etc/traefik/dynamic"
