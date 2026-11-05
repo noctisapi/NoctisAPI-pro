@@ -65,6 +65,8 @@ from app import cloudflare_access
 from app import panel_auth
 from app import panel_rbac
 from app import panel_membership_audit
+from app import panel_audit
+from app.structured_logging import set_request_id
 
 APP_NAME = "noctisapi-panel"
 DB_PATH = os.getenv("HP_DB_PATH", "/data/honeypot.db")
@@ -262,12 +264,77 @@ class _PanelRBACMiddleware:
         )
 
 
+class _PanelAuditMiddleware:
+    """ASGI middleware recording the general administrative audit trail
+    (NOC-021, app.panel_audit): who, what (method+path only -- never a
+    body, header or query string, so a token/password can never land in a
+    row), and the real final HTTP status -- including _PanelRBACMiddleware's
+    own 403s, since this wraps *outside* RBAC and inspects what RBAC itself
+    sends. Must run after _PanelAuthMiddleware (needs scope["state"]) and
+    before _PanelRBACMiddleware in the call chain -- see add_middleware()
+    ordering below. Generates/propagates the X-Request-ID used for log
+    correlation (app.structured_logging), same convention as the public app."""
+
+    def __init__(self, app_inner):
+        self._app = app_inner
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self._app(scope, receive, send)
+            return
+
+        path = scope.get("path", "")
+        if path.startswith("/static/") or path in _PANEL_AUTH_BYPASS:
+            await self._app(scope, receive, send)
+            return
+
+        headers = {k: v for k, v in scope.get("headers", [])}
+        request_id = headers.get(b"x-request-id", b"").decode("latin-1").strip() or _secrets.token_hex(16)
+        set_request_id(request_id)
+
+        status_holder = {"code": None}
+
+        async def send_wrapper(message):
+            if message["type"] == "http.response.start":
+                status_holder["code"] = message["status"]
+                message = dict(message)
+                message["headers"] = list(message.get("headers", [])) + [
+                    (b"x-request-id", request_id.encode("latin-1"))
+                ]
+            await send(message)
+
+        try:
+            await self._app(scope, receive, send_wrapper)
+        finally:
+            method = scope.get("method", "GET")
+            if panel_audit.should_record(method, status_holder["code"]):
+                state = scope.get("state") or {}
+                conn = db()
+                try:
+                    panel_audit.ensure_tables(conn)
+                    panel_audit.record(
+                        conn,
+                        request_id=request_id,
+                        actor_username=state.get("panel_username"),
+                        actor_role=state.get("panel_role"),
+                        method=method,
+                        path=path,
+                        status_code=status_holder["code"],
+                    )
+                finally:
+                    conn.close()
+
+
 app = FastAPI(title=APP_NAME)
 app.add_middleware(RequestTimeoutMiddleware, timeout=get_request_timeout())
 # _PanelRBACMiddleware is added before (so it ends up inner to / runs
-# after) _PanelAuthMiddleware -- it depends on the role _PanelAuthMiddleware
-# attaches to scope["state"] when it resolves the session.
+# after) _PanelAuditMiddleware -- the audit log needs to see RBAC's own
+# 403s, which it can only do by wrapping outside RBAC in the call chain.
 app.add_middleware(_PanelRBACMiddleware)
+app.add_middleware(_PanelAuditMiddleware)
+# _PanelAuditMiddleware/_PanelRBACMiddleware are added before (so they end
+# up inner to / run after) _PanelAuthMiddleware -- both depend on the
+# identity _PanelAuthMiddleware attaches to scope["state"].
 app.add_middleware(_PanelAuthMiddleware)
 # Added last so it runs first (outermost) -- Access verification happens
 # before the panel even considers a session cookie.
@@ -920,6 +987,20 @@ async def members_revoke_sessions(request: Request, user_id: int):
     finally:
         conn.close()
     return RedirectResponse(url="/dashboard/members", status_code=303)
+
+
+@app.get("/dashboard/audit-log", include_in_schema=False, response_class=HTMLResponse)
+async def audit_log_page(request: Request, failures_only: bool = False):
+    conn = db()
+    try:
+        panel_audit.ensure_tables(conn)
+        entries = panel_audit.list_recent(conn, limit=200, failures_only=failures_only)
+    finally:
+        conn.close()
+    return templates.TemplateResponse(
+        "audit_log.html",
+        {"request": request, "entries": entries, "failures_only": failures_only},
+    )
 
 
 @app.get("/health", tags=["Health"], response_class=PlainTextResponse)
