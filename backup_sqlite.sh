@@ -39,8 +39,18 @@ echo "[backup] creating consistent SQLite snapshot ${DB_BACKUP}" >&2
 # `sqlite3 .backup` is WAL-safe (SQLite's online backup API) -- it does
 # not block or interfere with concurrent writers from app/admin, unlike a
 # raw file copy of a WAL-mode database.
+#
+# NOC-027: the source mount must NOT be :ro. Opening a WAL-mode database
+# -- even purely to read it -- requires SQLite to create its own -wal/-shm
+# bookkeeping files alongside the main one if they aren't already
+# present; a read-only mount makes that fail outright ("unable to open
+# database file"), caught by actually running this drill end-to-end
+# rather than reasoning about it. This throwaway container still never
+# writes anything to the actual table data -- only SQLite's own
+# concurrency housekeeping, which is exactly what WAL mode is designed to
+# let a reader do safely alongside the app's live writes.
 docker run --rm \
-  -v "${DATA_VOLUME}:/data:ro" \
+  -v "${DATA_VOLUME}:/data" \
   -v "${BACKUP_DIR}:/backups" \
   alpine:3 \
   sh -c "set -eu; apk add --no-cache sqlite > /dev/null; sqlite3 ${APP_DB_PATH} \".backup '/backups/$(basename "${DB_BACKUP}")'\""
