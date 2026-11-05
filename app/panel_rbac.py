@@ -174,6 +174,16 @@ ROUTE_RULES: List[Tuple[str, str, Role]] = [
     ("GET", "/docs", _V),
     ("GET", "/docs/oauth2-redirect", _V),
     ("GET", "/redoc", _V),
+    # Member management (NOC-020): who else has access is visible to
+    # admins, but inviting/revoking/re-roling other accounts is the same
+    # "issues or revokes access for another principal" tier as license
+    # upload and log-export consumer tokens above -- OWNER only.
+    ("GET", "/dashboard/members", _AD),
+    ("POST", "/dashboard/members/invite", _O),
+    ("POST", "/dashboard/members/{user_id}/role", _O),
+    ("POST", "/dashboard/members/{user_id}/deactivate", _O),
+    ("POST", "/dashboard/members/{user_id}/activate", _O),
+    ("POST", "/dashboard/members/{user_id}/revoke-sessions", _O),
 ]
 
 # Routes _PanelAuthMiddleware already lets through with no session at all
