@@ -93,25 +93,34 @@
         <div class="login-brand">NoctisAPI</div>
         <h1 class="login-title">Panel access</h1>
         {% if error %}
-        <div class="login-error">Invalid token. Try again.</div>
+        <div class="login-error">Invalid username or password. Try again.</div>
         {% endif %}
         <form method="post" action="/login" autocomplete="off">
           <input type="hidden" name="next" value="{{ next }}" />
-          <label class="login-label" for="token">Access token</label>
+          <label class="login-label" for="username">Username</label>
+          <input
+            class="login-input"
+            type="text"
+            id="username"
+            name="username"
+            autocomplete="username"
+            autofocus
+            required
+          />
+          <label class="login-label" for="password">Password</label>
           <input
             class="login-input"
             type="password"
-            id="token"
-            name="token"
-            placeholder="HP_PANEL_TOKEN"
-            autofocus
+            id="password"
+            name="password"
+            autocomplete="current-password"
             required
           />
           <button class="login-submit" type="submit">Enter →</button>
         </form>
         <p class="login-note">
-          Session valid for 8 hours. Token is set via <code>HP_PANEL_TOKEN</code>.<br />
-          If unset, check container logs for the auto-generated token.
+          Session valid for 8 hours. Accounts are created and reset by an
+          operator — see <code>scripts/panel_user.py</code>.
         </p>
       </div>
     </div>

@@ -1,6 +1,5 @@
 # panel_mvp.py
 import hashlib
-import hmac as _hmac
 import io
 import logging
 import os
@@ -63,6 +62,7 @@ from honey_licensing.client import compute_client_identity
 from honey_licensing.offline_license import LicenseVerifier, load_public_key_pem
 from app.server_config import RequestTimeoutMiddleware, get_request_timeout
 from app import cloudflare_access
+from app import panel_auth
 
 APP_NAME = "noctisapi-panel"
 DB_PATH = os.getenv("HP_DB_PATH", "/data/honeypot.db")
@@ -87,42 +87,46 @@ def _public_base_url_for_display() -> str:
     return f"https://{value}"
 
 # ---------------------------------------------------------------------------
-# Panel authentication
+# Panel authentication (NOC-018: individual users, DB-backed revocable
+# sessions -- replaces the previous shared-HP_PANEL_TOKEN session gate)
 # ---------------------------------------------------------------------------
 _PANEL_SESSION_COOKIE = "hp_panel_session"
-_PANEL_SESSION_TTL = 8 * 3600  # 8 hours
-_PANEL_AUTH_BYPASS = {"/health", "/ready", "/login", "/logout"}
+_PANEL_SESSION_TTL = panel_auth.PANEL_SESSION_TTL_SECONDS
+_PANEL_AUTH_BYPASS = {"/health", "/ready", "/login", "/logout", "/reset-password"}
 
-_raw_panel_token = os.getenv("HP_PANEL_TOKEN", "").strip()
-if not _raw_panel_token:
-    _raw_panel_token = _secrets.token_hex(24)
-    _logger.warning(
-        "HP_PANEL_TOKEN is not set. Panel is using a one-time auto-generated token "
-        "for this session: %s  — Set HP_PANEL_TOKEN in your environment to persist "
-        "access across restarts.",
-        _raw_panel_token,
-    )
-_PANEL_TOKEN_BYTES = _raw_panel_token.encode()
+
+def _panel_cookie_secure() -> bool:
+    override = os.getenv("HP_PANEL_COOKIE_SECURE", "").strip().lower()
+    if override in ("1", "true", "yes"):
+        return True
+    if override in ("0", "false", "no"):
+        return False
+    return os.getenv("APP_ENV", "").strip().lower() in ("prod", "production")
+
+
+def _extract_cookie(cookie_header: str, name: str) -> Optional[str]:
+    for part in cookie_header.split(";"):
+        key, _, value = part.strip().partition("=")
+        if key.strip() == name:
+            return value.strip()
+    return None
 
 
 def _make_session_token() -> str:
-    expires = int(time.time()) + _PANEL_SESSION_TTL
-    mac = _hmac.new(_PANEL_TOKEN_BYTES, f"panel:{expires}".encode(), "sha256").hexdigest()
-    return f"{expires}:{mac}"
-
-
-def _verify_session_token(token: str) -> bool:
+    """Test-support shim: mints a real, DB-backed session for a throwaway
+    system user so existing tests that only need "a valid authenticated
+    cookie" (not identity-specific behavior) keep working unchanged against
+    the new per-user session mechanism."""
+    conn = db()
     try:
-        expires_str, provided_mac = token.split(":", 1)
-        expires = int(expires_str)
-        if time.time() > expires:
-            return False
-        expected_mac = _hmac.new(
-            _PANEL_TOKEN_BYTES, f"panel:{expires}".encode(), "sha256"
-        ).hexdigest()
-        return _hmac.compare_digest(provided_mac, expected_mac)
-    except Exception:
-        return False
+        panel_auth.ensure_tables(conn)
+        user = panel_auth.get_user_by_username(conn, "_test_system_user_")
+        if user is None:
+            panel_auth.create_user(conn, "_test_system_user_", _secrets.token_hex(16))
+            user = panel_auth.get_user_by_username(conn, "_test_system_user_")
+        return panel_auth.create_session(conn, user["id"])
+    finally:
+        conn.close()
 
 
 class _CloudflareAccessMiddleware:
@@ -132,7 +136,7 @@ class _CloudflareAccessMiddleware:
     bypass list, not even /health or /login, since the point is that
     nothing reaches the panel without edge identity once Access is turned
     on. Inert (passes everything through) when Access isn't configured, so
-    _PanelAuthMiddleware's existing HP_PANEL_TOKEN session gate is the only
+    _PanelAuthMiddleware's per-user session gate (NOC-018) is the only
     change in behavior for installations that haven't set it up."""
 
     def __init__(self, app_inner):
@@ -167,7 +171,10 @@ class _CloudflareAccessMiddleware:
 
 
 class _PanelAuthMiddleware:
-    """ASGI middleware that enforces session-cookie auth on all panel routes."""
+    """ASGI middleware that enforces individual-user session auth (NOC-018)
+    on all panel routes. No shared-token bypass: a request is let through
+    only when its cookie names a non-expired, non-revoked session row owned
+    by an active panel_users account."""
 
     def __init__(self, app_inner):
         self._app = app_inner
@@ -184,14 +191,23 @@ class _PanelAuthMiddleware:
 
         headers = {k: v for k, v in scope.get("headers", [])}
         cookie_header = headers.get(b"cookie", b"").decode("latin-1")
-        session_token = None
-        for part in cookie_header.split(";"):
-            name, _, value = part.strip().partition("=")
-            if name.strip() == _PANEL_SESSION_COOKIE:
-                session_token = value.strip()
-                break
+        session_token = _extract_cookie(cookie_header, _PANEL_SESSION_COOKIE)
 
-        if session_token and _verify_session_token(session_token):
+        user_row = None
+        if session_token:
+            conn = db()
+            try:
+                panel_auth.ensure_tables(conn)
+                user_row = panel_auth.verify_session(conn, session_token)
+            finally:
+                conn.close()
+
+        if user_row:
+            state = dict(scope.get("state") or {})
+            state["panel_user_id"] = user_row["id"]
+            state["panel_username"] = user_row["username"]
+            state["panel_session_token"] = session_token
+            scope["state"] = state
             await self._app(scope, receive, send)
             return
 
@@ -600,20 +616,40 @@ async def login_page(request: Request, next: str = "/dashboard", error: str = ""
 @app.post("/login", include_in_schema=False)
 async def login_submit(request: Request):
     form = await request.form()
-    token_input = str(form.get("token", "")).strip()
+    username = str(form.get("username", "")).strip()
+    password = str(form.get("password", ""))
     next_url = str(form.get("next", "/dashboard")).strip() or "/dashboard"
     if not next_url.startswith("/"):
         next_url = "/dashboard"
-    if _hmac.compare_digest(token_input.encode(), _PANEL_TOKEN_BYTES):
-        session = _make_session_token()
+
+    conn = db()
+    try:
+        panel_auth.ensure_tables(conn)
+        user = panel_auth.get_user_by_username(conn, username) if username else None
+        authenticated = bool(user) and bool(user["is_active"]) and panel_auth.verify_password(
+            password, user["password_hash"]
+        )
+        session_token = None
+        if authenticated:
+            client_ip = request.client.host if request.client else None
+            session_token = panel_auth.create_session(
+                conn,
+                user["id"],
+                ip_address=client_ip,
+                user_agent=request.headers.get("user-agent", ""),
+            )
+    finally:
+        conn.close()
+
+    if session_token:
         response = RedirectResponse(url=next_url, status_code=303)
         response.set_cookie(
             _PANEL_SESSION_COOKIE,
-            session,
+            session_token,
             httponly=True,
             samesite="strict",
             max_age=_PANEL_SESSION_TTL,
-            secure=False,  # panel is localhost-only; set True if exposed via TLS proxy
+            secure=_panel_cookie_secure(),
         )
         return response
     from urllib.parse import quote as _quote
@@ -623,10 +659,54 @@ async def login_submit(request: Request):
 
 
 @app.post("/logout", include_in_schema=False)
-async def logout():
+async def logout(request: Request):
+    cookie_header = request.headers.get("cookie", "")
+    session_token = _extract_cookie(cookie_header, _PANEL_SESSION_COOKIE)
+    if session_token:
+        conn = db()
+        try:
+            panel_auth.ensure_tables(conn)
+            panel_auth.revoke_session(conn, session_token)
+        finally:
+            conn.close()
     response = RedirectResponse(url="/login", status_code=303)
     response.delete_cookie(_PANEL_SESSION_COOKIE)
     return response
+
+
+@app.get("/reset-password", include_in_schema=False, response_class=HTMLResponse)
+async def reset_password_page(request: Request, token: str = "", error: str = "", done: str = ""):
+    return templates.TemplateResponse(
+        "reset_password.html", {"request": request, "token": token, "error": error, "done": done}
+    )
+
+
+@app.post("/reset-password", include_in_schema=False)
+async def reset_password_submit(request: Request):
+    form = await request.form()
+    token = str(form.get("token", "")).strip()
+    new_password = str(form.get("password", ""))
+    confirm_password = str(form.get("confirm_password", ""))
+
+    from urllib.parse import quote as _quote
+
+    if len(new_password) < 12 or new_password != confirm_password:
+        return RedirectResponse(
+            url=f"/reset-password?token={_quote(token, safe='')}&error=1", status_code=303
+        )
+
+    conn = db()
+    try:
+        panel_auth.ensure_tables(conn)
+        ok = panel_auth.consume_password_reset(conn, token, new_password)
+    finally:
+        conn.close()
+
+    if not ok:
+        return RedirectResponse(
+            url=f"/reset-password?token={_quote(token, safe='')}&error=1", status_code=303
+        )
+    return RedirectResponse(url="/reset-password?done=1", status_code=303)
 
 
 @app.get("/health", tags=["Health"], response_class=PlainTextResponse)

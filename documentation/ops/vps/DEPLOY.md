@@ -183,11 +183,21 @@ One-time setup, per installation:
    - `CF_ACCESS_TEAM_DOMAIN=myteam.cloudflareaccess.com`
    - `CF_ACCESS_AUD=<the Application's AUD tag>`
 
-   Leaving these two unset keeps today's `HP_PANEL_TOKEN`-only gate exactly
-   as it was — this layer is additive, not a replacement for it yet
-   (individual user accounts and RBAC are NOC-018/NOC-019).
+   Leaving these two unset keeps the panel's own login (see below) as the
+   only gate — this layer is additive on top of it, not a replacement
+   (backend RBAC is NOC-019).
 5. Redeploy (`docker compose ... up -d`) so `cloudflared` (and, if you set
    the Access variables, the panel itself) pick up the new configuration.
+6. Create the first operator account (there is no shared-token login
+   anymore, NOC-018) — run inside the `admin` container:
+   ```bash
+   docker compose --env-file .env.prod -f compose/docker-compose.prod.yml \
+     exec admin python scripts/panel_user.py create-user --username ops
+   ```
+   Use `scripts/panel_user.py reset-password --username <name>` to issue a
+   one-time recovery link for an existing account, and `list-users` /
+   `deactivate-user` / `revoke-sessions` to manage access. There is no
+   self-service invite UI yet — all of this is operator-run.
 
 Then just visit `https://<HP_ADMIN_HOST>` from anywhere — no SSH, no VPN, no
 published port.
@@ -240,6 +250,10 @@ docker compose --env-file .env.prod -f compose/docker-compose.prod.yml up -d
 Check `docker logs compose-cloudflared-1` — almost always a missing or
 invalid `CLOUDFLARE_TUNNEL_TOKEN`, or the Public Hostname in the Cloudflare
 dashboard not pointing at `admin:9001`.
+
+**Admin panel redirects to `/login` and no credentials work (NOC-018):**
+There is no shared-token login anymore. Create (or recover) an account with
+`scripts/panel_user.py` — see step 8.6 above.
 
 **Admin panel returns `401 Unauthorized` on every request (NOC-017):**
 `CF_ACCESS_TEAM_DOMAIN`/`CF_ACCESS_AUD` are set but don't match the Access
