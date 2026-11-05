@@ -31,6 +31,7 @@ from app import licensing
 from app import pro_license
 from app import pro_ops
 from app import api_modular
+from app import docker_secrets
 from app.stage import (
     CaseContext,
     DetectionContext,
@@ -82,7 +83,7 @@ def _env_bool(name: str, default: bool) -> bool:
 
 
 DB_PATH = os.getenv("HP_DB_PATH", "/data/honeypot.db")
-HP_SEED = os.getenv("HP_SEED", "CHANGE_ME_LONG_RANDOM_SEED")
+HP_SEED = docker_secrets.read_secret("HP_SEED", "CHANGE_ME_LONG_RANDOM_SEED")
 HP_REQUIRE_SEED = (os.getenv("HP_REQUIRE_SEED", "") or "").strip().lower() in ("1", "true", "yes")
 HONEYPOT_MONITOR_UA = os.getenv("HONEYPOT_MONITOR_UA", "HealthCheck/1.0")
 _hp_host = os.getenv("HP_PUBLIC_HOST", "").strip().rstrip("/")

@@ -21,6 +21,8 @@ import secrets
 import sqlite3
 import time
 from datetime import datetime, timezone
+
+from app import docker_secrets
 from typing import Optional
 
 _logger = logging.getLogger(__name__)
@@ -168,7 +170,7 @@ def _fernet() -> object:
             raw_key_env = ""
 
     if not raw_key_env:
-        seed = (os.getenv("HP_SEED") or "CHANGE_ME_LONG_RANDOM_SEED").encode()
+        seed = (docker_secrets.read_secret("HP_SEED") or "CHANGE_ME_LONG_RANDOM_SEED").encode()
         raw = hashlib.sha256(seed + b":log_export_secrets_v1").digest()
         key = base64.urlsafe_b64encode(raw)
 

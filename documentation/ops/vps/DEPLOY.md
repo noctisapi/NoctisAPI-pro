@@ -244,6 +244,58 @@ sudo systemctl enable --now hp-app.service
 
 ---
 
+## 13. Managed variant (NOC-023)
+
+This whole document describes the **self-hosted** path — a customer
+clones the repo and runs `docker-compose.prod.yml` themselves. That path
+is unchanged and keeps working on its own (ADR 0001).
+
+**Managed** is for an operator-provisioned instance: the same
+`docker-compose.prod.yml`, plus an override layer
+(`compose/docker-compose.managed.yml`) that adds two things steps 1–12
+don't need:
+
+1. A **pinned, non-`latest` image version** — `MANAGED_APP_VERSION` has no
+   default. Leaving it unset breaks the image reference loudly at `pull`/`up`
+   time rather than silently floating to whichever `:latest` happens to exist.
+2. **`HP_SEED` as a Docker secret** (file-backed) instead of a plain env
+   var — the one value this product explicitly never rotates (see §3's
+   table), so it's the one most worth keeping out of `docker
+   inspect`/`/proc/.../environ`.
+
+Everything else — networks, healthchecks, volumes, container hardening,
+Traefik/Cloudflare config, the admin console itself — comes from
+`docker-compose.prod.yml` unchanged; the override doesn't duplicate it.
+
+```bash
+mkdir -p compose/secrets
+python3 -c "import secrets; print(secrets.token_hex(32))" > compose/secrets/hp_seed.txt
+# .env.prod as in step 3, plus:
+echo "MANAGED_APP_VERSION=1.4.2" >> .env.prod   # an exact tag, never "latest"
+
+make managed-pull
+make managed-up
+```
+
+(`make managed-*` targets layer both compose files with one `--env-file
+.env.prod`, same as `make prod-*` does for the self-hosted path.)
+
+**Rollback**: a Managed instance's only moving part on top of self-hosted
+is the pinned version, so rolling back is pointing `MANAGED_APP_VERSION`
+at the previous known-good tag and recreating:
+
+```bash
+sed -i 's/^MANAGED_APP_VERSION=.*/MANAGED_APP_VERSION=<previous-tag>/' .env.prod
+make managed-pull
+make managed-up   # recreates app/admin/migrate on the previous image; data volumes are untouched
+```
+
+This is a manual procedure for now — automated, verified upgrade/rollback
+with pre-flight checks is NOC-029's job, built on this same version-pin
+mechanism.
+
+---
+
 **Migration fails:**
 
 ```bash

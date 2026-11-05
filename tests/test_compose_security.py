@@ -127,5 +127,45 @@ class TestAdminReachableOnlyThroughCloudflareTunnel(unittest.TestCase):
         self.assertEqual(token_entries[0], "TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}")
 
 
+class TestManagedOverrideStatic(unittest.TestCase):
+    """NOC-023: static checks on docker-compose.managed.yml alone, read as
+    its own YAML file (not merged with docker-compose.prod.yml -- the real
+    merge is verified separately in tests/test_managed_compose.py, which
+    needs Docker). This file is an override layer: it should only ever add
+    the pinned-version/secrets delta, never introduce a port or touch the
+    Docker socket itself."""
+
+    def test_declares_hp_seed_as_a_secret(self):
+        compose = _load_compose("docker-compose.managed.yml")
+        self.assertIn("hp_seed", compose.get("secrets", {}))
+
+    def test_migrate_app_admin_all_use_the_hp_seed_secret(self):
+        compose = _load_compose("docker-compose.managed.yml")
+        for name in ("migrate", "app", "admin"):
+            service = compose["services"][name]
+            self.assertIn("hp_seed", service.get("secrets", []), f"{name} is missing the hp_seed secret")
+
+    def test_migrate_app_admin_pin_to_managed_app_version(self):
+        compose = _load_compose("docker-compose.managed.yml")
+        for name in ("migrate", "app", "admin"):
+            image = compose["services"][name]["image"]
+            self.assertIn("${MANAGED_APP_VERSION}", image, f"{name}: {image}")
+            self.assertNotIn(":latest", image)
+
+    def test_override_introduces_no_ports_on_any_service(self):
+        compose = _load_compose("docker-compose.managed.yml")
+        offenders = [name for name, service in compose["services"].items() if "ports" in service]
+        self.assertEqual(offenders, [], f"managed override must not publish any port: {offenders}")
+
+    def test_override_mounts_no_docker_socket(self):
+        compose = _load_compose("docker-compose.managed.yml")
+        offenders = []
+        for name, service in compose["services"].items():
+            for source in _service_volume_sources(service):
+                if "docker.sock" in source:
+                    offenders.append(name)
+        self.assertEqual(offenders, [])
+
+
 if __name__ == "__main__":
     unittest.main()

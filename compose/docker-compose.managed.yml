@@ -1,0 +1,56 @@
+# NOC-023: Managed deployment variant.
+#
+# An override layer on top of docker-compose.prod.yml, not a replacement
+# for it -- docker-compose.prod.yml stays untouched and keeps working
+# standalone for self-hosted customers who manage their own VPS (ADR 0001,
+# NOC-023's explicit "mantener la variante actual durante migración"
+# requirement). Everything NOT listed here (networks, healthchecks,
+# volumes, container hardening, Traefik/Cloudflare config) is already
+# defined in docker-compose.prod.yml and applies unchanged when both files
+# are composed together -- this file only adds what distinguishes a
+# Managed, operator-provisioned instance from a self-hosted one:
+#
+#   1. A pinned, non-"latest" image version (MANAGED_APP_VERSION, no
+#      default -- an unset value breaks the image reference loudly rather
+#      than silently floating to whatever ":latest" happens to be).
+#   2. HP_SEED delivered as a Docker secret (file-backed, via
+#      app/docker_secrets.py) instead of a plain environment variable --
+#      it's the one value this product explicitly never rotates
+#      (CLAUDE.md: "Never change HP_SEED on an existing deployment"), so
+#      it's the one most worth keeping out of `docker inspect`/`/proc/.../environ`.
+#
+# Use together with: docker compose -f compose/docker-compose.prod.yml
+#   -f compose/docker-compose.managed.yml --env-file .env.prod <cmd>
+# (see Makefile's managed-* targets).
+#
+# cloudflared's CLOUDFLARE_TUNNEL_TOKEN is deliberately NOT converted to a
+# Docker secret here: that's a third-party, shell-less minimal image with
+# no "_FILE" convention of its own, so there's no way to feed it a secret
+# file without wrapping/forking the image -- out of proportion for this
+# Issue. It stays a plain env var, same as docker-compose.prod.yml.
+
+services:
+  migrate:
+    image: ${HP_IMAGE:-ghcr.io/0x-unkwn0wn/noctisapi-pro}:${MANAGED_APP_VERSION}
+    secrets:
+      - hp_seed
+    environment:
+      - HP_SEED_FILE=/run/secrets/hp_seed
+
+  app:
+    image: ${HP_IMAGE:-ghcr.io/0x-unkwn0wn/noctisapi-pro}:${MANAGED_APP_VERSION}
+    secrets:
+      - hp_seed
+    environment:
+      - HP_SEED_FILE=/run/secrets/hp_seed
+
+  admin:
+    image: ${HP_IMAGE:-ghcr.io/0x-unkwn0wn/noctisapi-pro}:${MANAGED_APP_VERSION}
+    secrets:
+      - hp_seed
+    environment:
+      - HP_SEED_FILE=/run/secrets/hp_seed
+
+secrets:
+  hp_seed:
+    file: ${HP_SEED_SECRET_FILE:-./secrets/hp_seed.txt}

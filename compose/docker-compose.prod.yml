@@ -7,7 +7,16 @@ services:
     # here would break. Not a real exposure: short-lived, processes no
     # attacker-reachable input, and runs before app/admin/traefik even start.
     user: "0:0"
-    command: ["sh", "-c", "chown -R 10001:0 /data /var/lib/myapp && alembic upgrade head"]
+    # NOC-023: re-chown *after* the migration too, not just before it --
+    # alembic creates the sqlite file (and its WAL/SHM siblings) as root
+    # during upgrade head, so a chown that only runs beforehand never
+    # touches it. Without this, app/admin (running as 10001:0) hit
+    # "attempt to write a readonly database" on every truly fresh volume,
+    # 100% reproducibly -- caught here because this Issue's "clean
+    # instance works in staging" criterion was the first time anyone
+    # actually ran `up` against a brand-new volume instead of just
+    # `config`-validating the file.
+    command: ["sh", "-c", "chown -R 10001:0 /data /var/lib/myapp && alembic upgrade head && chown -R 10001:0 /data /var/lib/myapp"]
     env_file:
       - ../.env.prod
     volumes:
