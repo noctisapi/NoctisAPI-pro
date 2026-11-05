@@ -1,5 +1,6 @@
-"""NOC-025: scripts/init_deployment.py -- per-deployment HP_SEED generation
-and the non-secret deployment manifest.
+"""NOC-025/NOC-026: scripts/init_deployment.py -- per-deployment secret
+generation (HP_SEED, the backup encryption key) and the non-secret
+deployment manifest.
 
 Uses pytest's tmp_path (a real, portable filesystem path) throughout --
 no network, no Docker, no shelling out.
@@ -10,15 +11,17 @@ import json
 import sys
 from pathlib import Path
 
+from cryptography.fernet import Fernet
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import scripts.init_deployment as init_deployment  # noqa: E402
 
 
-class TestEnsureHpSeed:
+class TestEnsureSecretFileWithHpSeedGenerator:
     def test_generates_a_64_char_hex_seed(self, tmp_path):
         path = tmp_path / "hp_seed.txt"
-        status, changed = init_deployment.ensure_hp_seed(path)
+        status, changed = init_deployment.ensure_secret_file(path, init_deployment._generate_hp_seed)
         assert changed is True
         assert status == "generated"
         value = path.read_text(encoding="utf-8")
@@ -27,25 +30,25 @@ class TestEnsureHpSeed:
 
     def test_creates_parent_directory(self, tmp_path):
         path = tmp_path / "nested" / "dir" / "hp_seed.txt"
-        init_deployment.ensure_hp_seed(path)
+        init_deployment.ensure_secret_file(path, init_deployment._generate_hp_seed)
         assert path.exists()
 
     def test_second_call_does_not_change_an_existing_seed(self, tmp_path):
         path = tmp_path / "hp_seed.txt"
-        init_deployment.ensure_hp_seed(path)
+        init_deployment.ensure_secret_file(path, init_deployment._generate_hp_seed)
         first_value = path.read_text(encoding="utf-8")
 
-        status, changed = init_deployment.ensure_hp_seed(path)
+        status, changed = init_deployment.ensure_secret_file(path, init_deployment._generate_hp_seed)
         assert changed is False
         assert "already exists" in status
         assert path.read_text(encoding="utf-8") == first_value
 
     def test_force_does_regenerate(self, tmp_path):
         path = tmp_path / "hp_seed.txt"
-        init_deployment.ensure_hp_seed(path)
+        init_deployment.ensure_secret_file(path, init_deployment._generate_hp_seed)
         first_value = path.read_text(encoding="utf-8")
 
-        status, changed = init_deployment.ensure_hp_seed(path, force=True)
+        status, changed = init_deployment.ensure_secret_file(path, init_deployment._generate_hp_seed, force=True)
         assert changed is True
         assert "regenerated" in status
         assert path.read_text(encoding="utf-8") != first_value
@@ -53,8 +56,32 @@ class TestEnsureHpSeed:
     def test_each_generated_seed_is_unique(self, tmp_path):
         a = tmp_path / "a.txt"
         b = tmp_path / "b.txt"
-        init_deployment.ensure_hp_seed(a)
-        init_deployment.ensure_hp_seed(b)
+        init_deployment.ensure_secret_file(a, init_deployment._generate_hp_seed)
+        init_deployment.ensure_secret_file(b, init_deployment._generate_hp_seed)
+        assert a.read_text() != b.read_text()
+
+
+class TestEnsureSecretFileWithBackupKeyGenerator:
+    def test_generates_a_valid_fernet_key(self, tmp_path):
+        path = tmp_path / "backup_encryption_key.txt"
+        status, changed = init_deployment.ensure_secret_file(path, init_deployment._generate_backup_encryption_key)
+        assert changed is True
+        value = path.read_text(encoding="utf-8")
+        Fernet(value.encode("ascii"))  # raises if not a valid Fernet key
+
+    def test_second_call_does_not_change_an_existing_key(self, tmp_path):
+        path = tmp_path / "backup_encryption_key.txt"
+        init_deployment.ensure_secret_file(path, init_deployment._generate_backup_encryption_key)
+        first_value = path.read_text(encoding="utf-8")
+
+        init_deployment.ensure_secret_file(path, init_deployment._generate_backup_encryption_key)
+        assert path.read_text(encoding="utf-8") == first_value
+
+    def test_each_generated_key_is_unique(self, tmp_path):
+        a = tmp_path / "a.txt"
+        b = tmp_path / "b.txt"
+        init_deployment.ensure_secret_file(a, init_deployment._generate_backup_encryption_key)
+        init_deployment.ensure_secret_file(b, init_deployment._generate_backup_encryption_key)
         assert a.read_text() != b.read_text()
 
 
@@ -125,23 +152,40 @@ class TestMainIntegration:
         )
         assert init_deployment.main() == 0
         assert (tmp_path / "hp_seed.txt").exists()
+        assert (tmp_path / "backup_encryption_key.txt").exists()
         assert (tmp_path / "deployment-manifest.json").exists()
 
-    def test_second_run_leaves_seed_untouched(self, tmp_path, monkeypatch):
+    def test_second_run_leaves_seed_and_backup_key_untouched(self, tmp_path, monkeypatch):
         argv = ["init_deployment.py", "--secrets-dir", str(tmp_path), "--public-host", "api.example.com"]
         monkeypatch.setattr(sys, "argv", argv)
         init_deployment.main()
         first_seed = (tmp_path / "hp_seed.txt").read_text()
+        first_backup_key = (tmp_path / "backup_encryption_key.txt").read_text()
 
         init_deployment.main()
         assert (tmp_path / "hp_seed.txt").read_text() == first_seed
+        assert (tmp_path / "backup_encryption_key.txt").read_text() == first_backup_key
 
     def test_force_flag_regenerates_the_seed(self, tmp_path, monkeypatch):
         base_argv = ["init_deployment.py", "--secrets-dir", str(tmp_path), "--public-host", "api.example.com"]
         monkeypatch.setattr(sys, "argv", base_argv)
         init_deployment.main()
         first_seed = (tmp_path / "hp_seed.txt").read_text()
+        first_backup_key = (tmp_path / "backup_encryption_key.txt").read_text()
 
         monkeypatch.setattr(sys, "argv", base_argv + ["--force-regenerate-seed"])
         init_deployment.main()
         assert (tmp_path / "hp_seed.txt").read_text() != first_seed
+        assert (tmp_path / "backup_encryption_key.txt").read_text() == first_backup_key  # untouched
+
+    def test_force_backup_key_flag_regenerates_only_the_backup_key(self, tmp_path, monkeypatch):
+        base_argv = ["init_deployment.py", "--secrets-dir", str(tmp_path), "--public-host", "api.example.com"]
+        monkeypatch.setattr(sys, "argv", base_argv)
+        init_deployment.main()
+        first_seed = (tmp_path / "hp_seed.txt").read_text()
+        first_backup_key = (tmp_path / "backup_encryption_key.txt").read_text()
+
+        monkeypatch.setattr(sys, "argv", base_argv + ["--force-regenerate-backup-key"])
+        init_deployment.main()
+        assert (tmp_path / "hp_seed.txt").read_text() == first_seed  # untouched
+        assert (tmp_path / "backup_encryption_key.txt").read_text() != first_backup_key

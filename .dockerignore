@@ -48,8 +48,12 @@ data/
 # Root-level PEM files only (app/licensing_server_public_key.pem is needed)
 /*.pem
 
-# Scripts not needed at runtime
+# Scripts not needed at runtime -- these orchestrate `docker run`
+# themselves and run on the VPS host, never inside a container (which
+# would need Docker socket access to do the same -- not something to
+# grant, see CLAUDE.md's "never expose Docker socket" invariant).
 backup_sqlite.sh
+restore_backup.sh
 Makefile
 
 # Editor

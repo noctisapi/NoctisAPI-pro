@@ -1,2 +1,0 @@
-# Retention prune job (daily)
-15 3 * * * root HP_RETENTION_ENABLE=1 HP_DB_PATH=/data/honeypot.db /opt/hp-app/scripts/prune_retention.py >> /var/log/hp-app-retention.log 2>&1

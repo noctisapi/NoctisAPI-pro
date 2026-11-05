@@ -1,0 +1,8 @@
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# Daily at 02:15 UTC (NOC-026: encrypted, both the SQLite DB and
+# /var/lib/myapp; volume names are resolved dynamically by
+# backup_sqlite.sh itself -- do not override DATA_VOLUME/MYAPP_VOLUME
+# here, a stale guess silently backs up an empty auto-created volume).
+15 2 * * * root BACKUP_DIR=/var/backups/noctisapi /opt/hp-app/backup_sqlite.sh >> /var/log/noctisapi-backup.log 2>&1

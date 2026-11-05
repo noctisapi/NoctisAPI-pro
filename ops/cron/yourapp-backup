@@ -1,5 +1,0 @@
-SHELL=/bin/bash
-PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-
-# Daily at 02:15 UTC
-15 2 * * * root BACKUP_DIR=/var/backups/honey-app DATA_VOLUME=honey_app_hp_prod_data /opt/honey_app/backup_sqlite.sh >> /var/log/honey_app_backup.log 2>&1
