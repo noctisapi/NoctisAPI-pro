@@ -1,0 +1,26 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "flat-type-hierarchy",
+        "value": "*",
+        "files": [
+          "templates/login.html"
+        ],
+        "createdAt": "2026-11-05T11:50:30.609Z",
+        "reason": "pre-existing type scale from before NOC-018; only form fields changed, not the <style> block"
+      },
+      {
+        "rule": "flat-type-hierarchy",
+        "value": "*",
+        "files": [
+          "templates/reset_password.html"
+        ],
+        "createdAt": "2026-11-05T11:50:30.765Z",
+        "reason": "deliberately copies login.html's existing style block for visual consistency as a sibling auth page; not a new scale"
+      }
+    ]
+  }
+}
