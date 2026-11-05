@@ -196,13 +196,14 @@ One-time setup, per installation:
    ```
    This first account defaults to role `owner` (NOC-019: owner/admin/analyst/viewer,
    each a superset of the ones below it — see `app/panel_rbac.py` for the
-   full permission matrix). Pass `--role admin|analyst|viewer` for
-   additional accounts, or change one later with `set-role --username
-   <name> --role <role>`. Use `scripts/panel_user.py reset-password
-   --username <name>` to issue a one-time recovery link for an existing
-   account, and `list-users` / `deactivate-user` / `revoke-sessions` to
-   manage access. There is no self-service invite UI yet — all of this is
-   operator-run.
+   full permission matrix). Once logged in, that owner manages everyone
+   else from **Members** in the panel itself (NOC-020: invite, change
+   role, deactivate/reactivate, revoke sessions — each change is recorded
+   and shown on that same page). This CLI stays the operator-only escape
+   hatch for when no owner account is reachable — `reset-password
+   --username <name>` issues a one-time recovery link, and `set-role` /
+   `deactivate-user` / `activate-user` / `revoke-sessions` work the same
+   way from the shell.
 
 Then just visit `https://<HP_ADMIN_HOST>` from anywhere — no SSH, no VPN, no
 published port.

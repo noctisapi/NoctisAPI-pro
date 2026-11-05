@@ -2,9 +2,12 @@
 """
 Operator CLI for NoctisAPI PRO admin panel user accounts (NOC-018).
 
-There is no self-service sign-up or invite UI yet (that's NOC-020) and no
-SMTP integration for self-service password recovery -- an operator with
-container/host access runs this to create accounts and issue reset links.
+Bootstrap tool for the very first account (the panel's own /dashboard/members
+page, NOC-020, needs at least one owner logged in before it's usable) and an
+operator-only escape hatch after that -- e.g. when no owner account is
+reachable, or there's no SMTP integration for self-service password
+recovery. An owner can otherwise do everything this script does (create,
+invite, re-role, deactivate, revoke sessions) from /dashboard/members.
 
 Roles (NOC-019) are owner/admin/analyst/viewer, each a superset of the ones
 below it -- see app/panel_rbac.py for exactly what each one can do.
@@ -32,12 +35,14 @@ if _REPO_ROOT not in sys.path:
 
 from app import panel_auth  # noqa: E402
 from app import panel_rbac  # noqa: E402
+from app import panel_membership_audit  # noqa: E402
 
 
 def _db(db_path: str) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     panel_auth.ensure_tables(conn)
+    panel_membership_audit.ensure_tables(conn)
     return conn
 
 
@@ -66,6 +71,13 @@ def cmd_create_user(args: argparse.Namespace) -> int:
         except ValueError as exc:
             print(str(exc), file=sys.stderr)
             return 1
+        panel_membership_audit.record(
+            conn,
+            actor_username=panel_membership_audit.CLI_ACTOR,
+            action="create",
+            target_username=args.username,
+            detail=f"role={args.role}",
+        )
     finally:
         conn.close()
     print(f"User '{args.username}' created with role '{args.role}'.")
@@ -79,11 +91,19 @@ def cmd_set_role(args: argparse.Namespace) -> int:
         if not user:
             print(f"No such user: {args.username}", file=sys.stderr)
             return 1
+        old_role = user["role"]
         try:
             panel_auth.set_user_role(conn, user["id"], args.role)
         except ValueError as exc:
             print(str(exc), file=sys.stderr)
             return 1
+        panel_membership_audit.record(
+            conn,
+            actor_username=panel_membership_audit.CLI_ACTOR,
+            action="role_change",
+            target_username=args.username,
+            detail=f"{old_role} -> {args.role}",
+        )
     finally:
         conn.close()
     print(f"User '{args.username}' is now role '{args.role}'.")
@@ -114,6 +134,12 @@ def cmd_deactivate_user(args: argparse.Namespace) -> int:
             print(f"No such user: {args.username}", file=sys.stderr)
             return 1
         panel_auth.set_user_active(conn, user["id"], False)
+        panel_membership_audit.record(
+            conn,
+            actor_username=panel_membership_audit.CLI_ACTOR,
+            action="deactivate",
+            target_username=args.username,
+        )
     finally:
         conn.close()
     print(f"User '{args.username}' deactivated; all sessions revoked.")
@@ -128,6 +154,12 @@ def cmd_activate_user(args: argparse.Namespace) -> int:
             print(f"No such user: {args.username}", file=sys.stderr)
             return 1
         panel_auth.set_user_active(conn, user["id"], True)
+        panel_membership_audit.record(
+            conn,
+            actor_username=panel_membership_audit.CLI_ACTOR,
+            action="activate",
+            target_username=args.username,
+        )
     finally:
         conn.close()
     print(f"User '{args.username}' re-activated.")
@@ -158,6 +190,12 @@ def cmd_revoke_sessions(args: argparse.Namespace) -> int:
             print(f"No such user: {args.username}", file=sys.stderr)
             return 1
         panel_auth.revoke_all_sessions_for_user(conn, user["id"])
+        panel_membership_audit.record(
+            conn,
+            actor_username=panel_membership_audit.CLI_ACTOR,
+            action="revoke_sessions",
+            target_username=args.username,
+        )
     finally:
         conn.close()
     print(f"All sessions for '{args.username}' revoked.")

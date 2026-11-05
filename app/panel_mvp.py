@@ -64,6 +64,7 @@ from app.server_config import RequestTimeoutMiddleware, get_request_timeout
 from app import cloudflare_access
 from app import panel_auth
 from app import panel_rbac
+from app import panel_membership_audit
 
 APP_NAME = "noctisapi-panel"
 DB_PATH = os.getenv("HP_DB_PATH", "/data/honeypot.db")
@@ -751,6 +752,174 @@ async def reset_password_submit(request: Request):
             url=f"/reset-password?token={_quote(token, safe='')}&error=1", status_code=303
         )
     return RedirectResponse(url="/reset-password?done=1", status_code=303)
+
+
+# ---------------------------------------------------------------------------
+# Member management (NOC-020): lets an owner invite/revoke/re-role panel
+# accounts from the UI instead of needing operator shell access for every
+# change. Built entirely on NOC-018's identity/session primitives and
+# NOC-019's RBAC -- no new auth mechanism, just a UI over what already
+# exists. Does not touch Cloudflare Access configuration (team domain,
+# policies) -- that stays operator-only, outside this panel entirely.
+# ---------------------------------------------------------------------------
+
+
+@app.get("/dashboard/members", include_in_schema=False, response_class=HTMLResponse)
+async def members_page(request: Request, invite_link: str = "", error: str = ""):
+    conn = db()
+    try:
+        panel_auth.ensure_tables(conn)
+        panel_membership_audit.ensure_tables(conn)
+        users = panel_auth.list_users(conn)
+        audit_entries = panel_membership_audit.list_recent(conn, limit=25)
+    finally:
+        conn.close()
+    return templates.TemplateResponse(
+        "members.html",
+        {
+            "request": request,
+            "users": users,
+            "audit_entries": audit_entries,
+            "roles": panel_rbac.VALID_ROLES,
+            "current_user_id": request.state.panel_user_id,
+            "cf_access_enabled": cloudflare_access.is_enabled(),
+            "invite_link": invite_link,
+            "error": error,
+        },
+    )
+
+
+@app.post("/dashboard/members/invite", include_in_schema=False)
+async def members_invite(request: Request):
+    form = await request.form()
+    username = str(form.get("username", "")).strip()
+    role = str(form.get("role", panel_rbac.DEFAULT_ROLE)).strip().lower()
+
+    from urllib.parse import quote as _quote
+
+    if not username or role not in panel_rbac.VALID_ROLES:
+        return RedirectResponse(url="/dashboard/members?error=1", status_code=303)
+
+    conn = db()
+    try:
+        panel_auth.ensure_tables(conn)
+        panel_membership_audit.ensure_tables(conn)
+        try:
+            user_id = panel_auth.create_user(conn, username, _secrets.token_hex(32), role=role)
+        except panel_auth.UsernameTakenError:
+            return RedirectResponse(url="/dashboard/members?error=1", status_code=303)
+        reset_token = panel_auth.create_password_reset(conn, user_id)
+        panel_membership_audit.record(
+            conn,
+            actor_username=request.state.panel_username,
+            action="invite",
+            target_username=username,
+            detail=f"role={role}",
+        )
+    finally:
+        conn.close()
+
+    invite_link = f"/reset-password?token={reset_token}"
+    return RedirectResponse(
+        url=f"/dashboard/members?invite_link={_quote(invite_link, safe='')}", status_code=303
+    )
+
+
+@app.post("/dashboard/members/{user_id}/role", include_in_schema=False)
+async def members_set_role(request: Request, user_id: int):
+    form = await request.form()
+    new_role = str(form.get("role", "")).strip().lower()
+    # Blocking self-role-change (not just deactivation below) is what keeps
+    # this unable to ever reach zero owners: only an owner can call this
+    # endpoint at all (RBAC), and an owner can never touch their own role
+    # or active flag through it -- so the acting owner always remains.
+    if new_role not in panel_rbac.VALID_ROLES or user_id == request.state.panel_user_id:
+        return RedirectResponse(url="/dashboard/members?error=1", status_code=303)
+
+    conn = db()
+    try:
+        panel_auth.ensure_tables(conn)
+        panel_membership_audit.ensure_tables(conn)
+        target = panel_auth.get_user_by_id(conn, user_id)
+        if not target:
+            return RedirectResponse(url="/dashboard/members?error=1", status_code=303)
+        old_role = target["role"]
+        panel_auth.set_user_role(conn, user_id, new_role)
+        panel_membership_audit.record(
+            conn,
+            actor_username=request.state.panel_username,
+            action="role_change",
+            target_username=target["username"],
+            detail=f"{old_role} -> {new_role}",
+        )
+    finally:
+        conn.close()
+    return RedirectResponse(url="/dashboard/members", status_code=303)
+
+
+@app.post("/dashboard/members/{user_id}/deactivate", include_in_schema=False)
+async def members_deactivate(request: Request, user_id: int):
+    if user_id == request.state.panel_user_id:
+        return RedirectResponse(url="/dashboard/members?error=1", status_code=303)
+    conn = db()
+    try:
+        panel_auth.ensure_tables(conn)
+        panel_membership_audit.ensure_tables(conn)
+        target = panel_auth.get_user_by_id(conn, user_id)
+        if not target:
+            return RedirectResponse(url="/dashboard/members?error=1", status_code=303)
+        panel_auth.set_user_active(conn, user_id, False)
+        panel_membership_audit.record(
+            conn,
+            actor_username=request.state.panel_username,
+            action="deactivate",
+            target_username=target["username"],
+        )
+    finally:
+        conn.close()
+    return RedirectResponse(url="/dashboard/members", status_code=303)
+
+
+@app.post("/dashboard/members/{user_id}/activate", include_in_schema=False)
+async def members_activate(request: Request, user_id: int):
+    conn = db()
+    try:
+        panel_auth.ensure_tables(conn)
+        panel_membership_audit.ensure_tables(conn)
+        target = panel_auth.get_user_by_id(conn, user_id)
+        if not target:
+            return RedirectResponse(url="/dashboard/members?error=1", status_code=303)
+        panel_auth.set_user_active(conn, user_id, True)
+        panel_membership_audit.record(
+            conn,
+            actor_username=request.state.panel_username,
+            action="activate",
+            target_username=target["username"],
+        )
+    finally:
+        conn.close()
+    return RedirectResponse(url="/dashboard/members", status_code=303)
+
+
+@app.post("/dashboard/members/{user_id}/revoke-sessions", include_in_schema=False)
+async def members_revoke_sessions(request: Request, user_id: int):
+    conn = db()
+    try:
+        panel_auth.ensure_tables(conn)
+        panel_membership_audit.ensure_tables(conn)
+        target = panel_auth.get_user_by_id(conn, user_id)
+        if not target:
+            return RedirectResponse(url="/dashboard/members?error=1", status_code=303)
+        panel_auth.revoke_all_sessions_for_user(conn, user_id)
+        panel_membership_audit.record(
+            conn,
+            actor_username=request.state.panel_username,
+            action="revoke_sessions",
+            target_username=target["username"],
+        )
+    finally:
+        conn.close()
+    return RedirectResponse(url="/dashboard/members", status_code=303)
 
 
 @app.get("/health", tags=["Health"], response_class=PlainTextResponse)

@@ -1,0 +1,198 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .members-grid {
+    display: grid;
+    grid-template-columns: 1fr 340px;
+    gap: 20px;
+    padding: 24px 0;
+    align-items: start;
+  }
+  .members-role-form { display: flex; align-items: center; gap: 6px; }
+  .members-role-form select {
+    background: var(--panel2);
+    border: 1px solid var(--stroke);
+    color: var(--text);
+    border-radius: 4px;
+    font-size: 0.78rem;
+    padding: 4px 6px;
+  }
+  .members-row-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .members-you-badge {
+    font-size: 0.68rem;
+    color: var(--muted);
+    border: 1px solid var(--stroke);
+    border-radius: 3px;
+    padding: 1px 5px;
+    margin-left: 6px;
+  }
+  .members-invite-form {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .members-invite-form input, .members-invite-form select {
+    background: var(--panel2);
+    border: 1px solid var(--stroke);
+    color: var(--text);
+    border-radius: 4px;
+    padding: 8px 10px;
+    font-size: 0.85rem;
+  }
+  .members-invite-link {
+    background: rgba(90,184,126,.08);
+    border: 1px solid rgba(90,184,126,.3);
+    border-radius: 6px;
+    padding: 10px 12px;
+    font-size: 0.78rem;
+    font-family: monospace;
+    word-break: break-all;
+    margin-bottom: 16px;
+  }
+  .members-audit-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    font-size: 0.78rem;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    max-height: 420px;
+    overflow-y: auto;
+  }
+  .members-audit-list li { border-bottom: 1px solid rgba(255,255,255,.04); padding-bottom: 8px; }
+  .members-audit-list .muted { font-size: 0.72rem; }
+</style>
+
+<div style="padding-top:24px;">
+  <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px;">
+    <div>
+      <h1 style="margin:0; font-size:1.4rem;">Members</h1>
+      <p class="muted" style="margin:4px 0 0 0; font-size:0.82rem;">
+        Panel accounts and roles (NOC-018/019/020). Owner only can invite, re-role, or revoke access.
+      </p>
+    </div>
+    <span class="badge {{ 'badge-warn' if not cf_access_enabled else '' }}" title="Cloudflare Access is configured separately by the operator -- never from this page">
+      Cloudflare Access: {{ "enabled" if cf_access_enabled else "not configured" }}
+    </span>
+  </div>
+
+  {% if invite_link %}
+  <div class="members-invite-link">
+    Invite created. Share this one-time link with the new user (valid 1 hour):<br />
+    {{ invite_link }}
+  </div>
+  {% endif %}
+  {% if error %}
+  <div class="members-invite-link" style="background:rgba(192,64,64,.08); border-color:rgba(192,64,64,.3); color:#e08080;">
+    That action could not be completed — check the username isn't taken, and that it wouldn't remove the last active owner or lock out your own account.
+  </div>
+  {% endif %}
+
+  <div class="members-grid">
+    <div class="card">
+      <div class="card-head">
+        <div class="card-title">Accounts</div>
+      </div>
+      <div class="card-body" style="padding:0;">
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Username</th>
+                <th>Role</th>
+                <th>Status</th>
+                <th>Last login</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for u in users %}
+              <tr>
+                <td>
+                  {{ u.username }}
+                  {% if u.id == current_user_id %}<span class="members-you-badge">you</span>{% endif %}
+                </td>
+                <td>
+                  <form class="members-role-form" method="post" action="/dashboard/members/{{ u.id }}/role">
+                    <select name="role" {% if u.id == current_user_id %}disabled{% endif %}>
+                      {% for r in roles %}
+                      <option value="{{ r }}" {% if r == u.role %}selected{% endif %}>{{ r }}</option>
+                      {% endfor %}
+                    </select>
+                    {% if u.id != current_user_id %}
+                    <button class="btn btn-small" type="submit">Set</button>
+                    {% endif %}
+                  </form>
+                </td>
+                <td>{{ "active" if u.is_active else "deactivated" }}</td>
+                <td class="muted">{{ u.last_login_at or "never" }}</td>
+                <td>
+                  <div class="members-row-actions">
+                    <form method="post" action="/dashboard/members/{{ u.id }}/revoke-sessions" style="margin:0;">
+                      <button class="btn btn-small btn-outline" type="submit">Revoke sessions</button>
+                    </form>
+                    {% if u.is_active %}
+                    <form method="post" action="/dashboard/members/{{ u.id }}/deactivate" style="margin:0;">
+                      <button class="btn btn-small btn-danger" type="submit" {% if u.id == current_user_id %}disabled{% endif %}>Deactivate</button>
+                    </form>
+                    {% else %}
+                    <form method="post" action="/dashboard/members/{{ u.id }}/activate" style="margin:0;">
+                      <button class="btn btn-small btn-primary" type="submit">Reactivate</button>
+                    </form>
+                    {% endif %}
+                  </div>
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div style="display:flex; flex-direction:column; gap:20px;">
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title">Invite a new member</div>
+        </div>
+        <div class="card-body">
+          <form class="members-invite-form" method="post" action="/dashboard/members/invite">
+            <input type="text" name="username" placeholder="Username" required autocomplete="off" />
+            <select name="role">
+              {% for r in roles %}
+              <option value="{{ r }}" {% if r == "viewer" %}selected{% endif %}>{{ r }}</option>
+              {% endfor %}
+            </select>
+            <button class="btn btn-primary" type="submit">Create invite link</button>
+          </form>
+          <p class="muted" style="font-size:0.72rem; margin-top:10px;">
+            Creates the account and a one-time link to set a password. There
+            is no email delivery yet — copy the link and send it to the
+            person yourself.
+          </p>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title">Recent membership changes</div>
+        </div>
+        <div class="card-body">
+          <ul class="members-audit-list">
+            {% for a in audit_entries %}
+            <li>
+              <div><strong>{{ a.actor_username }}</strong> {{ a.action }} <strong>{{ a.target_username }}</strong></div>
+              {% if a.detail %}<div class="muted">{{ a.detail }}</div>{% endif %}
+              <div class="muted">{{ a.created_at }}</div>
+            </li>
+            {% else %}
+            <li class="muted">No membership changes yet.</li>
+            {% endfor %}
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
