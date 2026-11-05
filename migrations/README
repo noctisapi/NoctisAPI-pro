@@ -1,2 +1,16 @@
 Honey App database migrations managed by Alembic.
-Run lembic upgrade head after modifying versions under migrations/versions.
+Run alembic upgrade head after modifying versions under migrations/versions.
+
+Irreversible migrations (NOC-029): if a migration's downgrade() cannot
+actually restore data that upgrade() deletes or mutates (e.g. dropping a
+column or table that already held real rows), mark it explicitly so
+scripts/upgrade.py's pre-flight check can warn and abort before an
+automated upgrade applies it, instead of silently running a downgrade()
+that "succeeds" but has already lost data:
+
+    irreversible = True
+    irreversible_reason = "drops the X column; its data cannot be recovered by downgrade()"
+
+Leave both unset (the default) when downgrade() genuinely restores the
+prior schema/data losslessly -- true for every migration in this repo
+today.

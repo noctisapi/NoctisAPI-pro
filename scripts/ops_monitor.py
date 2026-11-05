@@ -42,7 +42,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _COMPOSE_FILE = _REPO_ROOT / "compose" / "docker-compose.prod.yml"
@@ -61,11 +61,18 @@ class Check:
         return f"{'OK  ' if self.ok else 'FAIL'} {self.name}: {self.detail}"
 
 
-def check_containers(compose_file: Path, env_file: Path) -> List[Check]:
+def check_containers(compose_file: Union[Path, List[Path]], env_file: Path) -> List[Check]:
+    # NOC-029: scripts/upgrade.py needs to check health against the merged
+    # self-hosted + managed override (two -f flags), not just one file --
+    # a single Path still works exactly as before for every existing caller.
+    compose_files = compose_file if isinstance(compose_file, list) else [compose_file]
     try:
+        cmd = ["docker", "compose"]
+        for f in compose_files:
+            cmd += ["-f", str(f)]
+        cmd += ["--env-file", str(env_file), "ps", "--format", "json", "--all"]
         result = subprocess.run(
-            ["docker", "compose", "-f", str(compose_file), "--env-file", str(env_file),
-             "ps", "--format", "json", "--all"],
+            cmd,
             cwd=str(_REPO_ROOT), capture_output=True, text=True, timeout=30,
         )
     except Exception as exc:
