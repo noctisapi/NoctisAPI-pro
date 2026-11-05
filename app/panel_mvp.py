@@ -99,6 +99,26 @@ _PANEL_SESSION_TTL = panel_auth.PANEL_SESSION_TTL_SECONDS
 _PANEL_AUTH_BYPASS = {"/health", "/ready", "/login", "/logout", "/reset-password"}
 
 
+def _is_unauthenticated_path(path: str) -> bool:
+    """True for a path every auth/RBAC/audit middleware lets through
+    unauthenticated: the bypass list, or a genuine /static/ asset.
+
+    NOC-022: a raw ASGI middleware sees scope["path"] before Starlette's
+    router or StaticFiles ever look at it, so a prefix check alone
+    (path.startswith("/static/")) is not provably safe -- a path like
+    "/static/../dashboard/members" still starts with "/static/" and would
+    bypass every one of these middlewares on that string alone. It
+    currently can't actually reach that route (StaticFiles' own traversal
+    guard 404s it, and the router doesn't normalize ".." the way a
+    filesystem would), but that safety is incidental to routing internals,
+    not to this check -- so this explicitly rejects any ".." path segment
+    rather than relying on something downstream to keep catching it.
+    """
+    if path in _PANEL_AUTH_BYPASS:
+        return True
+    return path.startswith("/static/") and ".." not in path.split("/")
+
+
 def _panel_cookie_secure() -> bool:
     override = os.getenv("HP_PANEL_COOKIE_SECURE", "").strip().lower()
     if override in ("1", "true", "yes"):
@@ -192,7 +212,7 @@ class _PanelAuthMiddleware:
             return
 
         path = scope.get("path", "")
-        if path.startswith("/static/") or path in _PANEL_AUTH_BYPASS:
+        if _is_unauthenticated_path(path):
             await self._app(scope, receive, send)
             return
 
@@ -246,7 +266,7 @@ class _PanelRBACMiddleware:
             return
 
         path = scope.get("path", "")
-        if path.startswith("/static/") or path in _PANEL_AUTH_BYPASS:
+        if _is_unauthenticated_path(path):
             await self._app(scope, receive, send)
             return
 
@@ -284,7 +304,7 @@ class _PanelAuditMiddleware:
             return
 
         path = scope.get("path", "")
-        if path.startswith("/static/") or path in _PANEL_AUTH_BYPASS:
+        if _is_unauthenticated_path(path):
             await self._app(scope, receive, send)
             return
 
