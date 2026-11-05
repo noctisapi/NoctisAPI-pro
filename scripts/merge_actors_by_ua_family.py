@@ -6,6 +6,13 @@ import sys
 from collections import defaultdict
 from typing import Dict, List, Tuple
 
+# Allow running from the repo root without needing to pre-set PYTHONPATH.
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
+from app import docker_secrets  # noqa: E402
+
 def normalize_ua(ua: str) -> str:
     raw = (ua or "").strip().lower()
     if not raw:
@@ -56,7 +63,7 @@ def get_tables_with_actor_id(conn: sqlite3.Connection) -> List[Tuple[str, List[s
 def parse_args():
     p = argparse.ArgumentParser(description="Merge actors by IP + UA family.")
     p.add_argument("--db", default="/data/honeypot.db")
-    p.add_argument("--seed", default=os.getenv("HP_SEED", ""))
+    p.add_argument("--seed", default=docker_secrets.read_secret("HP_SEED", ""))
     p.add_argument("--dry-run", action="store_true")
     return p.parse_args()
 
