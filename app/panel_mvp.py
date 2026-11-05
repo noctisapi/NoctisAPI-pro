@@ -62,6 +62,7 @@ from app.runtime_provider import get_provider, invalidate_runtime_cache, reset_p
 from honey_licensing.client import compute_client_identity
 from honey_licensing.offline_license import LicenseVerifier, load_public_key_pem
 from app.server_config import RequestTimeoutMiddleware, get_request_timeout
+from app import cloudflare_access
 
 APP_NAME = "noctisapi-panel"
 DB_PATH = os.getenv("HP_DB_PATH", "/data/honeypot.db")
@@ -124,6 +125,47 @@ def _verify_session_token(token: str) -> bool:
         return False
 
 
+class _CloudflareAccessMiddleware:
+    """ASGI middleware, NOC-017: when Cloudflare Access is configured for
+    this installation (CF_ACCESS_TEAM_DOMAIN + CF_ACCESS_AUD both set),
+    every request must carry a cryptographically valid Access JWT -- no
+    bypass list, not even /health or /login, since the point is that
+    nothing reaches the panel without edge identity once Access is turned
+    on. Inert (passes everything through) when Access isn't configured, so
+    _PanelAuthMiddleware's existing HP_PANEL_TOKEN session gate is the only
+    change in behavior for installations that haven't set it up."""
+
+    def __init__(self, app_inner):
+        self._app = app_inner
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or not cloudflare_access.is_enabled():
+            await self._app(scope, receive, send)
+            return
+
+        headers = {k: v for k, v in scope.get("headers", [])}
+        token = headers.get(b"cf-access-jwt-assertion", b"").decode("latin-1")
+        if not token:
+            cookie_header = headers.get(b"cookie", b"").decode("latin-1")
+            for part in cookie_header.split(";"):
+                name, _, value = part.strip().partition("=")
+                if name.strip() == "CF_Authorization":
+                    token = value.strip()
+                    break
+
+        if token:
+            try:
+                cloudflare_access.verify_access_jwt(token)
+                await self._app(scope, receive, send)
+                return
+            except cloudflare_access.AccessTokenError:
+                pass
+
+        resp_headers = [(b"content-type", b"application/json")]
+        await send({"type": "http.response.start", "status": 401, "headers": resp_headers})
+        await send({"type": "http.response.body", "body": b'{"detail":"Unauthorized"}', "more_body": False})
+
+
 class _PanelAuthMiddleware:
     """ASGI middleware that enforces session-cookie auth on all panel routes."""
 
@@ -166,6 +208,9 @@ class _PanelAuthMiddleware:
 app = FastAPI(title=APP_NAME)
 app.add_middleware(RequestTimeoutMiddleware, timeout=get_request_timeout())
 app.add_middleware(_PanelAuthMiddleware)
+# Added last so it runs first (outermost) -- Access verification happens
+# before the panel even considers a session cookie.
+app.add_middleware(_CloudflareAccessMiddleware)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 _template_response_impl = templates.TemplateResponse

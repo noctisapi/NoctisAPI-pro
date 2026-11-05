@@ -171,11 +171,23 @@ One-time setup, per installation:
    public internet).
 3. Copy the tunnel token Cloudflare shows you and set it as
    `CLOUDFLARE_TUNNEL_TOKEN` in `.env.prod`.
-4. (Recommended) Put a [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/)
-   policy in front of that Public Hostname so only authorized identities ever
-   reach the tunnel — tracked separately as NOC-017, not required for the
-   tunnel itself to work.
-5. Redeploy (`docker compose ... up -d`) so `cloudflared` picks up the token.
+4. (Recommended, NOC-017) Add a [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/)
+   application in front of that same Public Hostname (**Access → Applications
+   → Add an application → Self-hosted**), with whatever identity policy fits
+   your plan (email allowlist, SSO, MFA). This gives you two independent
+   layers: Access decides who reaches the tunnel at Cloudflare's edge, and
+   the panel itself *cryptographically verifies* the Access JWT against
+   Cloudflare's JWKS before serving anything (`app/cloudflare_access.py`) —
+   it never just trusts a `Cf-Access-*` header because it's present. Copy the
+   Application's **Audience (AUD) Tag** and your team domain into `.env.prod`:
+   - `CF_ACCESS_TEAM_DOMAIN=myteam.cloudflareaccess.com`
+   - `CF_ACCESS_AUD=<the Application's AUD tag>`
+
+   Leaving these two unset keeps today's `HP_PANEL_TOKEN`-only gate exactly
+   as it was — this layer is additive, not a replacement for it yet
+   (individual user accounts and RBAC are NOC-018/NOC-019).
+5. Redeploy (`docker compose ... up -d`) so `cloudflared` (and, if you set
+   the Access variables, the panel itself) pick up the new configuration.
 
 Then just visit `https://<HP_ADMIN_HOST>` from anywhere — no SSH, no VPN, no
 published port.
@@ -228,6 +240,12 @@ docker compose --env-file .env.prod -f compose/docker-compose.prod.yml up -d
 Check `docker logs compose-cloudflared-1` — almost always a missing or
 invalid `CLOUDFLARE_TUNNEL_TOKEN`, or the Public Hostname in the Cloudflare
 dashboard not pointing at `admin:9001`.
+
+**Admin panel returns `401 Unauthorized` on every request (NOC-017):**
+`CF_ACCESS_TEAM_DOMAIN`/`CF_ACCESS_AUD` are set but don't match the Access
+Application actually in front of your Public Hostname — double check the
+Application's AUD tag in the Cloudflare dashboard against `.env.prod`. If
+you don't want this layer yet, unset both variables and redeploy.
 
 **Admin panel shows old UI after update:**
 ```bash
