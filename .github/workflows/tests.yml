@@ -87,3 +87,12 @@ jobs:
 
       - name: validate
         run: terraform -chdir=terraform/hetzner validate
+
+      - name: fmt check (terraform/cloudflare, NOC-034)
+        run: terraform -chdir=terraform/cloudflare fmt -check -diff
+
+      - name: init (no backend, no real credentials needed)
+        run: terraform -chdir=terraform/cloudflare init -backend=false
+
+      - name: validate
+        run: terraform -chdir=terraform/cloudflare validate

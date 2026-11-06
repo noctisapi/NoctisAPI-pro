@@ -208,7 +208,16 @@ The admin port is never published on any interface. It's reached exclusively
 through a per-installation Cloudflare Tunnel (`cloudflared`, NOC-016) — without
 one configured, there is no public route to it at all.
 
-One-time setup, per installation:
+`terraform/cloudflare/` (NOC-034) automates steps 1–4 below — the tunnel,
+its ingress route, and the Access application/policy — for a Managed
+instance. See that module's README for usage; its `tunnel_token` output
+feeds step 3's `CLOUDFLARE_TUNNEL_TOKEN`, and `access_application_aud`
+feeds step 4's `CF_ACCESS_AUD`. Creating identity providers in the Zero
+Trust dashboard is still a one-time, account-wide manual prerequisite
+either way. Steps 5 and 6 (redeploy, first operator account) are not
+automated by that module.
+
+Manual one-time setup, per installation (if not using that module):
 
 1. In the [Cloudflare Zero Trust dashboard](https://one.dash.cloudflare.com/),
    go to **Networks → Tunnels → Create a tunnel**, choose the "Cloudflared"
