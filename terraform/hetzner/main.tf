@@ -16,6 +16,28 @@ locals {
   # unique/reconciliation key (used in labels above); this is just what
   # shows up in the Hetzner console.
   name_prefix = "noctisapi-${substr(var.deployment_id, 0, 12)}"
+
+  # NOC-033: rendered only when enable_cloud_init -- see variables.tf's
+  # "KNOWN LIMITATION" note on why every value here (sensitive or not)
+  # ends up in this module's local Terraform state regardless.
+  cloud_init = var.enable_cloud_init ? templatefile("${path.module}/templates/cloud-init.yaml.tftpl", {
+    admin_ssh_user          = var.admin_ssh_user
+    ssh_public_key          = var.ssh_public_key
+    git_repo_url            = var.git_repo_url
+    git_deploy_token        = var.git_deploy_token
+    ghcr_token              = var.ghcr_token
+    hp_image                = var.hp_image
+    app_version             = var.app_version
+    hp_public_host          = var.hp_public_host
+    hp_admin_host           = var.hp_admin_host
+    acme_email              = var.acme_email
+    cloudflare_tunnel_token = var.cloudflare_tunnel_token
+    deployment_id           = var.deployment_id
+    customer_id             = var.customer_id
+    region                  = var.region
+    sizing                  = var.sizing
+    plan                    = var.plan
+  }) : null
 }
 
 resource "hcloud_ssh_key" "this" {
@@ -63,6 +85,7 @@ resource "hcloud_server" "this" {
   location     = var.region
   ssh_keys     = [hcloud_ssh_key.this.id]
   firewall_ids = [hcloud_firewall.this.id]
+  user_data    = local.cloud_init
   labels       = local.labels
 
   # "Destroy no borra sin controles": a bare `terraform destroy` against
