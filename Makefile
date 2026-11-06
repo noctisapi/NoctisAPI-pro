@@ -5,7 +5,7 @@ COMPOSE_PROD=docker compose -f compose/docker-compose.prod.yml --env-file .env.p
 COMPOSE_MANAGED=docker compose -f compose/docker-compose.prod.yml -f compose/docker-compose.managed.yml --env-file .env.prod
 ALEMBIC=alembic
 
-.PHONY: dev-up dev-logs dev-down prod-pull prod-up prod-logs upgrade verify managed-pull managed-up managed-logs managed-down managed-upgrade managed-verify db-upgrade db-revision db-history
+.PHONY: dev-up dev-logs dev-down prod-pull prod-up prod-logs upgrade verify deployer-help managed-pull managed-up managed-logs managed-down managed-upgrade managed-verify db-upgrade db-revision db-history
 
 dev-up:
 	$(COMPOSE_DEV) up -d --build
@@ -39,6 +39,11 @@ upgrade:
 # ops_monitor's ongoing cron checks.
 verify:
 	python scripts/verify.py
+
+# NOC-035: private Managed PRO operator CLI. Deploy/status/verify require
+# customer-specific arguments; use this target to inspect its safe interface.
+deployer-help:
+	python scripts/deployer.py --help
 
 managed-pull:
 	$(COMPOSE_MANAGED) pull

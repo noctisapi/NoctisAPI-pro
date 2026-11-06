@@ -42,16 +42,47 @@ DNS elsewhere, or don't control the zone in this Cloudflare account):
   -var "vps_ipv4=<terraform/hetzner's server_ipv4 output>"
 ```
 
-## Not wired to terraform/hetzner automatically
+## Operator CLI (NOC-035)
 
-This module and `terraform/hetzner/` are independent, standalone
-modules, applied as two separate steps (in either order, but the
-Hetzner one needs this one's `tunnel_token` output, and this one's
-`cloudflare_zero_trust_tunnel_cloudflared_config` ingress always points
-at `http://admin:9001` regardless of which VPS is actually behind the
-tunnel -- there is no cross-module reference). A single root module
-composing both is a reasonable thing for a future CLI (NOC-035) to do;
-out of scope here.
+The modules remain independently stateful, but the private operator CLI now
+composes them in the safe order: Cloudflare Tunnel/Access first, Hetzner VPS
+and cloud-init second, then the optional public DNS record once the VPS IPv4
+exists. The same `deployment_id` and per-deployment local state directory are
+used on retries, so a failed retry reconciles instead of creating a second
+instance.
+
+```bash
+export HCLOUD_TOKEN=...                 # never pass as a CLI argument
+export CLOUDFLARE_API_TOKEN=...         # never pass as a CLI argument
+export GIT_DEPLOY_TOKEN=...             # read by Terraform from the environment
+python scripts/deployer.py deploy \
+  --customer-id acme-01 --region nbg1 --sizing cx22 \
+  --public-host api.example.com --admin-host admin.example.com \
+  --acme-email ops@example.com --app-version 1.5.0 \
+  --ssh-public-key-file ~/.ssh/id_ed25519.pub \
+  --ssh-private-key-file ~/.ssh/id_ed25519 \
+  --ssh-allowed-cidr 203.0.113.4/32 \
+  --cloudflare-account-id <account-id> \
+  --access-email ops@example.com
+```
+
+Use `--dry-run` to validate both Terraform modules without contacting the
+providers. `status` and `verify` read the saved state and use the SSH key to
+inspect the managed VPS. New host keys are accepted only when the explicit
+`--accept-new-host-key` flag is supplied.
+
+The CLI never prints secret values or puts them in subprocess arguments. The
+Terraform state is still local and sensitive until NOC-038 provides the
+encrypted remote backend and secrets-manager integration.
+
+## Manual module usage
+
+This module and `terraform/hetzner/` are independent, standalone modules.
+The CLI composes them without turning them into one Terraform root module:
+the Hetzner apply consumes this module's sensitive `tunnel_token`, and a
+second Cloudflare apply adds the public DNS record after Hetzner returns the
+VPS IPv4. The tunnel ingress still points at `http://admin:9001` inside the
+managed stack, as required by the deployment architecture.
 
 ## "Un cliente no obtiene acceso a consola de otro"
 

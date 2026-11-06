@@ -45,7 +45,7 @@ just never commit one that contains `ssh_public_key`, `cloudflare_tunnel_token`,
 |---|---|
 | The VM, its firewall, labels/tags, optional extra block storage, and the outputs (IP, ids) a later step needs | DNS records, Cloudflare Tunnel/Access **dashboard-side** provisioning (NOC-034) -- you still create the tunnel by hand and pass its token in |
 | cloud-init bootstrap: Docker, a hardened non-root admin user, SSH hardening, cloning the repo, generating `.env.prod`, running `scripts/init_deployment.py`, `docker compose up`, installing the systemd unit, and a first local health check (`ops/vps/bootstrap-managed.sh`) | Creating the first admin-panel account (`scripts/panel_user.py`) -- deliberately left manual; see "Why the first admin account isn't automated" below |
-| Pinned, reproducible `terraform plan` | A CLI wrapping any of this (NOC-035) |
+| Pinned, reproducible `terraform plan` | Teardown, reconciliation and state protection beyond the private CLI (NOC-037/038) |
 | Minimal firewall: 22 (restricted to `ssh_allowed_cidrs`), 80, 443 only -- matches exactly what `compose/docker-compose.prod.yml` itself publishes | Actually tearing an instance down (NOC-037) |
 | `prevent_destroy` on the server/volume (see below) | Protecting Terraform state and the secrets embedded in `user_data` (NOC-038) -- see "Known limitation" below |
 | Local Terraform state | — |
