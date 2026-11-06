@@ -27,3 +27,8 @@ output "labels" {
   value       = local.labels
   description = "The label set applied to every resource this module creates -- useful for verifying 'costes por cliente identificables' without opening the console."
 }
+
+output "ssh_connection_hint" {
+  value       = var.enable_cloud_init ? "ssh ${var.admin_ssh_user}@${hcloud_server.this.ipv4_address}" : "ssh root@${hcloud_server.this.ipv4_address}"
+  description = "NOC-033: root SSH login is disabled once cloud-init's hardening applies -- use the created admin_ssh_user instead. Bootstrap itself (ops/vps/bootstrap-managed.sh) takes a few minutes after the server first boots; check /var/log/noctisapi-bootstrap.log and /opt/hp-app/.bootstrap-status over this connection to see whether it finished."
+}

@@ -230,6 +230,21 @@ class TestMainIntegration(unittest.TestCase):
     @patch("scripts.ops_monitor.check_backup_freshness")
     @patch("scripts.ops_monitor.check_disk")
     @patch("scripts.ops_monitor.check_containers")
+    def test_managed_flag_passes_both_compose_files(self, mock_containers, mock_disk, mock_backup):
+        """NOC-033: cloud-init's bootstrap-managed.sh first-check step
+        needs this to actually see the managed override's services."""
+        mock_containers.return_value = [ops_monitor.Check("container:app", True, "ok")]
+        mock_disk.return_value = ops_monitor.Check("disk", True, "ok")
+        mock_backup.return_value = ops_monitor.Check("backup_freshness", True, "ok")
+        with patch.object(sys, "argv", ["ops_monitor.py", "--skip-certificate", "--managed"]):
+            ops_monitor.main()
+        compose_files_arg = mock_containers.call_args[0][0]
+        self.assertEqual(len(compose_files_arg), 2)
+        self.assertEqual(compose_files_arg[1], ops_monitor._MANAGED_COMPOSE_FILE)
+
+    @patch("scripts.ops_monitor.check_backup_freshness")
+    @patch("scripts.ops_monitor.check_disk")
+    @patch("scripts.ops_monitor.check_containers")
     def test_all_passing_exits_zero(self, mock_containers, mock_disk, mock_backup):
         mock_containers.return_value = [ops_monitor.Check("container:app", True, "ok")]
         mock_disk.return_value = ops_monitor.Check("disk", True, "ok")

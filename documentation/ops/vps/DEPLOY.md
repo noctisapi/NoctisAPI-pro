@@ -4,17 +4,28 @@ Concrete, repeatable deployment flow for a single VPS with Docker + Traefik (ACM
 
 ---
 
-## 0. (Optional) Provision the VPS itself with Terraform (NOC-032)
+## 0. (Optional) Provision + bootstrap with Terraform (NOC-032/033)
 
 Everything from step 1 onward assumes a VPS already exists (any Ubuntu
-22.04+ host works, provisioned however you like). `terraform/hetzner/`
-can create one on Hetzner Cloud instead of doing it by hand in the
-console — the VM, SSH key, and a firewall allowing only 22 (restricted
-to your own CIDR), 80, and 443, which is exactly the same minimal set
-step 1's `ufw` rules open below. See that module's own README for usage,
-variables, and its `prevent_destroy` safety behavior. It only creates
-the bare VM; steps 1–13 below (Docker, the repo, `.env.prod`, etc.) still
-apply on top of it manually until NOC-033's cloud-init automates them.
+22.04+ host works, provisioned however you like) and walks through
+setting it up by hand over SSH. `terraform/hetzner/` automates both
+parts for a **Managed** instance: it creates the VM/firewall on Hetzner
+Cloud (SSH key, and a firewall allowing only 22 restricted to your own
+CIDR, 80, and 443 — the same minimal set step 1's `ufw` rules open
+below), and its cloud-init bootstrap (`ops/vps/bootstrap-managed.sh`)
+takes it the rest of the way to a running instance without any manual
+SSH steps: Docker, a hardened non-root admin user, cloning the repo,
+`.env.prod`, `scripts/init_deployment.py`, `docker compose up`, the
+systemd unit, and a first local health check.
+
+What's still manual either way: creating the Cloudflare Tunnel in the
+Zero Trust dashboard (step 8 below, NOC-034 will automate this) and
+creating the first admin-panel account (step 8 again — deliberately
+left manual; see the module's README). See `terraform/hetzner/README.md`
+for usage, every variable, its `prevent_destroy` safety behavior, and a
+known limitation around secrets in local Terraform state. Pass
+`enable_cloud_init = false` to fall back to NOC-032's original
+bare-VM-only behavior and do steps 1–13 below by hand instead.
 
 ---
 

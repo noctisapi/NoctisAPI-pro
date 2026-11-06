@@ -46,6 +46,7 @@ from typing import List, Optional, Tuple, Union
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _COMPOSE_FILE = _REPO_ROOT / "compose" / "docker-compose.prod.yml"
+_MANAGED_COMPOSE_FILE = _REPO_ROOT / "compose" / "docker-compose.managed.yml"
 
 # Services with no healthcheck of their own -- judged by exit code instead.
 _ONE_SHOT_SERVICES = {"migrate", "traefik-config"}
@@ -210,6 +211,10 @@ def send_alert(webhook_url: str, failures: List[Check]) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--compose-file", type=Path, default=_COMPOSE_FILE)
+    parser.add_argument(
+        "--managed", action="store_true",
+        help="NOC-033: also layer compose/docker-compose.managed.yml, same pattern as upgrade.py/verify.py --managed",
+    )
     parser.add_argument("--env-file", type=Path, default=_REPO_ROOT / ".env.prod")
     parser.add_argument("--backup-dir", type=Path, default=_REPO_ROOT / "backups")
     parser.add_argument("--host", default=os.getenv("HP_PUBLIC_HOST", "").strip())
@@ -218,10 +223,12 @@ def main() -> int:
     parser.add_argument("--skip-backup-freshness", action="store_true")
     args = parser.parse_args()
 
+    compose_files = [args.compose_file] + ([_MANAGED_COMPOSE_FILE] if args.managed else [])
+
     checks: List[Check] = []
 
     if not args.skip_containers:
-        checks.extend(check_containers(args.compose_file, args.env_file))
+        checks.extend(check_containers(compose_files, args.env_file))
 
     checks.append(check_disk(args.backup_dir))
 
