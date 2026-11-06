@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Private operator CLI for Managed PRO deployments (NOC-035).
+Private operator CLI for Managed PRO deployments (NOC-035/NOC-036).
 
 The CLI deliberately orchestrates the already-reviewed building blocks:
 
@@ -8,6 +8,8 @@ The CLI deliberately orchestrates the already-reviewed building blocks:
 * Terraform Hetzner creates the VPS and passes the tunnel token to cloud-init.
 * cloud-init runs the application bootstrap and writes ``.bootstrap-status``.
 * the existing ``scripts/verify.py`` is the final deployment gate.
+* upgrade, backup, suspend, and resume reuse the reviewed VPS procedures and
+  record non-secret outcomes in the deployment manifest.
 
 Secret values are accepted only through environment variables and are never
 included in subprocess arguments or log output. Terraform state remains local
@@ -34,6 +36,10 @@ _DEFAULT_MANIFEST = _REPO_ROOT / "compose" / "secrets" / "deployment-manifest.js
 _DEFAULT_STATE_ROOT = _REPO_ROOT / "compose" / "secrets" / "deployer-state"
 _CLOUDFLARE_DIR = _REPO_ROOT / "terraform" / "cloudflare"
 _HETZNER_DIR = _REPO_ROOT / "terraform" / "hetzner"
+_REMOTE_ROOT = "/opt/hp-app"
+_REMOTE_ENV_FILE = f"{_REMOTE_ROOT}/.env.prod"
+_REMOTE_PROD_COMPOSE = f"{_REMOTE_ROOT}/compose/docker-compose.prod.yml"
+_REMOTE_MANAGED_COMPOSE = f"{_REMOTE_ROOT}/compose/docker-compose.managed.yml"
 
 sys.path.insert(0, str(_REPO_ROOT))
 from scripts import deployment_manifest as manifest_lib  # noqa: E402
@@ -324,6 +330,49 @@ def _remote_status_command() -> str:
     )
 
 
+def _remote_compose_command(*args: str) -> str:
+    command = [
+        "sudo", "-n", "docker", "compose",
+        "-f", _REMOTE_PROD_COMPOSE,
+        "-f", _REMOTE_MANAGED_COMPOSE,
+        "--env-file", _REMOTE_ENV_FILE,
+        *args,
+    ]
+    return " ".join(shlex.quote(str(value)) for value in command)
+
+
+def _remote_upgrade_command(approved_version: str, *, force: bool) -> str:
+    command = [
+        "sudo", "-n", "python3", f"{_REMOTE_ROOT}/scripts/upgrade.py",
+        "--managed", "--env-file", _REMOTE_ENV_FILE,
+        "--backup-dir", f"{_REMOTE_ROOT}/backups",
+        "--manifest", f"{_REMOTE_ROOT}/compose/secrets/deployment-manifest.json",
+        "--expected-version", approved_version,
+    ]
+    if force:
+        command.append("--force")
+    return " ".join(shlex.quote(str(value)) for value in command)
+
+
+def _remote_backup_command() -> str:
+    return " ".join([
+        "sudo", "-n", "env",
+        f"BACKUP_DIR={shlex.quote(f'{_REMOTE_ROOT}/backups')}",
+        f"COMPOSE_FILE={shlex.quote(_REMOTE_PROD_COMPOSE)}",
+        f"MANAGED_COMPOSE_FILE={shlex.quote(_REMOTE_MANAGED_COMPOSE)}",
+        f"ENV_FILE={shlex.quote(_REMOTE_ENV_FILE)}",
+        f"{_REMOTE_ROOT}/backup_sqlite.sh",
+    ])
+
+
+def _remote_suspend_command() -> str:
+    return _remote_compose_command("stop", "app", "admin")
+
+
+def _remote_resume_command(config: DeploymentConfig, host: str) -> str:
+    return f"{_remote_compose_command('up', '-d', 'app', 'admin')} && {_remote_verify_command(config, host, host)}"
+
+
 def _wait_for_ssh(runner: CommandRunner, config: DeploymentConfig, host: str) -> subprocess.CompletedProcess[str]:
     last: Optional[DeployerError] = None
     for attempt in range(1, config.ssh_attempts + 1):
@@ -556,6 +605,232 @@ def verify(
     return 0
 
 
+def _operator_context(
+    *,
+    manifest_path: Path,
+    state_dir: Optional[Path],
+    ssh_private_key: Path,
+    ssh_user: str,
+    accept_new_host_key: bool,
+) -> tuple[DeploymentPaths, dict, DeploymentConfig, str, CommandRunner]:
+    manifest_probe = _load_manifest(manifest_path)
+    deployment_id = manifest_probe.get("deployment_id")
+    if not deployment_id:
+        raise DeployerError("manifest has no deployment_id")
+    paths = _paths_for(manifest_path, deployment_id, state_dir)
+    manifest = _read_deployment(paths)
+    config = DeploymentConfig(
+        customer_id=manifest.get("customer_id", ""), region=manifest.get("region", ""),
+        sizing=manifest.get("sizing", ""), public_host=manifest.get("hp_public_host", ""),
+        admin_host=manifest.get("hp_admin_host", ""), acme_email="", app_version="",
+        ssh_public_key="", ssh_private_key=ssh_private_key, ssh_user=ssh_user,
+        ssh_allowed_cidrs=[], cloudflare_account_id="", access_allowed_emails=[],
+        accept_new_host_key=accept_new_host_key,
+    )
+    runner = CommandRunner()
+    ip = _terraform_output(runner, _HETZNER_DIR, paths.hetzner_state, "server_ipv4", secrets=())
+    return paths, manifest, config, ip, runner
+
+
+def _record_operation(manifest_path: Path, operation: str, result: str, detail: str = "") -> None:
+    manifest = _load_manifest(manifest_path)
+    manifest_lib.stamp_schema(manifest)
+    history = manifest.setdefault("operation_history", [])
+    entry = {"timestamp": _utc_now(), "operation": operation, "result": result}
+    if detail:
+        entry["detail"] = detail[:500]
+    history.append(entry)
+    del history[:-20]
+    _write_json(manifest_path, manifest)
+
+
+def _set_manifest_status(manifest_path: Path, status: manifest_lib.DeploymentStatus, reason: str) -> None:
+    manifest = _load_manifest(manifest_path)
+    manifest_lib.stamp_schema(manifest)
+    manifest_lib.set_status(manifest, status, reason=reason)
+    _write_json(manifest_path, manifest)
+
+
+def _operation_detail(result: subprocess.CompletedProcess[str]) -> str:
+    detail = (result.stderr or result.stdout or "").strip()
+    if not detail:
+        return f"remote exit code {result.returncode}"
+    return f"remote exit code {result.returncode}: {detail[-420:]}"
+
+
+def _require_confirmation(confirm: bool, operation: str) -> None:
+    if not confirm:
+        raise DeployerError(f"{operation} requires --confirm because it changes instance state")
+
+
+def _validate_approved_version(version: str) -> str:
+    value = version.strip()
+    if not value or value == "latest" or any(char.isspace() for char in value):
+        raise DeployerError("approved version must be a non-empty immutable tag, not 'latest'")
+    return value
+
+
+def upgrade_instance(
+    *,
+    manifest_path: Path,
+    state_dir: Optional[Path],
+    ssh_private_key: Path,
+    ssh_user: str,
+    accept_new_host_key: bool,
+    approved_version: str,
+    confirm: bool,
+    force: bool,
+) -> int:
+    _require_confirmation(confirm, "upgrade")
+    approved_version = _validate_approved_version(approved_version)
+    paths, manifest, config, ip, runner = _operator_context(
+        manifest_path=manifest_path, state_dir=state_dir, ssh_private_key=ssh_private_key,
+        ssh_user=ssh_user, accept_new_host_key=accept_new_host_key,
+    )
+    current = manifest.get("status")
+    if current not in {manifest_lib.DeploymentStatus.ACTIVE.value, manifest_lib.DeploymentStatus.DEGRADED.value}:
+        raise DeployerError(f"upgrade requires an active or degraded deployment, found {current!r}")
+    _set_manifest_status(paths.manifest, manifest_lib.DeploymentStatus.UPGRADING, "operator upgrade started")
+    try:
+        result = runner.run(
+            _ssh_args(config, ip, _remote_upgrade_command(approved_version, force=force)),
+            label=f"remote upgrade to {approved_version}", timeout=900, check=False,
+        )
+        detail = _operation_detail(result)
+        if result.returncode == 0:
+            _set_manifest_status(paths.manifest, manifest_lib.DeploymentStatus.ACTIVE, "operator upgrade verified")
+            _record_operation(paths.manifest, "upgrade", "succeeded", detail)
+            return 0
+        if result.returncode == 2:
+            _set_manifest_status(paths.manifest, manifest_lib.DeploymentStatus.ACTIVE, "operator upgrade precondition failed")
+            _record_operation(paths.manifest, "upgrade", "aborted", detail)
+            print(f"[deployer] upgrade aborted: {detail}", file=sys.stderr)
+            return 2
+        _set_manifest_status(paths.manifest, manifest_lib.DeploymentStatus.DEGRADED, "operator upgrade failed or rolled back")
+        _record_operation(paths.manifest, "upgrade", "failed", detail)
+        raise DeployerError(f"remote upgrade failed: {detail}")
+    except DeployerError:
+        raise
+    except Exception as exc:
+        _set_manifest_status(paths.manifest, manifest_lib.DeploymentStatus.DEGRADED, "operator upgrade command failed")
+        _record_operation(paths.manifest, "upgrade", "failed", str(exc))
+        raise DeployerError(str(exc)) from exc
+
+
+def backup_instance(
+    *,
+    manifest_path: Path,
+    state_dir: Optional[Path],
+    ssh_private_key: Path,
+    ssh_user: str,
+    accept_new_host_key: bool,
+) -> int:
+    paths, manifest, config, ip, runner = _operator_context(
+        manifest_path=manifest_path, state_dir=state_dir, ssh_private_key=ssh_private_key,
+        ssh_user=ssh_user, accept_new_host_key=accept_new_host_key,
+    )
+    if manifest.get("status") not in {
+        manifest_lib.DeploymentStatus.ACTIVE.value,
+        manifest_lib.DeploymentStatus.DEGRADED.value,
+        manifest_lib.DeploymentStatus.SUSPENDED.value,
+    }:
+        raise DeployerError(f"backup requires an active, degraded, or suspended deployment, found {manifest.get('status')!r}")
+    try:
+        result = runner.run(
+            _ssh_args(config, ip, _remote_backup_command()),
+            label="remote encrypted backup", timeout=300, check=False,
+        )
+        detail = _operation_detail(result)
+        if result.returncode == 0:
+            _record_operation(paths.manifest, "backup", "succeeded", detail)
+            return 0
+        _record_operation(paths.manifest, "backup", "failed", detail)
+        raise DeployerError(f"remote backup failed: {detail}")
+    except DeployerError:
+        raise
+    except Exception as exc:
+        _record_operation(paths.manifest, "backup", "failed", str(exc))
+        raise DeployerError(str(exc)) from exc
+
+
+def suspend_instance(
+    *,
+    manifest_path: Path,
+    state_dir: Optional[Path],
+    ssh_private_key: Path,
+    ssh_user: str,
+    accept_new_host_key: bool,
+    confirm: bool,
+) -> int:
+    _require_confirmation(confirm, "suspend")
+    paths, manifest, config, ip, runner = _operator_context(
+        manifest_path=manifest_path, state_dir=state_dir, ssh_private_key=ssh_private_key,
+        ssh_user=ssh_user, accept_new_host_key=accept_new_host_key,
+    )
+    current = manifest.get("status")
+    if current == manifest_lib.DeploymentStatus.SUSPENDED.value:
+        _record_operation(paths.manifest, "suspend", "noop", "already suspended")
+        return 0
+    if current not in {manifest_lib.DeploymentStatus.ACTIVE.value, manifest_lib.DeploymentStatus.DEGRADED.value}:
+        raise DeployerError(f"suspend requires an active or degraded deployment, found {current!r}")
+    try:
+        result = runner.run(
+            _ssh_args(config, ip, _remote_suspend_command()),
+            label="remote suspend (stop app and admin only)", timeout=120, check=False,
+        )
+        detail = _operation_detail(result)
+        if result.returncode == 0:
+            _set_manifest_status(paths.manifest, manifest_lib.DeploymentStatus.SUSPENDED, "operator suspend completed")
+            _record_operation(paths.manifest, "suspend", "succeeded", detail)
+            return 0
+        _record_operation(paths.manifest, "suspend", "failed", detail)
+        raise DeployerError(f"remote suspend failed: {detail}")
+    except DeployerError:
+        raise
+    except Exception as exc:
+        _record_operation(paths.manifest, "suspend", "failed", str(exc))
+        raise DeployerError(str(exc)) from exc
+
+
+def resume_instance(
+    *,
+    manifest_path: Path,
+    state_dir: Optional[Path],
+    ssh_private_key: Path,
+    ssh_user: str,
+    accept_new_host_key: bool,
+    confirm: bool,
+) -> int:
+    _require_confirmation(confirm, "resume")
+    paths, manifest, config, ip, runner = _operator_context(
+        manifest_path=manifest_path, state_dir=state_dir, ssh_private_key=ssh_private_key,
+        ssh_user=ssh_user, accept_new_host_key=accept_new_host_key,
+    )
+    current = manifest.get("status")
+    if current == manifest_lib.DeploymentStatus.ACTIVE.value:
+        _record_operation(paths.manifest, "resume", "noop", "already active")
+        return 0
+    if current != manifest_lib.DeploymentStatus.SUSPENDED.value:
+        raise DeployerError(f"resume requires a suspended deployment, found {current!r}")
+    try:
+        result = runner.run(
+            _ssh_args(config, ip, _remote_resume_command(config, ip)),
+            label="remote resume and verification", timeout=360, check=False,
+        )
+        detail = _operation_detail(result)
+        if result.returncode == 0:
+            _set_manifest_status(paths.manifest, manifest_lib.DeploymentStatus.ACTIVE, "operator resume verified")
+            _record_operation(paths.manifest, "resume", "succeeded", detail)
+            return 0
+        _record_operation(paths.manifest, "resume", "failed", detail)
+        raise DeployerError(f"remote resume failed: {detail}")
+    except DeployerError:
+        raise
+    except Exception as exc:
+        _record_operation(paths.manifest, "resume", "failed", str(exc))
+        raise DeployerError(str(exc)) from exc
+
+
 def _add_remote_options(parser: argparse.ArgumentParser, *, required_key: bool) -> None:
     parser.add_argument("--manifest", type=Path, default=_DEFAULT_MANIFEST)
     parser.add_argument("--state-dir", type=Path)
@@ -600,6 +875,23 @@ def _parser() -> argparse.ArgumentParser:
 
     verify_parser = sub.add_parser("verify", help="Run the full remote post-install verification")
     _add_remote_options(verify_parser, required_key=True)
+
+    upgrade_parser = sub.add_parser("upgrade", help="Run an approved managed upgrade with automatic rollback")
+    _add_remote_options(upgrade_parser, required_key=True)
+    upgrade_parser.add_argument("--approved-version", required=True, help="Immutable image tag already configured on the instance")
+    upgrade_parser.add_argument("--confirm", action="store_true", help="Confirm the service-changing operation")
+    upgrade_parser.add_argument("--force", action="store_true", help="Allow a migration explicitly marked irreversible")
+
+    backup_parser = sub.add_parser("backup", help="Create and record an encrypted remote backup")
+    _add_remote_options(backup_parser, required_key=True)
+
+    suspend_parser = sub.add_parser("suspend", help="Stop app/admin without deleting data")
+    _add_remote_options(suspend_parser, required_key=True)
+    suspend_parser.add_argument("--confirm", action="store_true", help="Confirm the service-changing operation")
+
+    resume_parser = sub.add_parser("resume", help="Start a suspended instance and verify it")
+    _add_remote_options(resume_parser, required_key=True)
+    resume_parser.add_argument("--confirm", action="store_true", help="Confirm the service-changing operation")
     return parser
 
 
@@ -636,6 +928,31 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 manifest_path=args.manifest, state_dir=args.state_dir,
                 ssh_private_key=args.ssh_private_key_file, ssh_user=args.ssh_user,
                 accept_new_host_key=args.accept_new_host_key,
+            )
+        if args.command == "upgrade":
+            return upgrade_instance(
+                manifest_path=args.manifest, state_dir=args.state_dir,
+                ssh_private_key=args.ssh_private_key_file, ssh_user=args.ssh_user,
+                accept_new_host_key=args.accept_new_host_key,
+                approved_version=args.approved_version, confirm=args.confirm, force=args.force,
+            )
+        if args.command == "backup":
+            return backup_instance(
+                manifest_path=args.manifest, state_dir=args.state_dir,
+                ssh_private_key=args.ssh_private_key_file, ssh_user=args.ssh_user,
+                accept_new_host_key=args.accept_new_host_key,
+            )
+        if args.command == "suspend":
+            return suspend_instance(
+                manifest_path=args.manifest, state_dir=args.state_dir,
+                ssh_private_key=args.ssh_private_key_file, ssh_user=args.ssh_user,
+                accept_new_host_key=args.accept_new_host_key, confirm=args.confirm,
+            )
+        if args.command == "resume":
+            return resume_instance(
+                manifest_path=args.manifest, state_dir=args.state_dir,
+                ssh_private_key=args.ssh_private_key_file, ssh_user=args.ssh_user,
+                accept_new_host_key=args.accept_new_host_key, confirm=args.confirm,
             )
         raise DeployerError(f"unknown command: {args.command}")
     except DeployerError as exc:
