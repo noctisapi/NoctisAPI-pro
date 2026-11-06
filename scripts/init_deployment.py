@@ -44,6 +44,13 @@ from typing import Callable, Tuple
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _DEFAULT_SECRETS_DIR = _REPO_ROOT / "compose" / "secrets"
 
+# NOC-031: needed so `from scripts.deployment_manifest import ...` resolves
+# when this file is run directly (`python scripts/init_deployment.py`) --
+# otherwise sys.path[0] is just scripts/ itself, with no `scripts` package
+# visible to import from. Same bootstrap scripts/upgrade.py, verify.py and
+# ops_monitor.py already use for the same reason.
+sys.path.insert(0, str(_REPO_ROOT))
+
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
@@ -82,13 +89,36 @@ def load_manifest(path: Path) -> dict:
     return {"deployment_id": uuid.uuid4().hex, "created_at": _utc_now()}
 
 
-def update_manifest(path: Path, *, public_host: str, admin_host: str) -> dict:
+def update_manifest(
+    path: Path,
+    *,
+    public_host: str,
+    admin_host: str,
+    customer_id: str = "",
+    region: str = "",
+    sizing: str = "",
+    plan: str = "",
+) -> dict:
     manifest = load_manifest(path)
     manifest["updated_at"] = _utc_now()
     if public_host:
         manifest["hp_public_host"] = public_host
     if admin_host:
         manifest["hp_admin_host"] = admin_host
+    if customer_id:
+        manifest["customer_id"] = customer_id
+    if region:
+        manifest["region"] = region
+    if sizing:
+        manifest["sizing"] = sizing
+    if plan:
+        manifest["plan"] = plan
+    # NOC-031: stamp schema_version/status on every write so a manifest
+    # written before this Issue (schema_version absent) is upgraded in
+    # place the next time any deploy/upgrade touches it.
+    from scripts.deployment_manifest import stamp_schema
+
+    stamp_schema(manifest)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return manifest
@@ -99,6 +129,10 @@ def main() -> int:
     parser.add_argument("--secrets-dir", default=str(_DEFAULT_SECRETS_DIR))
     parser.add_argument("--public-host", default=os.getenv("HP_PUBLIC_HOST", "").strip())
     parser.add_argument("--admin-host", default=os.getenv("HP_ADMIN_HOST", "").strip())
+    parser.add_argument("--customer-id", default="", help="NOC-031: operator-assigned, empty for self-hosted")
+    parser.add_argument("--region", default="", help="NOC-031: free-form, meaning is Deployer-defined (NOC-032)")
+    parser.add_argument("--sizing", default="", help="NOC-031: free-form tier label (e.g. 'small')")
+    parser.add_argument("--plan", default="", help="NOC-031: free-form commercial plan label")
     parser.add_argument(
         "--force-regenerate-seed",
         action="store_true",
@@ -143,8 +177,14 @@ def main() -> int:
         )
     print(f"backup_encryption_key.txt: {backup_key_status} ({backup_key_path})")
 
-    manifest = update_manifest(manifest_path, public_host=args.public_host, admin_host=args.admin_host)
-    print(f"deployment-manifest.json: deployment_id={manifest['deployment_id']} ({manifest_path})")
+    manifest = update_manifest(
+        manifest_path, public_host=args.public_host, admin_host=args.admin_host,
+        customer_id=args.customer_id, region=args.region, sizing=args.sizing, plan=args.plan,
+    )
+    print(
+        f"deployment-manifest.json: deployment_id={manifest['deployment_id']} "
+        f"schema_version={manifest['schema_version']} status={manifest['status']} ({manifest_path})"
+    )
 
     return 0
 

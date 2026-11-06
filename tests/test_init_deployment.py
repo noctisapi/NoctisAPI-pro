@@ -137,6 +137,45 @@ class TestManifest:
         assert manifest["hp_public_host"] == "api.example.com"
         assert "deployment_id" in manifest
 
+    def test_every_write_is_stamped_with_schema_version_and_status(self, tmp_path):
+        """NOC-031: every manifest write, including ones predating this
+        Issue, ends up with schema_version/status filled in."""
+        path = tmp_path / "deployment-manifest.json"
+        manifest = init_deployment.update_manifest(path, public_host="api.example.com", admin_host="")
+        assert manifest["schema_version"] == 1
+        assert manifest["status"] == "active"
+
+    def test_customer_id_region_sizing_plan_are_set_when_given(self, tmp_path):
+        path = tmp_path / "deployment-manifest.json"
+        manifest = init_deployment.update_manifest(
+            path, public_host="api.example.com", admin_host="",
+            customer_id="acme-01", region="eu-west", sizing="small", plan="pro",
+        )
+        assert manifest["customer_id"] == "acme-01"
+        assert manifest["region"] == "eu-west"
+        assert manifest["sizing"] == "small"
+        assert manifest["plan"] == "pro"
+
+    def test_unset_new_fields_on_a_later_call_do_not_erase_previously_set_ones(self, tmp_path):
+        path = tmp_path / "deployment-manifest.json"
+        init_deployment.update_manifest(
+            path, public_host="api.example.com", admin_host="", customer_id="acme-01", region="eu-west",
+        )
+        second = init_deployment.update_manifest(path, public_host="api.example.com", admin_host="")
+        assert second["customer_id"] == "acme-01"
+        assert second["region"] == "eu-west"
+
+    def test_a_manifest_predating_this_issue_gets_stamped_in_place(self, tmp_path):
+        """A manifest written by NOC-025/NOC-029 before schema_version
+        existed must gain it (and a sensible default status) the next
+        time it's touched, not be rejected or reset."""
+        path = tmp_path / "deployment-manifest.json"
+        path.write_text(json.dumps({"deployment_id": "abc123", "created_at": "2026-01-01T00:00:00Z"}), encoding="utf-8")
+        manifest = init_deployment.update_manifest(path, public_host="api.example.com", admin_host="")
+        assert manifest["deployment_id"] == "abc123"  # untouched
+        assert manifest["schema_version"] == 1
+        assert manifest["status"] == "active"
+
 
 class TestMainIntegration:
     def test_full_run_creates_both_files(self, tmp_path, monkeypatch):
