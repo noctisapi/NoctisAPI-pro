@@ -484,9 +484,10 @@ fields and `updated_at` refresh.
 (`make managed-*` targets layer both compose files with one `--env-file
 .env.prod`, same as `make prod-*` does for the self-hosted path.)
 
-**Rollback**: a Managed instance's only moving part on top of self-hosted
-is the pinned version, so rolling back is pointing `MANAGED_APP_VERSION`
-at the previous known-good tag and recreating:
+**Upgrade/rollback**: prefer `make managed-upgrade` (§10, NOC-029) — it
+backs up first, checks for irreversible migrations, and rolls back
+automatically on failure, built on this same `MANAGED_APP_VERSION`
+pin. The fully manual path still works if you need it:
 
 ```bash
 sed -i 's/^MANAGED_APP_VERSION=.*/MANAGED_APP_VERSION=<previous-tag>/' .env.prod
@@ -494,9 +495,47 @@ make managed-pull
 make managed-up   # recreates app/admin/migrate on the previous image; data volumes are untouched
 ```
 
-This is a manual procedure for now — automated, verified upgrade/rollback
-with pre-flight checks is NOC-029's job, built on this same version-pin
-mechanism.
+---
+
+## 14. Post-install verification and runbooks (NOC-030)
+
+Run once right after a fresh deploy (or any time on demand) to get one
+clear pass/fail sweep across DNS, TLS, the public app, the admin
+console, file/container permissions, backup configuration, and network
+isolation — distinct from §11d's `ops_monitor.py`, which is the ongoing
+cron-based monitor once the instance has been running a while.
+
+```bash
+make verify            # self-hosted
+make managed-verify    # managed variant
+# equivalently:
+python scripts/verify.py --host "$HP_PUBLIC_HOST" --admin-host "$HP_ADMIN_HOST"
+```
+
+Exit codes: `0` every check passed, `1` one or more failed (see stderr
+for which), `2` usage error (no `--host`/`HP_PUBLIC_HOST`). It never
+reports success while any check has failed.
+
+### Runbook: common failures and recovery
+
+| Check | Symptom | Likely cause | Recovery |
+|---|---|---|---|
+| `dns:*` | DNS doesn't resolve | DNS not propagated yet, or wrong record at the registrar | Wait for propagation (can take up to 24-48h); re-check the A/AAAA record points at this VPS's IP |
+| `tls:*` | Certificate invalid/expiring | Port 80 not reachable for ACME's HTTP-01 challenge, or Let's Encrypt rate-limited | Confirm `80:80`/`443:443` are open in the VPS firewall (step 1); check `docker compose logs traefik` for ACME errors |
+| `app:*` | `/health` unreachable or non-200 | Traefik/app not running, or DNS points elsewhere | `docker compose ps`; `docker compose logs app`; re-run DNS/TLS checks first — this check assumes those already passed |
+| `console:*` unreachable, HTTP 502/503/504 | Cloudflare Tunnel is not connected | Bad/expired `CLOUDFLARE_TUNNEL_TOKEN`, or `cloudflared` crash-looping | `docker compose logs cloudflared`; regenerate the tunnel token in the Zero Trust dashboard (step 8) |
+| `console:*` HTTP 200 without a login/Access redirect | **Critical**: the console may be exposed without authentication | A regression in `_PanelAuthMiddleware`/Cloudflare Access config | Stop the admin service immediately (`docker compose stop admin`) and investigate before restarting; this should never happen |
+| `permissions:*.txt` | Wrong file mode | Manual edit, or restore from a backup that didn't preserve permissions | `chmod 600 compose/secrets/hp_seed.txt compose/secrets/backup_encryption_key.txt` |
+| `permissions:*_uid` | Wrong uid in a running container | A local override changed `user:`, or an old image predates NOC-013's hardening | Rebuild/redeploy from the current `compose/docker-compose.prod.yml` unmodified |
+| `backups:encryption_key` | Not configured | Fresh install, `scripts/init_deployment.py` not yet run (managed) or `HP_BACKUP_ENCRYPTION_KEY` not set (self-hosted) | Run `scripts/init_deployment.py` (managed) or set `HP_BACKUP_ENCRYPTION_KEY` in `.env.prod` (self-hosted, §3) |
+| `backups:cron` | Not installed | Step 11b skipped | `sudo cp ops/cron/noctisapi-backup /etc/cron.d/hp-app-backup` |
+| `backups:freshness` FAIL (not the "pending" pass) | Backup exists but is stale | Cron not firing, or `backup_sqlite.sh` failing | Check `/var/log/noctisapi-backup.log`; run `./backup_sqlite.sh` manually and read its output |
+| `isolation:docker_socket` | Socket mounted in a live container | A local compose override reintroduced it (NOC-008 regression) | Remove the override; `docker-compose.prod.yml` itself never mounts it |
+| `isolation:admin_no_published_ports` | Admin publishes a port | A local override added `ports:` to `admin` | Remove the override — admin must only be reachable through `cloudflared` (step 8) |
+
+A failure that isn't in this table, or doesn't resolve with the steps
+above: check the relevant section's own troubleshooting notes (§3b DNS,
+§8 admin console, §11b/§11c backups) before escalating.
 
 ---
 
