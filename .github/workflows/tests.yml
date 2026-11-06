@@ -67,3 +67,23 @@ jobs:
         run: |
           cp .env.staging.example .env.staging
           docker compose -f compose/docker-compose.staging.yml config --quiet
+
+  terraform-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+
+      - name: fmt check (terraform/hetzner, NOC-032)
+        run: terraform -chdir=terraform/hetzner fmt -check -diff
+
+      - name: init (no backend, no real credentials needed)
+        run: terraform -chdir=terraform/hetzner init -backend=false
+
+      - name: validate
+        run: terraform -chdir=terraform/hetzner validate
