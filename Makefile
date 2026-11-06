@@ -5,7 +5,7 @@ COMPOSE_PROD=docker compose -f compose/docker-compose.prod.yml --env-file .env.p
 COMPOSE_MANAGED=docker compose -f compose/docker-compose.prod.yml -f compose/docker-compose.managed.yml --env-file .env.prod
 ALEMBIC=alembic
 
-.PHONY: dev-up dev-logs dev-down prod-pull prod-up prod-logs upgrade managed-pull managed-up managed-logs managed-down managed-upgrade db-upgrade db-revision db-history
+.PHONY: dev-up dev-logs dev-down prod-pull prod-up prod-logs upgrade verify managed-pull managed-up managed-logs managed-down managed-upgrade managed-verify db-upgrade db-revision db-history
 
 dev-up:
 	$(COMPOSE_DEV) up -d --build
@@ -32,6 +32,14 @@ prod-logs:
 upgrade:
 	python scripts/upgrade.py
 
+# NOC-030: one-shot post-install sweep -- DNS, TLS, the public app, the
+# admin console (reachable AND gated), file/container permissions,
+# backup configuration, and network isolation. Run once right after a
+# fresh deploy, or any time on demand -- not a substitute for
+# ops_monitor's ongoing cron checks.
+verify:
+	python scripts/verify.py
+
 managed-pull:
 	$(COMPOSE_MANAGED) pull
 
@@ -46,6 +54,9 @@ managed-down:
 
 managed-upgrade:
 	python scripts/upgrade.py --managed
+
+managed-verify:
+	python scripts/verify.py --managed
 
 db-upgrade:
 	$(ALEMBIC) upgrade head
