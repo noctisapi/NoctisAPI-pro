@@ -315,6 +315,12 @@ def record_upgrade(
         manifest["previous_app_image"] = previous_image
         if digest:
             manifest["app_image_digest"] = digest
+    # NOC-031: stamp schema_version/status here too, in case this is the
+    # very first write to this manifest (upgrade.py run without
+    # init_deployment.py ever having run first).
+    from scripts.deployment_manifest import stamp_schema
+
+    stamp_schema(manifest)
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return manifest

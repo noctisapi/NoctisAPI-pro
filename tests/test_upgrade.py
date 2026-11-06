@@ -209,6 +209,20 @@ class TestRecordUpgrade(unittest.TestCase):
             self.assertEqual(len(manifest["upgrade_history"]), 1)
             self.assertEqual(manifest["upgrade_history"][0]["result"], "success")
 
+    def test_stamps_schema_version_and_status_even_on_a_brand_new_manifest(self):
+        """NOC-031: upgrade.py can be the very first writer of this
+        manifest (no prior init_deployment.py run) -- it must still end
+        up schema-compliant."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            manifest_path = Path(d) / "deployment-manifest.json"
+            manifest = upgrade.record_upgrade(
+                manifest_path, previous_image="repo/app:1.0.0", new_image="repo/app:2.0.0",
+                digest="", result="success",
+            )
+            self.assertEqual(manifest["schema_version"], 1)
+            self.assertEqual(manifest["status"], "active")
+
     def test_rolled_back_does_not_overwrite_app_image(self):
         import tempfile
         with tempfile.TemporaryDirectory() as d:
