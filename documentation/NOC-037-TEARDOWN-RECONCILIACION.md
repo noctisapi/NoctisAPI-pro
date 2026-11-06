@@ -22,7 +22,7 @@ python scripts/deployer.py teardown \
 2. Ejecuta un backup cifrado final sin borrar datos.
 3. Exporta los artefactos cifrados y `backup_encryption_key.txt` a una ruta de retención separada por deployment e instante UTC.
 4. Cambia el manifiesto a `decommissioning` y genera planes Terraform explícitos de destrucción.
-5. Solo los planes con `allow_destroy=true` pueden eliminar recursos; el valor normal es `false` y mantiene `prevent_destroy`.
+5. El Deployer copia los módulos a un directorio efímero de auditoría y retira únicamente las líneas literales `prevent_destroy = true` en esa copia; los módulos fuente mantienen siempre la protección y no aceptan una variable Terraform para desactivarla.
 6. Destruye Hetzner y después Cloudflare, verifica que ambos estados Terraform quedan sin recursos y marca el manifiesto como `decommissioned`.
 
 Si falla el backup, la exportación o el plan, el teardown no empieza. Si falla después de comenzar, se conserva el manifiesto en `decommissioning`, el estado Terraform y el registro de operación para reanudar/reconciliar de forma explícita.

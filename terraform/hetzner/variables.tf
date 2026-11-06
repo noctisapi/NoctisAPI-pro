@@ -15,12 +15,6 @@ variable "deployment_id" {
   }
 }
 
-variable "allow_destroy" {
-  description = "NOC-037: explicit teardown gate. Keep false for normal plans; the controlled Deployer teardown is the only caller that may set true."
-  type        = bool
-  default     = false
-}
-
 variable "customer_id" {
   description = "Operator-assigned customer identifier, for tagging/cost-tracking. Empty for a self-hosted (non-managed) deployment."
   type        = string

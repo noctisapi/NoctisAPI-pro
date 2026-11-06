@@ -250,4 +250,5 @@ def test_teardown_records_success_only_after_empty_states(tmp_path, monkeypatch)
     assert manifest["status"] == "decommissioned"
     assert manifest["operation_history"][-1]["result"] == "succeeded"
     assert destroy.call_count == 2
-    assert all(call.args[3]["allow_destroy"] is True for call in destroy.call_args_list)
+    assert all("teardown-modules" in str(call.args[1]) for call in destroy.call_args_list)
+    assert all("allow_destroy" not in call.args[3] for call in destroy.call_args_list)

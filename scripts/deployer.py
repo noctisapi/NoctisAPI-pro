@@ -23,6 +23,7 @@ import argparse
 import json
 import os
 import shlex
+import shutil
 import stat
 import subprocess
 import sys
@@ -320,6 +321,26 @@ def _terraform_state_is_empty(
     resources = [line.strip() for line in result.stdout.splitlines() if line.strip()]
     if resources:
         raise DeployerError(f"{label} Terraform state still contains resources: {', '.join(resources[:8])}")
+
+
+def _controlled_destroy_module(module: Path, state_dir: Path, *, expected_guards: int) -> Path:
+    """Create an auditable, disposable module copy with only destroy guards removed."""
+    copy_root = state_dir / "teardown-modules" / f"{module.name}-{uuid.uuid4().hex}"
+    copy_root.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(module, copy_root, ignore=shutil.ignore_patterns(".terraform", "*.tfstate*", "*.tfplan"))
+    main_file = copy_root / "main.tf"
+    try:
+        source = main_file.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise DeployerError(f"cannot prepare controlled {module.name} teardown module: {exc}") from exc
+    guard = "    prevent_destroy = true\n"
+    guard_count = source.count(guard)
+    if guard_count != expected_guards:
+        raise DeployerError(
+            f"refusing {module.name} teardown: expected {expected_guards} destroy guards, found {guard_count}"
+        )
+    main_file.write_text(source.replace(guard, ""), encoding="utf-8")
+    return copy_root
 
 
 def _terraform_output(runner: CommandRunner, module: Path, state_path: Path, name: str, *, secrets: Iterable[str]) -> str:
@@ -1014,11 +1035,12 @@ def teardown_instance(
             "HCLOUD_TOKEN": _secret_env("HCLOUD_TOKEN"),
             "CLOUDFLARE_API_TOKEN": _secret_env("CLOUDFLARE_API_TOKEN"),
         }
-        _terraform_init(runner, _HETZNER_DIR, paths, dry_run=False)
-        _terraform_init(runner, _CLOUDFLARE_DIR, paths, dry_run=False)
+        hetzner_destroy_module = _controlled_destroy_module(_HETZNER_DIR, paths.state_dir, expected_guards=2)
+        cloudflare_destroy_module = _controlled_destroy_module(_CLOUDFLARE_DIR, paths.state_dir, expected_guards=3)
+        _terraform_init(runner, hetzner_destroy_module, paths, dry_run=False)
+        _terraform_init(runner, cloudflare_destroy_module, paths, dry_run=False)
         hetzner_vars = {
             "deployment_id": deployment_id,
-            "allow_destroy": True,
             "enable_cloud_init": False,
             "ssh_public_key": public_key,
             "ssh_allowed_cidrs": ssh_allowed_cidrs,
@@ -1027,20 +1049,19 @@ def teardown_instance(
             "account_id": cloudflare_account_id,
             "deployment_id": deployment_id,
             "admin_hostname": manifest.get("hp_admin_host", ""),
-            "allow_destroy": True,
         }
         _terraform_destroy_plan_apply(
-            runner, _HETZNER_DIR, paths.hetzner_state, hetzner_vars,
+            runner, hetzner_destroy_module, paths.hetzner_state, hetzner_vars,
             {"HCLOUD_TOKEN": secret_values["HCLOUD_TOKEN"]},
             timeout=900, label="Hetzner teardown",
         )
-        _terraform_state_is_empty(runner, _HETZNER_DIR, paths.hetzner_state, label="Hetzner")
+        _terraform_state_is_empty(runner, hetzner_destroy_module, paths.hetzner_state, label="Hetzner")
         _terraform_destroy_plan_apply(
-            runner, _CLOUDFLARE_DIR, paths.cloudflare_state, cloudflare_vars,
+            runner, cloudflare_destroy_module, paths.cloudflare_state, cloudflare_vars,
             {"CLOUDFLARE_API_TOKEN": secret_values["CLOUDFLARE_API_TOKEN"]},
             timeout=900, label="Cloudflare teardown",
         )
-        _terraform_state_is_empty(runner, _CLOUDFLARE_DIR, paths.cloudflare_state, label="Cloudflare")
+        _terraform_state_is_empty(runner, cloudflare_destroy_module, paths.cloudflare_state, label="Cloudflare")
         _set_manifest_status(paths.manifest, manifest_lib.DeploymentStatus.DECOMMISSIONED, "Terraform states verified empty")
         _record_operation(paths.manifest, "teardown", "succeeded", "retention exported; Terraform states empty")
         return 0
