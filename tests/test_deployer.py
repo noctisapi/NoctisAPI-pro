@@ -6,8 +6,9 @@ Terraform providers, Docker, a VPS, or Cloudflare.
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -90,3 +91,95 @@ def test_deploy_failure_is_recorded_and_secret_is_redacted(tmp_path, monkeypatch
     saved = json.loads(manifest.read_text(encoding="utf-8"))
     assert saved["status"] == manifest_lib.DeploymentStatus.FAILED.value
     assert secret not in capsys.readouterr().out
+
+
+def _operator_fixture(tmp_path: Path, *, status: str = "active"):
+    manifest_path = tmp_path / "deployment-manifest.json"
+    manifest_path.write_text(json.dumps({
+        "deployment_id": "deployment-1",
+        "created_at": "2026-01-01T00:00:00Z",
+        "schema_version": 1,
+        "status": status,
+        "customer_id": "acme-01",
+        "region": "nbg1",
+        "sizing": "cx22",
+        "hp_public_host": "api.example.com",
+        "hp_admin_host": "admin.example.com",
+    }), encoding="utf-8")
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    paths = deployer.DeploymentPaths(
+        manifest=manifest_path,
+        state_dir=state_dir,
+        cloudflare_state=state_dir / "cloudflare.tfstate",
+        hetzner_state=state_dir / "hetzner.tfstate",
+    )
+    paths.hetzner_state.write_text("{}", encoding="utf-8")
+    config = _config(tmp_path, private_key=True)
+    runner = MagicMock()
+    return paths, config, runner
+
+
+def test_operator_commands_have_no_secret_and_use_managed_compose(tmp_path):
+    config = _config(tmp_path, private_key=True)
+    upgrade_command = deployer._remote_upgrade_command("1.2.3", force=False)
+    backup_command = deployer._remote_backup_command()
+    resume_command = deployer._remote_resume_command(config, "203.0.113.10")
+
+    assert "--expected-version 1.2.3" in upgrade_command
+    assert "MANAGED_COMPOSE_FILE" in backup_command
+    assert "docker compose" in resume_command
+    assert "GIT_DEPLOY_TOKEN" not in upgrade_command
+    assert "CLOUDFLARE_API_TOKEN" not in backup_command
+
+
+def test_upgrade_requires_confirmation_and_records_success(tmp_path):
+    paths, config, runner = _operator_fixture(tmp_path)
+    runner.run.return_value = subprocess.CompletedProcess([], 0, "", "backup: ok")
+    with patch("scripts.deployer._operator_context", return_value=(paths, json.loads(paths.manifest.read_text()), config, "203.0.113.10", runner)):
+        with pytest.raises(deployer.DeployerError, match="--confirm"):
+            deployer.upgrade_instance(
+                manifest_path=paths.manifest, state_dir=paths.state_dir,
+                ssh_private_key=config.ssh_private_key, ssh_user=config.ssh_user,
+                accept_new_host_key=False, approved_version="1.2.3", confirm=False, force=False,
+            )
+        assert deployer.upgrade_instance(
+            manifest_path=paths.manifest, state_dir=paths.state_dir,
+            ssh_private_key=config.ssh_private_key, ssh_user=config.ssh_user,
+            accept_new_host_key=False, approved_version="1.2.3", confirm=True, force=False,
+        ) == 0
+
+    manifest = json.loads(paths.manifest.read_text(encoding="utf-8"))
+    assert manifest["status"] == "active"
+    assert manifest["operation_history"][-1]["result"] == "succeeded"
+    remote_command = runner.run.call_args.args[0][-1]
+    assert "--expected-version 1.2.3" in remote_command
+
+
+def test_suspend_and_resume_are_reversible_and_idempotent(tmp_path):
+    paths, config, runner = _operator_fixture(tmp_path)
+    runner.run.return_value = subprocess.CompletedProcess([], 0, "", "ok")
+    def current_context(**_kwargs):
+        return paths, json.loads(paths.manifest.read_text()), config, "203.0.113.10", runner
+
+    with patch("scripts.deployer._operator_context", side_effect=current_context):
+        assert deployer.suspend_instance(
+            manifest_path=paths.manifest, state_dir=paths.state_dir,
+            ssh_private_key=config.ssh_private_key, ssh_user=config.ssh_user,
+            accept_new_host_key=False, confirm=True,
+        ) == 0
+        assert json.loads(paths.manifest.read_text())["status"] == "suspended"
+        assert deployer.suspend_instance(
+            manifest_path=paths.manifest, state_dir=paths.state_dir,
+            ssh_private_key=config.ssh_private_key, ssh_user=config.ssh_user,
+            accept_new_host_key=False, confirm=True,
+        ) == 0
+        assert deployer.resume_instance(
+            manifest_path=paths.manifest, state_dir=paths.state_dir,
+            ssh_private_key=config.ssh_private_key, ssh_user=config.ssh_user,
+            accept_new_host_key=False, confirm=True,
+        ) == 0
+
+    manifest = json.loads(paths.manifest.read_text(encoding="utf-8"))
+    assert manifest["status"] == "active"
+    assert [entry["result"] for entry in manifest["operation_history"]] == ["succeeded", "noop", "succeeded"]

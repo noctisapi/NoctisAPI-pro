@@ -44,6 +44,16 @@ class TestTargetImage(unittest.TestCase):
         self.assertEqual(upgrade.target_image([Path("x.yml")], Path(".env"), "app"), "repo/app:2.0.0")
 
 
+class TestApprovedTarget(unittest.TestCase):
+    def test_accepts_exact_or_tagged_image(self):
+        self.assertTrue(upgrade.approved_target("repo/app:2.0.0", "2.0.0"))
+        self.assertTrue(upgrade.approved_target("repo/app@sha256:abc", "repo/app@sha256:abc"))
+
+    def test_rejects_latest_or_mismatched_tag(self):
+        self.assertFalse(upgrade.approved_target("repo/app:latest", "latest"))
+        self.assertFalse(upgrade.approved_target("repo/app:2.0.0", "2.1.0"))
+
+
 class TestResolveDigest(unittest.TestCase):
     @patch("scripts.upgrade._run")
     def test_returns_digest_when_available(self, mock_run):

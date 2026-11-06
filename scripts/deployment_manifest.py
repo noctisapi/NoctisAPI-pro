@@ -36,6 +36,8 @@ partially filled during early rollout):
                    degraded, being torn down), not billing status.
   app_image / previous_app_image / app_image_digest / upgrade_history
                    written by scripts/upgrade.py (NOC-029), unchanged here.
+  operation_history  non-secret outcome records for operator actions such
+                     as backup, upgrade, suspend, and resume (NOC-036).
 
 Sin secretos (acceptance criterion): validate_manifest() enforces this
 mechanically, not just by convention -- it rejects any key whose name
@@ -64,7 +66,7 @@ _STRING_FIELDS = (
     "customer_id", "region", "sizing", "plan", "hp_public_host", "hp_admin_host",
     "app_image", "previous_app_image", "app_image_digest",
 )
-_LIST_FIELDS = ("upgrade_history", "status_history")
+_LIST_FIELDS = ("upgrade_history", "status_history", "operation_history")
 
 
 class DeploymentStatus(str, Enum):
@@ -96,7 +98,8 @@ _VALID_TRANSITIONS: Dict[DeploymentStatus, Set[DeploymentStatus]] = {
     },
     DeploymentStatus.UPGRADING: {DeploymentStatus.ACTIVE, DeploymentStatus.DEGRADED, DeploymentStatus.FAILED},
     DeploymentStatus.DEGRADED: {
-        DeploymentStatus.ACTIVE, DeploymentStatus.SUSPENDED, DeploymentStatus.DECOMMISSIONING,
+        DeploymentStatus.ACTIVE, DeploymentStatus.UPGRADING,
+        DeploymentStatus.SUSPENDED, DeploymentStatus.DECOMMISSIONING,
     },
     DeploymentStatus.SUSPENDED: {DeploymentStatus.ACTIVE, DeploymentStatus.DECOMMISSIONING},
     DeploymentStatus.DECOMMISSIONING: {DeploymentStatus.DECOMMISSIONED, DeploymentStatus.FAILED},

@@ -187,6 +187,14 @@ def irreversible_gate(pending: List[Dict[str, object]], *, force: bool) -> Optio
     return None
 
 
+def approved_target(image: str, expected_version: str) -> bool:
+    """Return whether a resolved image carries the operator-approved tag."""
+    expected = expected_version.strip()
+    if not expected or expected == "latest" or any(char.isspace() for char in expected):
+        return False
+    return image == expected or image.endswith(f":{expected}")
+
+
 def resolved_volumes(compose_files: List[Path], env_file: Path) -> Dict[str, str]:
     cfg = compose_config(compose_files, env_file)
     return {
@@ -363,6 +371,11 @@ def _rollback(
         _, _, previous_tag = previous_image.rpartition(":")
         rollback_env = dict(os.environ)
         rollback_env["APP_VERSION"] = previous_tag
+        # Managed Compose resolves MANAGED_APP_VERSION after the base
+        # Compose file, so setting APP_VERSION alone would silently bring
+        # the failed target back during rollback.
+        if _MANAGED_COMPOSE in compose_files:
+            rollback_env["MANAGED_APP_VERSION"] = previous_tag
         _run(
             _compose_cmd(compose_files, env_file, ["up", "-d", "migrate", "app", "admin"]),
             env=rollback_env, timeout=180, check=False,
@@ -403,6 +416,10 @@ def main() -> int:
         "--skip-backup", action="store_true",
         help="Testing only -- an automated rollback cannot restore data without a backup",
     )
+    parser.add_argument(
+        "--expected-version", default="",
+        help="Abort unless the resolved target image has this approved immutable tag",
+    )
     args = parser.parse_args()
 
     compose_files = [_PROD_COMPOSE] + ([_MANAGED_COMPOSE] if args.managed else [])
@@ -420,6 +437,14 @@ def main() -> int:
     if previous_image == new_image:
         print(f"[upgrade] already running {new_image} -- nothing to do.", file=sys.stderr)
         return 0
+
+    if args.expected_version and not approved_target(new_image, args.expected_version):
+        print(
+            f"[upgrade] ABORTED: resolved target {new_image!r} does not match "
+            f"approved version {args.expected_version!r}",
+            file=sys.stderr,
+        )
+        return 2
 
     print(f"[upgrade] {previous_image} -> {new_image}", file=sys.stderr)
 

@@ -4,6 +4,7 @@ set -euo pipefail
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKUP_DIR="${BACKUP_DIR:-$PROJECT_ROOT/backups}"
 COMPOSE_FILE="${COMPOSE_FILE:-$PROJECT_ROOT/compose/docker-compose.prod.yml}"
+MANAGED_COMPOSE_FILE="${MANAGED_COMPOSE_FILE:-}"
 ENV_FILE="${ENV_FILE:-$PROJECT_ROOT/.env.prod}"
 APP_DB_PATH="${APP_DB_PATH:-/data/honeypot.db}"
 KEEP_DAYS="${KEEP_DAYS:-14}"
@@ -23,7 +24,11 @@ chmod 700 "${BACKUP_DIR}" || true
 # a fresh EMPTY volume with that name, so a wrong guess looks like a
 # successful backup of nothing.
 _compose_config() {
-  docker compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" config --format json
+  local files=(-f "${COMPOSE_FILE}")
+  if [[ -n "${MANAGED_COMPOSE_FILE}" ]]; then
+    files+=(-f "${MANAGED_COMPOSE_FILE}")
+  fi
+  docker compose "${files[@]}" --env-file "${ENV_FILE}" config --format json
 }
 
 DATA_VOLUME="$(_compose_config | python3 -c "import json,sys; print(json.load(sys.stdin)['volumes']['hp_prod_data']['name'])")"
