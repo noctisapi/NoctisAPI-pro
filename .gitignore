@@ -58,3 +58,18 @@ scripts/probe_actor_flow.py
 # Build / cache
 build/
 # dist/ is intentionally tracked — customer-facing deploy files
+
+# NOC-032: Terraform local state/cache and any tfvars file (likely to
+# hold ssh_public_key or other per-customer values) — never committed.
+# .terraform.lock.hcl IS committed deliberately (pins the exact provider
+# build Terraform resolved, part of "plan reproducible").
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json

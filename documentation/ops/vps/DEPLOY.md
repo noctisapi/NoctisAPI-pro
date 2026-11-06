@@ -4,6 +4,20 @@ Concrete, repeatable deployment flow for a single VPS with Docker + Traefik (ACM
 
 ---
 
+## 0. (Optional) Provision the VPS itself with Terraform (NOC-032)
+
+Everything from step 1 onward assumes a VPS already exists (any Ubuntu
+22.04+ host works, provisioned however you like). `terraform/hetzner/`
+can create one on Hetzner Cloud instead of doing it by hand in the
+console — the VM, SSH key, and a firewall allowing only 22 (restricted
+to your own CIDR), 80, and 443, which is exactly the same minimal set
+step 1's `ufw` rules open below. See that module's own README for usage,
+variables, and its `prevent_destroy` safety behavior. It only creates
+the bare VM; steps 1–13 below (Docker, the repo, `.env.prod`, etc.) still
+apply on top of it manually until NOC-033's cloud-init automates them.
+
+---
+
 ## 1. System prep
 
 ```bash
