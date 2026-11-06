@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Private operator CLI for Managed PRO deployments (NOC-035/NOC-036).
+Private operator CLI for Managed PRO deployments (NOC-035/NOC-036/NOC-037).
 
 The CLI deliberately orchestrates the already-reviewed building blocks:
 
@@ -10,6 +10,8 @@ The CLI deliberately orchestrates the already-reviewed building blocks:
 * the existing ``scripts/verify.py`` is the final deployment gate.
 * upgrade, backup, suspend, and resume reuse the reviewed VPS procedures and
   record non-secret outcomes in the deployment manifest.
+* reconcile is read-only; teardown requires an exact deployment id, retention
+  export, two confirmations, and an explicit Terraform destroy gate.
 
 Secret values are accepted only through environment variables and are never
 included in subprocess arguments or log output. Terraform state remains local
@@ -21,6 +23,7 @@ import argparse
 import json
 import os
 import shlex
+import shutil
 import stat
 import subprocess
 import sys
@@ -279,6 +282,67 @@ def _terraform_plan_apply(
         )
 
 
+def _terraform_destroy_plan_apply(
+    runner: CommandRunner,
+    module: Path,
+    state_path: Path,
+    variables: Dict[str, object],
+    secret_env: Dict[str, str],
+    *,
+    timeout: int,
+    label: str,
+) -> None:
+    """Generate and apply a destroy plan only after the explicit gate is set."""
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    data_dir = state_path.parent / f".terraform-{module.name}"
+    environment = _terraform_env(secret_env, data_dir=data_dir)
+    plan_path = state_path.with_suffix(".destroy.tfplan")
+    plan_args = [
+        f"-chdir={module}", "plan", "-destroy", "-input=false", "-lock-timeout=30s",
+        f"-state={state_path}", f"-out={plan_path}", *_tf_var_args(variables),
+    ]
+    runner.run(plan_args, label=f"{label}: destroy plan", timeout=timeout, env=environment)
+    runner.run(
+        [f"-chdir={module}", "apply", "-input=false", "-auto-approve", f"-state={state_path}", str(plan_path)],
+        label=f"{label}: destroy apply",
+        timeout=timeout,
+        env=environment,
+    )
+
+
+def _terraform_state_is_empty(
+    runner: CommandRunner, module: Path, state_path: Path, *, label: str,
+) -> None:
+    result = runner.run(
+        [f"-chdir={module}", "state", "list", f"-state={state_path}"],
+        label=f"verify empty Terraform state ({label})",
+        timeout=120,
+    )
+    resources = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    if resources:
+        raise DeployerError(f"{label} Terraform state still contains resources: {', '.join(resources[:8])}")
+
+
+def _controlled_destroy_module(module: Path, state_dir: Path, *, expected_guards: int) -> Path:
+    """Create an auditable, disposable module copy with only destroy guards removed."""
+    copy_root = state_dir / "teardown-modules" / f"{module.name}-{uuid.uuid4().hex}"
+    copy_root.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(module, copy_root, ignore=shutil.ignore_patterns(".terraform", "*.tfstate*", "*.tfplan"))
+    main_file = copy_root / "main.tf"
+    try:
+        source = main_file.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise DeployerError(f"cannot prepare controlled {module.name} teardown module: {exc}") from exc
+    guard = "    prevent_destroy = true\n"
+    guard_count = source.count(guard)
+    if guard_count != expected_guards:
+        raise DeployerError(
+            f"refusing {module.name} teardown: expected {expected_guards} destroy guards, found {guard_count}"
+        )
+    main_file.write_text(source.replace(guard, ""), encoding="utf-8")
+    return copy_root
+
+
 def _terraform_output(runner: CommandRunner, module: Path, state_path: Path, name: str, *, secrets: Iterable[str]) -> str:
     result = runner.run(
         [f"-chdir={module}", "output", "-raw", f"-state={state_path}", name],
@@ -371,6 +435,16 @@ def _remote_suspend_command() -> str:
 
 def _remote_resume_command(config: DeploymentConfig, host: str) -> str:
     return f"{_remote_compose_command('up', '-d', 'app', 'admin')} && {_remote_verify_command(config, host, host)}"
+
+
+def _scp_args(config: DeploymentConfig, host: str, source: str, destination: Path) -> List[str]:
+    if not config.ssh_private_key:
+        raise DeployerError("an SSH private key is required for retention export")
+    args = ["scp", "-q", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
+    if config.accept_new_host_key:
+        args.extend(["-o", "StrictHostKeyChecking=accept-new"])
+    args.extend(["-i", str(config.ssh_private_key), f"{config.ssh_user}@{host}:{source}", str(destination)])
+    return args
 
 
 def _wait_for_ssh(runner: CommandRunner, config: DeploymentConfig, host: str) -> subprocess.CompletedProcess[str]:
@@ -831,6 +905,174 @@ def resume_instance(
         raise DeployerError(str(exc)) from exc
 
 
+def _export_retention(
+    runner: CommandRunner, config: DeploymentConfig, host: str, retention_dir: Path,
+) -> Path:
+    retention_dir.mkdir(parents=True, exist_ok=False)
+    runner.run(
+        _scp_args(config, host, f"{_REMOTE_ROOT}/backups", retention_dir),
+        label="export encrypted backups to retention storage", timeout=300,
+    )
+    runner.run(
+        _scp_args(config, host, f"{_REMOTE_ROOT}/compose/secrets/backup_encryption_key.txt", retention_dir / "backup_encryption_key.txt"),
+        label="export backup key to retention storage", timeout=120,
+    )
+    try:
+        os.chmod(retention_dir / "backup_encryption_key.txt", stat.S_IRUSR | stat.S_IWUSR)
+    except OSError:
+        pass
+    return retention_dir
+
+
+def _state_resource_count(payload: dict) -> int:
+    def walk(module: dict) -> int:
+        count = len(module.get("resources", []))
+        return count + sum(walk(child) for child in module.get("child_modules", []))
+
+    return walk(payload.get("values", {}).get("root_module", {}))
+
+
+def reconcile_instance(*, manifest_path: Path, state_dir: Optional[Path]) -> int:
+    manifest_probe = _load_manifest(manifest_path)
+    deployment_id = manifest_probe.get("deployment_id")
+    if not deployment_id:
+        raise DeployerError("manifest has no deployment_id")
+    paths = _paths_for(manifest_path, deployment_id, state_dir)
+    manifest = _read_deployment(paths)
+    runner = CommandRunner()
+    if manifest.get("status") == manifest_lib.DeploymentStatus.DECOMMISSIONED.value:
+        _terraform_state_is_empty(runner, _HETZNER_DIR, paths.hetzner_state, label="Hetzner")
+        _terraform_state_is_empty(runner, _CLOUDFLARE_DIR, paths.cloudflare_state, label="Cloudflare")
+        print(json.dumps({"deployment_id": deployment_id, "status": "decommissioned", "resources": 0}, sort_keys=True))
+        return 0
+
+    counts = {}
+    for label, module, state_path in (
+        ("Hetzner", _HETZNER_DIR, paths.hetzner_state),
+        ("Cloudflare", _CLOUDFLARE_DIR, paths.cloudflare_state),
+    ):
+        result = runner.run(
+            [f"-chdir={module}", "show", "-json", f"-state={state_path}"],
+            label=f"inspect {label} Terraform state", timeout=120,
+        )
+        try:
+            payload = json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            raise DeployerError(f"{label} Terraform state is not valid JSON") from exc
+        resource_count = _state_resource_count(payload)
+        if resource_count == 0:
+            raise DeployerError(f"{label} Terraform state has no resources for deployment_id={deployment_id}")
+        serialized = json.dumps(payload, sort_keys=True)
+        short_id = deployment_id[:12]
+        if deployment_id not in serialized and short_id not in serialized:
+            raise DeployerError(f"{label} Terraform state does not identify deployment_id={deployment_id}")
+        counts[label.lower()] = resource_count
+    _record_operation(manifest_path, "reconcile", "succeeded", f"resources={counts}")
+    print(json.dumps({"deployment_id": deployment_id, "status": manifest.get("status"), "resources": counts}, sort_keys=True))
+    return 0
+
+
+def teardown_instance(
+    *,
+    manifest_path: Path,
+    state_dir: Optional[Path],
+    ssh_private_key: Path,
+    ssh_user: str,
+    accept_new_host_key: bool,
+    deployment_id: str,
+    retention_dir: Path,
+    cloudflare_account_id: str,
+    ssh_public_key_file: Path,
+    ssh_allowed_cidrs: List[str],
+    confirm: bool,
+    confirm_deletion: bool,
+) -> int:
+    _require_confirmation(confirm, "teardown")
+    if not confirm_deletion:
+        raise DeployerError("teardown requires --confirm-deletion as the second deletion gate")
+    paths, manifest, config, ip, runner = _operator_context(
+        manifest_path=manifest_path, state_dir=state_dir, ssh_private_key=ssh_private_key,
+        ssh_user=ssh_user, accept_new_host_key=accept_new_host_key,
+    )
+    if deployment_id != manifest.get("deployment_id"):
+        raise DeployerError("deployment_id must exactly match the manifest; refusing ambiguous teardown")
+    current = manifest.get("status")
+    if current == manifest_lib.DeploymentStatus.DECOMMISSIONED.value:
+        _record_operation(paths.manifest, "teardown", "noop", "already decommissioned")
+        return 0
+    if current not in {
+        manifest_lib.DeploymentStatus.ACTIVE.value,
+        manifest_lib.DeploymentStatus.DEGRADED.value,
+        manifest_lib.DeploymentStatus.SUSPENDED.value,
+        manifest_lib.DeploymentStatus.DECOMMISSIONING.value,
+    }:
+        raise DeployerError(f"teardown requires an active, degraded, suspended, or decommissioning deployment, found {current!r}")
+
+    try:
+        if current != manifest_lib.DeploymentStatus.DECOMMISSIONING.value:
+            backup_result = runner.run(
+                _ssh_args(config, ip, _remote_backup_command()),
+                label="final encrypted backup before teardown", timeout=300, check=False,
+            )
+            if backup_result.returncode != 0:
+                detail = _operation_detail(backup_result)
+                _record_operation(paths.manifest, "teardown", "failed", f"backup: {detail}")
+                raise DeployerError(f"final backup failed; teardown was not started: {detail}")
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            export_path = retention_dir.resolve() / deployment_id / stamp
+            _export_retention(runner, config, ip, export_path)
+            _set_manifest_status(paths.manifest, manifest_lib.DeploymentStatus.DECOMMISSIONING, "final backup exported")
+
+        try:
+            public_key = ssh_public_key_file.read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            raise DeployerError(f"cannot read SSH public key: {exc}") from exc
+        if not public_key:
+            raise DeployerError("SSH public key must not be empty")
+        if not ssh_allowed_cidrs:
+            raise DeployerError("at least one SSH allowed CIDR is required")
+        secret_values = {
+            "HCLOUD_TOKEN": _secret_env("HCLOUD_TOKEN"),
+            "CLOUDFLARE_API_TOKEN": _secret_env("CLOUDFLARE_API_TOKEN"),
+        }
+        hetzner_destroy_module = _controlled_destroy_module(_HETZNER_DIR, paths.state_dir, expected_guards=2)
+        cloudflare_destroy_module = _controlled_destroy_module(_CLOUDFLARE_DIR, paths.state_dir, expected_guards=3)
+        _terraform_init(runner, hetzner_destroy_module, paths, dry_run=False)
+        _terraform_init(runner, cloudflare_destroy_module, paths, dry_run=False)
+        hetzner_vars = {
+            "deployment_id": deployment_id,
+            "enable_cloud_init": False,
+            "ssh_public_key": public_key,
+            "ssh_allowed_cidrs": ssh_allowed_cidrs,
+        }
+        cloudflare_vars = {
+            "account_id": cloudflare_account_id,
+            "deployment_id": deployment_id,
+            "admin_hostname": manifest.get("hp_admin_host", ""),
+        }
+        _terraform_destroy_plan_apply(
+            runner, hetzner_destroy_module, paths.hetzner_state, hetzner_vars,
+            {"HCLOUD_TOKEN": secret_values["HCLOUD_TOKEN"]},
+            timeout=900, label="Hetzner teardown",
+        )
+        _terraform_state_is_empty(runner, hetzner_destroy_module, paths.hetzner_state, label="Hetzner")
+        _terraform_destroy_plan_apply(
+            runner, cloudflare_destroy_module, paths.cloudflare_state, cloudflare_vars,
+            {"CLOUDFLARE_API_TOKEN": secret_values["CLOUDFLARE_API_TOKEN"]},
+            timeout=900, label="Cloudflare teardown",
+        )
+        _terraform_state_is_empty(runner, cloudflare_destroy_module, paths.cloudflare_state, label="Cloudflare")
+        _set_manifest_status(paths.manifest, manifest_lib.DeploymentStatus.DECOMMISSIONED, "Terraform states verified empty")
+        _record_operation(paths.manifest, "teardown", "succeeded", "retention exported; Terraform states empty")
+        return 0
+    except DeployerError:
+        _record_operation(paths.manifest, "teardown", "failed", "teardown stopped; review plan/audit state")
+        raise
+    except Exception as exc:
+        _record_operation(paths.manifest, "teardown", "failed", str(exc))
+        raise DeployerError(str(exc)) from exc
+
+
 def _add_remote_options(parser: argparse.ArgumentParser, *, required_key: bool) -> None:
     parser.add_argument("--manifest", type=Path, default=_DEFAULT_MANIFEST)
     parser.add_argument("--state-dir", type=Path)
@@ -892,6 +1134,20 @@ def _parser() -> argparse.ArgumentParser:
     resume_parser = sub.add_parser("resume", help="Start a suspended instance and verify it")
     _add_remote_options(resume_parser, required_key=True)
     resume_parser.add_argument("--confirm", action="store_true", help="Confirm the service-changing operation")
+
+    reconcile_parser = sub.add_parser("reconcile", help="Verify Terraform state belongs to the exact deployment_id")
+    reconcile_parser.add_argument("--manifest", type=Path, default=_DEFAULT_MANIFEST)
+    reconcile_parser.add_argument("--state-dir", type=Path)
+
+    teardown_parser = sub.add_parser("teardown", help="Backup, export retention, and destroy one exact deployment")
+    _add_remote_options(teardown_parser, required_key=True)
+    teardown_parser.add_argument("--deployment-id", required=True, help="Must exactly match the manifest deployment_id")
+    teardown_parser.add_argument("--retention-dir", type=Path, required=True, help="Local protected directory for encrypted backups and key")
+    teardown_parser.add_argument("--cloudflare-account-id", required=True)
+    teardown_parser.add_argument("--ssh-public-key-file", type=Path, required=True)
+    teardown_parser.add_argument("--ssh-allowed-cidr", action="append", dest="ssh_allowed_cidrs", required=True)
+    teardown_parser.add_argument("--confirm", action="store_true", help="Confirm the service-changing operation")
+    teardown_parser.add_argument("--confirm-deletion", action="store_true", help="Second explicit gate for irreversible deletion")
     return parser
 
 
@@ -953,6 +1209,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 manifest_path=args.manifest, state_dir=args.state_dir,
                 ssh_private_key=args.ssh_private_key_file, ssh_user=args.ssh_user,
                 accept_new_host_key=args.accept_new_host_key, confirm=args.confirm,
+            )
+        if args.command == "reconcile":
+            return reconcile_instance(manifest_path=args.manifest, state_dir=args.state_dir)
+        if args.command == "teardown":
+            return teardown_instance(
+                manifest_path=args.manifest, state_dir=args.state_dir,
+                ssh_private_key=args.ssh_private_key_file, ssh_user=args.ssh_user,
+                accept_new_host_key=args.accept_new_host_key,
+                deployment_id=args.deployment_id, retention_dir=args.retention_dir,
+                cloudflare_account_id=args.cloudflare_account_id,
+                ssh_public_key_file=args.ssh_public_key_file,
+                ssh_allowed_cidrs=args.ssh_allowed_cidrs,
+                confirm=args.confirm, confirm_deletion=args.confirm_deletion,
             )
         raise DeployerError(f"unknown command: {args.command}")
     except DeployerError as exc:

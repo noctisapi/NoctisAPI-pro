@@ -183,3 +183,72 @@ def test_suspend_and_resume_are_reversible_and_idempotent(tmp_path):
     manifest = json.loads(paths.manifest.read_text(encoding="utf-8"))
     assert manifest["status"] == "active"
     assert [entry["result"] for entry in manifest["operation_history"]] == ["succeeded", "noop", "succeeded"]
+
+
+def test_teardown_requires_two_confirmation_gates(tmp_path):
+    paths, config, runner = _operator_fixture(tmp_path)
+    with pytest.raises(deployer.DeployerError, match="--confirm"):
+        deployer.teardown_instance(
+            manifest_path=paths.manifest, state_dir=paths.state_dir,
+            ssh_private_key=config.ssh_private_key, ssh_user=config.ssh_user,
+            accept_new_host_key=False, deployment_id="deployment-1",
+            retention_dir=tmp_path / "retention", cloudflare_account_id="account-1",
+            ssh_public_key_file=tmp_path / "missing.pub", ssh_allowed_cidrs=["203.0.113.4/32"],
+            confirm=False, confirm_deletion=False,
+        )
+    with pytest.raises(deployer.DeployerError, match="--confirm-deletion"):
+        deployer.teardown_instance(
+            manifest_path=paths.manifest, state_dir=paths.state_dir,
+            ssh_private_key=config.ssh_private_key, ssh_user=config.ssh_user,
+            accept_new_host_key=False, deployment_id="deployment-1",
+            retention_dir=tmp_path / "retention", cloudflare_account_id="account-1",
+            ssh_public_key_file=tmp_path / "missing.pub", ssh_allowed_cidrs=["203.0.113.4/32"],
+            confirm=True, confirm_deletion=False,
+        )
+
+
+def test_teardown_rejects_identifier_that_is_not_the_manifest_id(tmp_path):
+    paths, config, runner = _operator_fixture(tmp_path)
+    public_key = tmp_path / "id_ed25519.pub"
+    public_key.write_text("ssh-ed25519 AAAA test", encoding="utf-8")
+    context = (paths, json.loads(paths.manifest.read_text()), config, "203.0.113.10", runner)
+    with patch("scripts.deployer._operator_context", return_value=context):
+        with pytest.raises(deployer.DeployerError, match="exactly match"):
+            deployer.teardown_instance(
+                manifest_path=paths.manifest, state_dir=paths.state_dir,
+                ssh_private_key=config.ssh_private_key, ssh_user=config.ssh_user,
+                accept_new_host_key=False, deployment_id="wrong-id",
+                retention_dir=tmp_path / "retention", cloudflare_account_id="account-1",
+                ssh_public_key_file=public_key, ssh_allowed_cidrs=["203.0.113.4/32"],
+                confirm=True, confirm_deletion=True,
+            )
+
+
+def test_teardown_records_success_only_after_empty_states(tmp_path, monkeypatch):
+    paths, config, runner = _operator_fixture(tmp_path)
+    public_key = tmp_path / "id_ed25519.pub"
+    public_key.write_text("ssh-ed25519 AAAA test", encoding="utf-8")
+    runner.run.return_value = subprocess.CompletedProcess([], 0, "", "ok")
+    context = (paths, json.loads(paths.manifest.read_text()), config, "203.0.113.10", runner)
+    monkeypatch.setenv("HCLOUD_TOKEN", "hcloud-token")
+    monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "cloudflare-token")
+    with patch("scripts.deployer._operator_context", return_value=context), \
+         patch("scripts.deployer._export_retention"), \
+         patch("scripts.deployer._terraform_init"), \
+         patch("scripts.deployer._terraform_destroy_plan_apply") as destroy, \
+         patch("scripts.deployer._terraform_state_is_empty"):
+        assert deployer.teardown_instance(
+            manifest_path=paths.manifest, state_dir=paths.state_dir,
+            ssh_private_key=config.ssh_private_key, ssh_user=config.ssh_user,
+            accept_new_host_key=False, deployment_id="deployment-1",
+            retention_dir=tmp_path / "retention", cloudflare_account_id="account-1",
+            ssh_public_key_file=public_key, ssh_allowed_cidrs=["203.0.113.4/32"],
+            confirm=True, confirm_deletion=True,
+        ) == 0
+
+    manifest = json.loads(paths.manifest.read_text(encoding="utf-8"))
+    assert manifest["status"] == "decommissioned"
+    assert manifest["operation_history"][-1]["result"] == "succeeded"
+    assert destroy.call_count == 2
+    assert all("teardown-modules" in str(call.args[1]) for call in destroy.call_args_list)
+    assert all("allow_destroy" not in call.args[3] for call in destroy.call_args_list)

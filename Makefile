@@ -40,9 +40,9 @@ upgrade:
 verify:
 	python scripts/verify.py
 
-# NOC-035/NOC-036: private Managed PRO operator CLI. Deploy/status/verify and
-# instance operations require customer-specific arguments; use this target to
-# inspect its safe interface.
+# NOC-035/NOC-036/NOC-037: private Managed PRO operator CLI. Deploy/status,
+# instance operations, reconciliation and teardown require customer-specific
+# arguments; use this target to inspect its safe interface.
 deployer-help:
 	python scripts/deployer.py --help
 
