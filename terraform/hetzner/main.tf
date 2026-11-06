@@ -97,7 +97,7 @@ resource "hcloud_server" "this" {
   # this protection is itself the deliberate, auditable step NOC-037's
   # controlled teardown procedure performs.
   lifecycle {
-    prevent_destroy = true
+    prevent_destroy = !var.allow_destroy
   }
 }
 
@@ -110,7 +110,7 @@ resource "hcloud_volume" "this" {
   # Same destroy protection as the server -- this is where the actual
   # honeypot database would live if a customer outgrows the included disk.
   lifecycle {
-    prevent_destroy = true
+    prevent_destroy = !var.allow_destroy
   }
 }
 

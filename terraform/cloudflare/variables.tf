@@ -21,6 +21,12 @@ variable "deployment_id" {
   }
 }
 
+variable "allow_destroy" {
+  description = "NOC-037: explicit teardown gate. Keep false for normal plans; the controlled Deployer teardown is the only caller that may set true."
+  type        = bool
+  default     = false
+}
+
 variable "admin_hostname" {
   description = "Full FQDN the admin console is reached at (e.g. admin.example.com) -- mirrors .env.prod's HP_ADMIN_HOST. The tunnel routes this hostname to http://admin:9001."
   type        = string

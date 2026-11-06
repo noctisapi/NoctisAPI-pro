@@ -8,7 +8,7 @@ resource "cloudflare_zero_trust_tunnel_cloudflared" "this" {
   config_src = "cloudflare" # ingress managed remotely by the _config resource below, not a local YAML on the connector
 
   lifecycle {
-    prevent_destroy = true
+    prevent_destroy = !var.allow_destroy
   }
 }
 
@@ -51,7 +51,7 @@ resource "cloudflare_dns_record" "admin" {
   proxied = true
 
   lifecycle {
-    prevent_destroy = true
+    prevent_destroy = !var.allow_destroy
   }
 }
 
@@ -65,7 +65,7 @@ resource "cloudflare_dns_record" "public" {
   proxied = false # see variables.tf's vps_ipv4 docstring -- ACME HTTP-01 needs this unproxied
 
   lifecycle {
-    prevent_destroy = true
+    prevent_destroy = !var.allow_destroy
   }
 }
 
