@@ -35,7 +35,7 @@ def test_local_contract_flow_customer_to_observed_deployment(tmp_path: Path) -> 
     db_path = tmp_path / "control-center.db"
     config = Config("alembic.ini")
     config.set_main_option("sqlalchemy.url", f"sqlite+pysqlite:///{db_path.as_posix()}")
-    command.upgrade(config, "20261106_03_control_center_billing_costs")
+    command.upgrade(config, "20261107_04_control_center_worker_leases")
 
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row

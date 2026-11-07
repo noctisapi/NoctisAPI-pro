@@ -8,7 +8,7 @@ from alembic.config import Config
 
 from control_center.adapters import AdapterRegistry, AdapterUnavailableError
 from control_center.customers import create_customer
-from control_center.jobs import create_job
+from control_center.jobs import claim_job, create_job, finish_job
 from control_center.ports import DeploymentTarget, ProviderObservation
 from control_center.worker import ReadOnlyJobError, ReadOnlyReconciliationWorker
 
@@ -16,7 +16,7 @@ from control_center.worker import ReadOnlyJobError, ReadOnlyReconciliationWorker
 def _connection(path: Path) -> sqlite3.Connection:
     config = Config("alembic.ini")
     config.set_main_option("sqlalchemy.url", f"sqlite+pysqlite:///{path.as_posix()}")
-    command.upgrade(config, "20261106_02_control_center_customers")
+    command.upgrade(config, "20261107_04_control_center_worker_leases")
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
@@ -43,6 +43,17 @@ class _Adapter:
 
     def execute(self, target: DeploymentTarget, operation: str, parameters: dict[str, object]):  # pragma: no cover
         raise AssertionError("read-only worker must never execute provider mutations")
+
+
+class _FlakyAdapter(_Adapter):
+    def __init__(self) -> None:
+        self.attempts = 0
+
+    def observe(self, target: DeploymentTarget) -> ProviderObservation:
+        self.attempts += 1
+        if self.attempts == 1:
+            raise RuntimeError("temporary provider error")
+        return super().observe(target)
 
 
 def test_registry_fails_closed_for_unconfigured_provider() -> None:
@@ -110,5 +121,71 @@ def test_worker_rejects_mutating_jobs_and_records_failure(tmp_path: Path) -> Non
             raise AssertionError("mutating jobs must not run in the read-only worker")
         row = conn.execute("SELECT state, error_code FROM cc_jobs WHERE id = ?", (job_id,)).fetchone()
         assert tuple(row) == ("failed", "read_only_worker")
+    finally:
+        conn.close()
+
+
+def test_worker_retries_with_bounded_attempts_and_supports_heartbeat(tmp_path: Path) -> None:
+    conn = _connection(tmp_path / "control-center.db")
+    try:
+        deployment = _deployment(conn)
+        job_id = create_job(
+            conn,
+            deployment_id=deployment,
+            job_type="status",
+            idempotency_key="retry-1",
+            requested_by="operator-1",
+            max_attempts=2,
+        )
+        adapter = _FlakyAdapter()
+        worker = ReadOnlyReconciliationWorker(conn, AdapterRegistry({"hetzner": adapter}), lease_seconds=30)
+
+        assert worker.run_next() is None
+        first = conn.execute("SELECT state, attempt_count, error_code FROM cc_jobs WHERE id = ?", (job_id,)).fetchone()
+        assert tuple(first) == ("queued", 1, "observation_retry")
+        assert worker.run_next() is not None
+        second = conn.execute("SELECT state, attempt_count FROM cc_jobs WHERE id = ?", (job_id,)).fetchone()
+        assert tuple(second) == ("succeeded", 2)
+
+        heartbeat_id = create_job(
+            conn,
+            deployment_id=deployment,
+            job_type="verify",
+            idempotency_key="heartbeat-1",
+            requested_by="operator-1",
+        )
+        claimed = claim_job(conn, heartbeat_id, lease_seconds=30, lease_owner="external-worker")
+        assert claimed["lease_token"].startswith("external-worker:")
+        assert worker.heartbeat(heartbeat_id, claimed["lease_token"])
+        finish_job(conn, heartbeat_id, success=True, lease_token=claimed["lease_token"])
+        assert worker.run_forever(poll_interval=0, max_ticks=2) == 2
+    finally:
+        conn.close()
+
+
+def test_worker_continues_when_an_expired_lease_has_exhausted_attempts(tmp_path: Path) -> None:
+    conn = _connection(tmp_path / "control-center.db")
+    try:
+        deployment = _deployment(conn)
+        job_id = create_job(
+            conn,
+            deployment_id=deployment,
+            job_type="status",
+            idempotency_key="lease-exhausted-1",
+            requested_by="operator-1",
+            max_attempts=1,
+        )
+        claimed = claim_job(conn, job_id, lease_seconds=30, lease_owner="dead-worker")
+        conn.execute(
+            "UPDATE cc_jobs SET lease_expires_at = '2000-01-01T00:00:00Z' WHERE id = ?",
+            (job_id,),
+        )
+        conn.commit()
+
+        worker = ReadOnlyReconciliationWorker(conn, AdapterRegistry({"hetzner": _Adapter()}))
+        assert worker.run_next() is None
+        row = conn.execute("SELECT state, error_code FROM cc_jobs WHERE id = ?", (job_id,)).fetchone()
+        assert tuple(row) == ("failed", "lease_exhausted")
+        assert claimed["lease_token"]
     finally:
         conn.close()
