@@ -75,6 +75,15 @@ _V, _A, _AD, _O = Role.VIEWER, Role.ANALYST, Role.ADMIN, Role.OWNER
 
 # (method, path_template, minimum_role)
 ROUTE_RULES: List[Tuple[str, str, Role]] = [
+    # Control Center (NOC-047): authenticated panel surface.  Mutations also
+    # require MFA assurance in control_center.security; the matrix remains
+    # fail-closed if a future route is not explicitly classified.
+    ("GET", "/control-center", _V),
+    ("GET", "/control-center/ui", _V),
+    ("GET", "/control-center/customers", _V),
+    ("GET", "/control-center/inventory", _V),
+    ("GET", "/control-center/subscriptions", _V),
+    ("POST", "/control-center/jobs", _AD),
     # Licensing
     ("GET", "/dashboard/license", _V),  # redirect only, nothing disclosed
     ("GET", "/admin/license", _O),  # internal debug snapshot incl. identity

@@ -82,6 +82,8 @@ def test_deploy_failure_is_recorded_and_secret_is_redacted(tmp_path, monkeypatch
     monkeypatch.setenv("HCLOUD_TOKEN", "hcloud-token")
     monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "cloudflare-token")
     monkeypatch.setenv("GIT_DEPLOY_TOKEN", secret)
+    monkeypatch.setenv("NOCTISAPI_TF_STATE_BACKEND", "local")
+    monkeypatch.setenv("NOCTISAPI_SECRET_BACKEND", "env")
 
     with patch("scripts.deployer._terraform_init", side_effect=deployer.DeployerError(secret)):
         with pytest.raises(deployer.DeployerError) as exc_info:
@@ -113,6 +115,9 @@ def _operator_fixture(tmp_path: Path, *, status: str = "active"):
         state_dir=state_dir,
         cloudflare_state=state_dir / "cloudflare.tfstate",
         hetzner_state=state_dir / "hetzner.tfstate",
+        deployment_id="deployment-1",
+        tenant_id="acme-01",
+        backend=deployer.StateBackendConfig.local_for_tests(),
     )
     paths.hetzner_state.write_text("{}", encoding="utf-8")
     config = _config(tmp_path, private_key=True)
@@ -232,6 +237,7 @@ def test_teardown_records_success_only_after_empty_states(tmp_path, monkeypatch)
     context = (paths, json.loads(paths.manifest.read_text()), config, "203.0.113.10", runner)
     monkeypatch.setenv("HCLOUD_TOKEN", "hcloud-token")
     monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "cloudflare-token")
+    monkeypatch.setenv("NOCTISAPI_SECRET_BACKEND", "env")
     with patch("scripts.deployer._operator_context", return_value=context), \
          patch("scripts.deployer._export_retention"), \
          patch("scripts.deployer._terraform_init"), \
@@ -252,3 +258,25 @@ def test_teardown_records_success_only_after_empty_states(tmp_path, monkeypatch)
     assert destroy.call_count == 2
     assert all("teardown-modules" in str(call.args[1]) for call in destroy.call_args_list)
     assert all("allow_destroy" not in call.args[3] for call in destroy.call_args_list)
+
+
+def test_secret_rotation_is_confirmed_and_audited_without_value(tmp_path):
+    paths, _, _ = _operator_fixture(tmp_path)
+    manager = MagicMock()
+    with patch("scripts.deployer.secret_manager_from_env", return_value=manager):
+        with pytest.raises(deployer.DeployerError, match="--confirm"):
+            deployer.rotate_secret(
+                manifest_path=paths.manifest, secret_name="HCLOUD_TOKEN", confirm=False,
+            )
+        assert deployer.rotate_secret(
+            manifest_path=paths.manifest, secret_name="HCLOUD_TOKEN", confirm=True,
+        ) == 0
+
+    manager.rotate.assert_called_once_with("HCLOUD_TOKEN")
+    manifest = json.loads(paths.manifest.read_text(encoding="utf-8"))
+    assert manifest["operation_history"][-1] == {
+        "timestamp": manifest["operation_history"][-1]["timestamp"],
+        "operation": "secret-rotation",
+        "result": "succeeded",
+        "detail": "secret=HCLOUD_TOKEN",
+    }

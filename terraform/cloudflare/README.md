@@ -44,12 +44,12 @@ DNS elsewhere, or don't control the zone in this Cloudflare account):
 
 ## Operator CLI (NOC-035)
 
-The modules remain independently stateful, but the private operator CLI now
+The modules remain independently addressed, but the private operator CLI now
 composes them in the safe order: Cloudflare Tunnel/Access first, Hetzner VPS
 and cloud-init second, then the optional public DNS record once the VPS IPv4
-exists. The same `deployment_id` and per-deployment local state directory are
-used on retries, so a failed retry reconciles instead of creating a second
-instance.
+exists. The same `deployment_id` and per-deployment cache/manifest directory
+are used on retries, while Terraform state remains in the remote backend, so
+a failed retry reconciles instead of creating a second instance.
 
 ```bash
 export HCLOUD_TOKEN=...                 # never pass as a CLI argument
@@ -71,9 +71,9 @@ providers. `status` and `verify` read the saved state and use the SSH key to
 inspect the managed VPS. New host keys are accepted only when the explicit
 `--accept-new-host-key` flag is supplied.
 
-The CLI never prints secret values or puts them in subprocess arguments. The
-Terraform state is still local and sensitive until NOC-038 provides the
-encrypted remote backend and secrets-manager integration.
+The CLI never prints secret values or puts them in subprocess arguments.
+Terraform state is remote, encrypted and locked when invoked by the real
+Deployer; provider-free `--dry-run` and tests deliberately use no backend.
 
 ## Manual module usage
 
@@ -116,10 +116,11 @@ cascades) via the Cloudflare dashboard/API, not a targeted
 `terraform destroy` of the config alone -- NOC-037's controlled teardown
 procedure needs to account for this when it's built.
 
-## Known limitation: secrets in local Terraform state
+## NOC-038: remote state and secrets
 
-Same caveat as `terraform/hetzner/`: this module uses local state, and
-`tunnel_token` -- while redacted from `plan`/`apply` console output
-(marked sensitive) -- is recorded in cleartext in `terraform.tfstate`.
-Do not use this for a real multi-customer rollout before NOC-038 lands
-a real backend.
+The private Deployer now initializes this module with a tenant-scoped,
+encrypted S3-compatible backend and DynamoDB locking. The sensitive
+`tunnel_token` is captured in memory and passed only through the protected
+execution environment. See
+`documentation/NOC-038-ESTADO-SECRETS.md`; real-provider recovery and IAM
+tests remain intentionally deferred to the final infrastructure gate.

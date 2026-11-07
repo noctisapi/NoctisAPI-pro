@@ -141,8 +141,8 @@ class _FakeIdentityMiddleware:
     """Stands in for _PanelAuthMiddleware: attaches whatever role this
     sweep is currently checking (_CURRENT_ROLE, set by each test)."""
 
-    def __init__(self, app_inner):
-        self._app = app_inner
+    def __init__(self, app=None, app_inner=None):
+        self._app = app if app is not None else app_inner
 
     async def __call__(self, scope, receive, send):
         if scope["type"] == "http":

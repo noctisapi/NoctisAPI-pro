@@ -52,6 +52,7 @@ def authorize_pro_feature(*, feature: str, action: str = "access", force_refresh
         return False, str(reason)
 
     ent = snapshot.get("entitlements") if isinstance(snapshot.get("entitlements"), dict) else {}
+    mode = str(ent.get("mode") or "self_hosted").strip().lower() if isinstance(ent, dict) else "self_hosted"
     tier = str(ent.get("tier") or "").strip().lower() if isinstance(ent, dict) else ""
     if tier and tier != "pro":
         return False, "license_tier_not_pro"
@@ -63,6 +64,8 @@ def authorize_pro_feature(*, feature: str, action: str = "access", force_refresh
             name = str(item or "").strip().lower()
             if name:
                 features.add(name)
+    if mode == "managed" and not features:
+        return False, "feature_not_in_entitlement"
     if features and not _lease_allows_feature(feature_name, features):
         # Backward compatibility: Log Export was added after existing Pro
         # licenses were issued, so older leases may not list it explicitly.

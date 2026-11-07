@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Control Center</h1>
+    <div class="sub">Control Plane · read-only operational view</div>
+  </div>
+  <div class="muted tiny-text">Operator: <span class="mono">{{ operator }}</span></div>
+</div>
+
+<div class="card" style="margin-bottom:18px;border-color:rgba(126,226,184,.28);">
+  <div class="card-body" style="display:flex;align-items:center;justify-content:space-between;gap:16px;">
+    <div>
+      <strong>Read-only phase</strong>
+      <div class="muted" style="margin-top:5px;">Deploy, upgrade and teardown remain disabled until server-side SSO/MFA and worker adapters are connected.</div>
+    </div>
+    <span class="badge badge-accent">NO MUTATIONS</span>
+  </div>
+</div>
+
+<nav aria-label="Control Center sections" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px;">
+  <a class="btn btn-small{% if section == 'overview' %} btn-primary{% endif %}" href="/control-center/ui?section=overview">Overview</a>
+  <a class="btn btn-small{% if section == 'customers' %} btn-primary{% endif %}" href="/control-center/ui?section=customers">Customers <span class="muted">({{ customers|length }})</span></a>
+  <a class="btn btn-small{% if section == 'inventory' %} btn-primary{% endif %}" href="/control-center/ui?section=inventory">Inventory <span class="muted">({{ inventory|length }})</span></a>
+  <a class="btn btn-small{% if section == 'subscriptions' %} btn-primary{% endif %}" href="/control-center/ui?section=subscriptions">Subscriptions <span class="muted">({{ subscriptions|length }})</span></a>
+</nav>
+
+{% if section == 'overview' %}
+<section class="kpi-grid">
+  <div class="kpi-card"><div class="kpi-label">Customers</div><div class="kpi-value">{{ customers|length }}</div></div>
+  <div class="kpi-card"><div class="kpi-label">Deployments</div><div class="kpi-value">{{ inventory|length }}</div></div>
+  <div class="kpi-card"><div class="kpi-label">Subscriptions</div><div class="kpi-value">{{ subscriptions|length }}</div></div>
+  <div class="kpi-card"><div class="kpi-label">Stale observations</div><div class="kpi-value{% if inventory|selectattr('stale')|list|length %} kpi-value-alert{% endif %}">{{ inventory|selectattr('stale')|list|length }}</div></div>
+</section>
+
+<section class="section-grid">
+  <div class="card panel-wide">
+    <div class="card-head"><div class="card-title">Deployment inventory</div><a class="link" href="/control-center/ui?section=inventory">View all →</a></div>
+    <div class="card-body">
+      {% if inventory %}<div class="table-wrap"><table class="data-table"><thead><tr><th>Deployment</th><th>Customer</th><th>Provider</th><th>State</th><th>Observation</th></tr></thead><tbody>
+        {% for item in inventory[:8] %}<tr><td class="mono">{{ item.external_id }}</td><td>{{ item.customer_external_id }}</td><td>{{ item.provider }} · {{ item.region }}</td><td><span class="badge{% if item.state == 'active' %} badge-accent{% endif %}">{{ item.state }}</span></td><td>{% if item.stale %}<span class="badge status-error">stale</span>{% else %}<span class="badge badge-accent">fresh</span>{% endif %}</td></tr>{% endfor %}
+      </tbody></table></div>{% else %}<div class="muted">No deployments registered yet.</div>{% endif %}
+    </div>
+  </div>
+  <div class="card panel-narrow">
+    <div class="card-head"><div class="card-title">Commercial state</div><a class="link" href="/control-center/ui?section=subscriptions">View all →</a></div>
+    <div class="card-body">
+      {% if subscriptions %}<ul class="activity-list">{% for item in subscriptions[:8] %}<li><span class="mono">{{ item.external_id }}</span><span class="badge{% if item.commercial_state == 'active' %} badge-accent{% endif %}">{{ item.commercial_state }}</span><span class="muted">{{ item.plan_code }}</span></li>{% endfor %}</ul>{% else %}<div class="muted">No subscriptions registered yet.</div>{% endif %}
+    </div>
+  </div>
+</section>
+{% elif section == 'customers' %}
+<div class="card"><div class="card-head"><div class="card-title">Customers</div></div><div class="card-body">
+  {% if customers %}<div class="table-wrap"><table class="data-table"><thead><tr><th>External ID</th><th>Legal name</th><th>Status</th><th>Billing reference</th><th>Updated</th></tr></thead><tbody>{% for item in customers %}<tr><td class="mono">{{ item.external_id }}</td><td>{{ item.legal_name }}</td><td><span class="badge{% if item.status == 'active' %} badge-accent{% endif %}">{{ item.status }}</span></td><td>{% if item.billing_ref %}<span class="badge badge-accent">linked</span>{% else %}<span class="muted">not linked</span>{% endif %}</td><td class="muted">{{ item.updated_at }}</td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="muted">No customers registered yet.</div>{% endif %}
+</div></div>
+{% elif section == 'inventory' %}
+<div class="card"><div class="card-head"><div class="card-title">Deployment inventory</div></div><div class="card-body">
+  {% if inventory %}<div class="table-wrap"><table class="data-table"><thead><tr><th>Deployment</th><th>Tenant</th><th>Customer</th><th>Provider / region</th><th>Version</th><th>State</th><th>Domains</th></tr></thead><tbody>{% for item in inventory %}<tr><td class="mono">{{ item.external_id }}</td><td class="mono">{{ item.tenant_id }}</td><td>{{ item.customer_external_id }}</td><td>{{ item.provider }} / {{ item.region }}</td><td>{{ item.version or '—' }}</td><td><span class="badge{% if item.state == 'active' %} badge-accent{% endif %}">{{ item.state }}</span>{% if item.stale %}<span class="badge status-error" style="margin-left:4px;">stale</span>{% endif %}</td><td class="mono tiny-text">{{ item.api_domain or '—' }}<br>{{ item.console_domain or '—' }}</td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="muted">No deployments registered yet.</div>{% endif %}
+</div></div>
+{% else %}
+<div class="card"><div class="card-head"><div class="card-title">Subscriptions</div></div><div class="card-body">
+  {% if subscriptions %}<div class="table-wrap"><table class="data-table"><thead><tr><th>Subscription</th><th>Customer</th><th>Plan</th><th>Commercial state</th><th>Mode</th><th>Entitlements</th><th>Billing</th><th>Reconciliation</th></tr></thead><tbody>{% for item in subscriptions %}<tr><td class="mono">{{ item.external_id }}</td><td>{{ item.customer_external_id }}</td><td>{{ item.plan_code }}</td><td><span class="badge{% if item.commercial_state == 'active' %} badge-accent{% endif %}">{{ item.commercial_state }}</span></td><td>{{ item.mode }}</td><td>v{{ item.entitlement_version }}</td><td>{% if item.has_billing_reference %}<span class="badge badge-accent">linked</span>{% else %}<span class="muted">not linked</span>{% endif %}</td><td>{% if item.failed_reconciliation_count %}<span class="badge status-error">{{ item.failed_reconciliation_count }} failed</span>{% else %}<span class="badge badge-accent">ok</span>{% endif %}</td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="muted">No subscriptions registered yet.</div>{% endif %}
+</div></div>
+{% endif %}
+{% endblock %}

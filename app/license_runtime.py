@@ -20,6 +20,8 @@ _ALLOWED_KEYS = {
     "HP_OFFLINE_PUBLIC_KEYS_PATH",
     "HP_OFFLINE_PUBLIC_KEYS_JSON",
     "HP_LICENSE_MODE",
+    "HP_MANAGED_ENTITLEMENTS_PATH",
+    "HP_MANAGED_ENTITLEMENTS_STATE_PATH",
     "HP_LICENSE_PRODUCT",
 }
 
@@ -39,7 +41,7 @@ def _normalize_value(key: str, value: Any) -> str:
         return lowered
     if key == "HP_LICENSE_MODE":
         lowered = out.lower()
-        if lowered != "offline":
+        if lowered not in {"offline", "managed"}:
             raise ValueError("invalid_HP_LICENSE_MODE")
         return lowered
     if key == "HP_OFFLINE_PUBLIC_KEYS_JSON":

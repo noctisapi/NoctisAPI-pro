@@ -1,6 +1,11 @@
 terraform {
   required_version = ">= 1.5.0"
 
+  # NOC-038: the deployer supplies the tenant-scoped S3 backend at init time.
+  # Keeping the block empty allows `init -backend=false` for safe local
+  # validation and tests without embedding bucket names or credentials here.
+  backend "s3" {}
+
   required_providers {
     hcloud = {
       source = "hetznercloud/hcloud"

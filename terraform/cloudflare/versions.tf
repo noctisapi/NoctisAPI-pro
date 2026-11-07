@@ -1,6 +1,10 @@
 terraform {
   required_version = ">= 1.5.0"
 
+  # NOC-038: the deployer supplies the tenant-scoped S3 backend at init time.
+  # `init -backend=false` remains available for provider-free validation.
+  backend "s3" {}
+
   required_providers {
     cloudflare = {
       source = "cloudflare/cloudflare"

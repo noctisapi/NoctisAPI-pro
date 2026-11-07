@@ -42,8 +42,8 @@ class _FakeIdentityMiddleware:
     """Stands in for _PanelAuthMiddleware: attaches whatever identity this
     test wants for the current request."""
 
-    def __init__(self, app_inner):
-        self._app = app_inner
+    def __init__(self, app=None, app_inner=None):
+        self._app = app if app is not None else app_inner
 
     async def __call__(self, scope, receive, send):
         if scope["type"] == "http":

@@ -8,6 +8,7 @@ from typing import Any, Optional
 
 from app import license_runtime
 from honey_licensing.client import compute_client_identity
+from honey_licensing.managed_mode import resolve_managed_entitlements
 from honey_licensing.offline_license import load_public_key_pem, resolve_local_license_state
 
 logger = logging.getLogger(__name__)
@@ -120,7 +121,54 @@ def _instance_fingerprint() -> Optional[str]:
         return None
 
 
+def _fetch_managed_entitlements() -> tuple[bool, Optional[int], Optional[str], dict[str, Any]]:
+    document_path = (
+        license_runtime.get_effective("HP_MANAGED_ENTITLEMENTS_PATH")
+        or os.getenv("HP_MANAGED_ENTITLEMENTS_PATH")
+        or "/var/lib/myapp/managed_entitlements.json"
+    ).strip()
+    state_path = (
+        license_runtime.get_effective("HP_MANAGED_ENTITLEMENTS_STATE_PATH")
+        or os.getenv("HP_MANAGED_ENTITLEMENTS_STATE_PATH")
+        or "/var/lib/myapp/managed_entitlements_state.json"
+    ).strip()
+    try:
+        public_key = load_public_key_pem()
+    except RuntimeError:
+        return False, None, "MANAGED_PUBLIC_KEY_MISSING", {
+            "tier": "core", "features": [], "mode": "managed",
+            "source": "managed_entitlements", "license_generation": 0,
+            "deployment_id": _runtime_deployment_id(), "online_check_required": False,
+        }
+    result = resolve_managed_entitlements(
+        document_path=document_path,
+        state_path=state_path,
+        public_key_pem=public_key,
+        deployment_id=_runtime_deployment_id(),
+    )
+    document = result.document
+    features = sorted(document.features) if document else []
+    expires_at = int(document.expires_at.timestamp()) if document and document.expires_at else None
+    return result.valid, expires_at, (None if result.valid else result.reason_code), {
+        "tier": "pro" if result.valid else "core",
+        "features": features if result.valid else [],
+        "mode": "managed",
+        "source": "managed_entitlements",
+        "license_generation": result.generation,
+        "deployment_id": _runtime_deployment_id(),
+        "plan_id": document.plan_id if document else None,
+        "online_check_required": False,
+    }
+
+
 def _fetch_local_license() -> tuple[bool, Optional[int], Optional[str], dict[str, Any]]:
+    mode = (
+        license_runtime.get_effective("HP_LICENSE_MODE")
+        or os.getenv("HP_LICENSE_MODE")
+        or "offline"
+    ).strip().lower()
+    if mode == "managed":
+        return _fetch_managed_entitlements()
     license_path, state_path = _license_paths()
 
     try:
@@ -172,6 +220,7 @@ def _snapshot_from_local_result(
     if exp is not None:
         expires_in = int(exp) - now
     tier = str(meta.get("tier") or "core").strip().lower() or "core"
+    mode = str(meta.get("mode") or "self_hosted").strip().lower() or "self_hosted"
     features = list(meta.get("features") or []) if isinstance(meta.get("features"), list) else []
     return {
         "pro_enabled": bool(valid and tier == "pro"),
@@ -186,8 +235,9 @@ def _snapshot_from_local_result(
         "entitlements": {
             "tier": tier,
             "features": features if tier == "pro" else [],
+            "mode": mode,
         },
-        "source": "offline_license",
+        "source": str(meta.get("source") or "offline_license"),
         "license_generation": int(meta.get("license_generation") or 0),
         "deployment_id": meta.get("deployment_id"),
         "license_id": meta.get("license_id"),
@@ -208,6 +258,7 @@ def _snapshot_state_key(snapshot: dict[str, Any]) -> tuple[Any, ...]:
         tuple(features),
         int(snapshot.get("license_generation") or 0),
         str(snapshot.get("deployment_id") or "").strip(),
+        str(ent.get("mode") or "").strip().lower() if isinstance(ent, dict) else "",
     )
 
 

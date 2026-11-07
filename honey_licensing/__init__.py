@@ -19,6 +19,28 @@ from .feature_flags import (  # noqa: F401
     is_pro_enabled,
     set_pro_enabled_provider,
 )
+from .entitlements import (  # noqa: F401
+    EntitlementDecision,
+    EntitlementDocument,
+    EntitlementValidationError,
+    evaluate,
+)
+from .managed_mode import (  # noqa: F401
+    ManagedEntitlementError,
+    ManagedEntitlementResult,
+    resolve_managed_entitlements,
+)
+from .commercial import (  # noqa: F401
+    BillingEvent,
+    BillingEventLedger,
+    CommercialRecord,
+    CommercialState,
+    CommercialTransitionError,
+    PlanChange,
+    plan_change,
+    transition,
+    verify_webhook_signature,
+)
 
 __all__ = [
     # client
@@ -40,4 +62,23 @@ __all__ = [
     "has_feature",
     "is_pro_enabled",
     "set_pro_enabled_provider",
+    # entitlements
+    "EntitlementDecision",
+    "EntitlementDocument",
+    "EntitlementValidationError",
+    "evaluate",
+    # managed_mode
+    "ManagedEntitlementError",
+    "ManagedEntitlementResult",
+    "resolve_managed_entitlements",
+    # commercial
+    "BillingEvent",
+    "BillingEventLedger",
+    "CommercialRecord",
+    "CommercialState",
+    "CommercialTransitionError",
+    "PlanChange",
+    "plan_change",
+    "transition",
+    "verify_webhook_signature",
 ]

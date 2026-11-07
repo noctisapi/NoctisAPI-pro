@@ -13,9 +13,9 @@ The CLI deliberately orchestrates the already-reviewed building blocks:
 * reconcile is read-only; teardown requires an exact deployment id, retention
   export, two confirmations, and an explicit Terraform destroy gate.
 
-Secret values are accepted only through environment variables and are never
-included in subprocess arguments or log output. Terraform state remains local
-for now; NOC-038 owns the remote encrypted backend and secrets-manager work.
+Secret values are resolved through the NOC-038 secret manager contract and are
+never included in subprocess arguments or log output. Real operations require
+the encrypted remote Terraform backend; local state is test-only.
 """
 from __future__ import annotations
 
@@ -47,6 +47,11 @@ _REMOTE_MANAGED_COMPOSE = f"{_REMOTE_ROOT}/compose/docker-compose.managed.yml"
 sys.path.insert(0, str(_REPO_ROOT))
 from scripts import deployment_manifest as manifest_lib  # noqa: E402
 from scripts import init_deployment  # noqa: E402
+from scripts.state_security import (  # noqa: E402
+    StateBackendConfig,
+    StateSecurityError,
+    secret_manager_from_env,
+)
 
 
 class DeployerError(RuntimeError):
@@ -84,6 +89,9 @@ class DeploymentPaths:
     state_dir: Path
     cloudflare_state: Path
     hetzner_state: Path
+    deployment_id: str = ""
+    tenant_id: str = ""
+    backend: Optional[StateBackendConfig] = None
 
 
 def _utc_now() -> str:
@@ -110,6 +118,20 @@ def _secret_env(name: str, *, required: bool = True) -> str:
     if required and not value:
         raise DeployerError(f"required secret environment variable is missing: {name}")
     return value
+
+
+def _state_backend(*, allow_local: bool) -> StateBackendConfig:
+    try:
+        return StateBackendConfig.from_env(allow_local=allow_local)
+    except StateSecurityError as exc:
+        raise DeployerError(str(exc)) from exc
+
+
+def _secret_values(names: Iterable[str], *, allow_environment: bool) -> Dict[str, str]:
+    try:
+        return secret_manager_from_env(allow_environment=allow_environment).values(names)
+    except StateSecurityError as exc:
+        raise DeployerError(str(exc)) from exc
 
 
 def _redact(text: str, secrets: Iterable[str]) -> str:
@@ -207,11 +229,20 @@ def _paths_for(manifest_path: Path, deployment_id: str, state_dir: Optional[Path
     if state_dir is None:
         state_dir = manifest_path.parent / "deployer-state" / deployment_id
     state_dir = state_dir.resolve()
+    tenant_id = ""
+    try:
+        probe = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if isinstance(probe, dict):
+            tenant_id = str(probe.get("customer_id", "")).strip()
+    except (OSError, json.JSONDecodeError):
+        pass
     return DeploymentPaths(
         manifest=manifest_path.resolve(),
         state_dir=state_dir,
         cloudflare_state=state_dir / "cloudflare.tfstate",
         hetzner_state=state_dir / "hetzner.tfstate",
+        deployment_id=deployment_id,
+        tenant_id=tenant_id,
     )
 
 
@@ -239,11 +270,26 @@ def _tf_var_args(values: Dict[str, object]) -> List[str]:
     return result
 
 
-def _terraform_init(runner: CommandRunner, module: Path, paths: DeploymentPaths, *, dry_run: bool) -> None:
+def _terraform_init(
+    runner: CommandRunner,
+    module: Path,
+    paths: DeploymentPaths,
+    *,
+    dry_run: bool,
+    backend: Optional[StateBackendConfig] = None,
+    backend_module: Optional[str] = None,
+) -> None:
     data_dir = paths.state_dir / f".terraform-{module.name}"
     args = [f"-chdir={module}", "init", "-input=false"]
     if dry_run:
         args.append("-backend=false")
+    else:
+        backend = backend or paths.backend
+        if backend is None or backend.backend != "s3":
+            raise DeployerError("real Terraform operations require the NOC-038 remote state backend")
+        if not paths.tenant_id:
+            raise DeployerError("deployment manifest must contain customer_id for remote state scoping")
+        args.extend(backend.init_args(backend_module or module.name, paths.tenant_id, paths.deployment_id))
     runner.run(args, label=f"terraform init ({module.name})", timeout=600, env=_terraform_env(data_dir=data_dir))
     runner.run(
         [f"-chdir={module}", "validate"],
@@ -263,23 +309,33 @@ def _terraform_plan_apply(
     apply: bool,
     timeout: int,
     label: str,
+    backend: Optional[StateBackendConfig] = None,
 ) -> None:
     state_path.parent.mkdir(parents=True, exist_ok=True)
     data_dir = state_path.parent / f".terraform-{module.name}"
     environment = _terraform_env(secret_env, data_dir=data_dir)
     plan_path = state_path.with_suffix(".tfplan")
+    state_args = [] if backend and backend.backend == "s3" else [f"-state={state_path}"]
     plan_args = [
         f"-chdir={module}", "plan", "-input=false", "-lock-timeout=30s",
-        f"-state={state_path}", f"-out={plan_path}", *_tf_var_args(variables),
+        *state_args, f"-out={plan_path}", *_tf_var_args(variables),
     ]
-    runner.run(plan_args, label=f"{label}: plan", timeout=timeout, env=environment)
-    if apply:
-        runner.run(
-            [f"-chdir={module}", "apply", "-input=false", "-auto-approve", f"-state={state_path}", str(plan_path)],
-            label=f"{label}: apply",
-            timeout=timeout,
-            env=environment,
-        )
+    try:
+        runner.run(plan_args, label=f"{label}: plan", timeout=timeout, env=environment)
+        if apply:
+            runner.run(
+                [f"-chdir={module}", "apply", "-input=false", "-auto-approve", *state_args, str(plan_path)],
+                label=f"{label}: apply",
+                timeout=timeout,
+                env=environment,
+            )
+    finally:
+        # Terraform plan files can contain sensitive rendered values. They
+        # are only a hand-off between plan/apply and must not become state.
+        try:
+            plan_path.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def _terraform_destroy_plan_apply(
@@ -291,32 +347,43 @@ def _terraform_destroy_plan_apply(
     *,
     timeout: int,
     label: str,
+    backend: Optional[StateBackendConfig] = None,
 ) -> None:
     """Generate and apply a destroy plan only after the explicit gate is set."""
     state_path.parent.mkdir(parents=True, exist_ok=True)
     data_dir = state_path.parent / f".terraform-{module.name}"
     environment = _terraform_env(secret_env, data_dir=data_dir)
     plan_path = state_path.with_suffix(".destroy.tfplan")
+    state_args = [] if backend and backend.backend == "s3" else [f"-state={state_path}"]
     plan_args = [
         f"-chdir={module}", "plan", "-destroy", "-input=false", "-lock-timeout=30s",
-        f"-state={state_path}", f"-out={plan_path}", *_tf_var_args(variables),
+        *state_args, f"-out={plan_path}", *_tf_var_args(variables),
     ]
-    runner.run(plan_args, label=f"{label}: destroy plan", timeout=timeout, env=environment)
-    runner.run(
-        [f"-chdir={module}", "apply", "-input=false", "-auto-approve", f"-state={state_path}", str(plan_path)],
-        label=f"{label}: destroy apply",
-        timeout=timeout,
-        env=environment,
-    )
+    try:
+        runner.run(plan_args, label=f"{label}: destroy plan", timeout=timeout, env=environment)
+        runner.run(
+            [f"-chdir={module}", "apply", "-input=false", "-auto-approve", *state_args, str(plan_path)],
+            label=f"{label}: destroy apply",
+            timeout=timeout,
+            env=environment,
+        )
+    finally:
+        try:
+            plan_path.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def _terraform_state_is_empty(
     runner: CommandRunner, module: Path, state_path: Path, *, label: str,
+    backend: Optional[StateBackendConfig] = None,
 ) -> None:
+    state_args = [] if backend and backend.backend == "s3" else [f"-state={state_path}"]
     result = runner.run(
-        [f"-chdir={module}", "state", "list", f"-state={state_path}"],
+        [f"-chdir={module}", "state", "list", *state_args],
         label=f"verify empty Terraform state ({label})",
         timeout=120,
+        env=_terraform_env(data_dir=state_path.parent / f".terraform-{module.name}"),
     )
     resources = [line.strip() for line in result.stdout.splitlines() if line.strip()]
     if resources:
@@ -343,11 +410,20 @@ def _controlled_destroy_module(module: Path, state_dir: Path, *, expected_guards
     return copy_root
 
 
-def _terraform_output(runner: CommandRunner, module: Path, state_path: Path, name: str, *, secrets: Iterable[str]) -> str:
+def _terraform_output(
+    runner: CommandRunner,
+    module: Path,
+    state_path: Path,
+    name: str,
+    *,
+    secrets: Iterable[str],
+    backend: Optional[StateBackendConfig] = None,
+) -> str:
     result = runner.run(
-        [f"-chdir={module}", "output", "-raw", f"-state={state_path}", name],
+        [f"-chdir={module}", "output", "-raw", *([] if backend and backend.backend == "s3" else [f"-state={state_path}"]), name],
         label=f"read Terraform output {name}",
         timeout=120,
+        env=_terraform_env(data_dir=state_path.parent / f".terraform-{module.name}"),
     )
     value = result.stdout.strip()
     if not value:
@@ -511,6 +587,16 @@ def deploy(config: DeploymentConfig, *, manifest_path: Path, state_dir: Optional
     paths = _paths_for(manifest_path, deployment_id, state_dir)
     paths.state_dir.mkdir(parents=True, exist_ok=True)
     manifest = _prepare_manifest(paths.manifest, config, persist=not dry_run)
+    paths.tenant_id = str(manifest.get("customer_id", config.customer_id)).strip()
+    try:
+        paths.backend = _state_backend(allow_local=dry_run)
+    except DeployerError as exc:
+        if not dry_run:
+            try:
+                _set_final_status(paths, manifest, manifest_lib.DeploymentStatus.FAILED, str(exc))
+            except Exception:
+                pass
+        raise
 
     if dry_run:
         runner = CommandRunner()
@@ -519,18 +605,17 @@ def deploy(config: DeploymentConfig, *, manifest_path: Path, state_dir: Optional
         print(f"[deployer] dry-run valid for deployment_id={manifest['deployment_id']}")
         return 0
 
-    secret_values = {
-        "HCLOUD_TOKEN": _secret_env("HCLOUD_TOKEN"),
-        "CLOUDFLARE_API_TOKEN": _secret_env("CLOUDFLARE_API_TOKEN"),
-        "GIT_DEPLOY_TOKEN": _secret_env("GIT_DEPLOY_TOKEN"),
-    }
+    secret_values = _secret_values(
+        ("HCLOUD_TOKEN", "CLOUDFLARE_API_TOKEN", "GIT_DEPLOY_TOKEN"),
+        allow_environment=paths.backend.backend == "local",
+    )
     config.ghcr_token = os.getenv("GHCR_TOKEN", "").strip()
     if config.ghcr_token:
         secret_values["GHCR_TOKEN"] = config.ghcr_token
     runner = CommandRunner(secrets=secret_values.values())
     try:
-        _terraform_init(runner, _CLOUDFLARE_DIR, paths, dry_run=False)
-        _terraform_init(runner, _HETZNER_DIR, paths, dry_run=False)
+        _terraform_init(runner, _CLOUDFLARE_DIR, paths, dry_run=False, backend=paths.backend)
+        _terraform_init(runner, _HETZNER_DIR, paths, dry_run=False, backend=paths.backend)
 
         cloudflare_vars = {
             "account_id": config.cloudflare_account_id,
@@ -546,8 +631,12 @@ def deploy(config: DeploymentConfig, *, manifest_path: Path, state_dir: Optional
         _terraform_plan_apply(
             runner, _CLOUDFLARE_DIR, paths.cloudflare_state, cloudflare_vars, cloudflare_env,
             apply=True, timeout=config.terraform_timeout, label="Cloudflare perimeter",
+            backend=paths.backend,
         )
-        tunnel_token = _terraform_output(runner, _CLOUDFLARE_DIR, paths.cloudflare_state, "tunnel_token", secrets=runner.secrets)
+        tunnel_token = _terraform_output(
+            runner, _CLOUDFLARE_DIR, paths.cloudflare_state, "tunnel_token",
+            secrets=runner.secrets, backend=paths.backend,
+        )
         runner.secrets = (*runner.secrets, tunnel_token)
 
         hetzner_vars = {
@@ -577,14 +666,19 @@ def deploy(config: DeploymentConfig, *, manifest_path: Path, state_dir: Optional
         _terraform_plan_apply(
             runner, _HETZNER_DIR, paths.hetzner_state, hetzner_vars, hetzner_env,
             apply=True, timeout=config.terraform_timeout, label="Hetzner VPS and bootstrap",
+            backend=paths.backend,
         )
-        server_ipv4 = _terraform_output(runner, _HETZNER_DIR, paths.hetzner_state, "server_ipv4", secrets=runner.secrets)
+        server_ipv4 = _terraform_output(
+            runner, _HETZNER_DIR, paths.hetzner_state, "server_ipv4",
+            secrets=runner.secrets, backend=paths.backend,
+        )
 
         if config.public_zone_id:
             cloudflare_vars["vps_ipv4"] = server_ipv4
             _terraform_plan_apply(
                 runner, _CLOUDFLARE_DIR, paths.cloudflare_state, cloudflare_vars, cloudflare_env,
                 apply=True, timeout=config.terraform_timeout, label="Cloudflare public DNS",
+                backend=paths.backend,
             )
 
         if not skip_verify:
@@ -611,7 +705,7 @@ def _read_deployment(paths: DeploymentPaths) -> dict:
     errors = manifest_lib.validate_manifest(manifest)
     if errors:
         raise DeployerError("invalid deployment manifest: " + "; ".join(errors))
-    if not paths.hetzner_state.exists():
+    if (paths.backend is None or paths.backend.backend == "local") and not paths.hetzner_state.exists():
         raise DeployerError(f"Hetzner state does not exist: {paths.hetzner_state}")
     return manifest
 
@@ -630,6 +724,7 @@ def status(
     if not deployment_id:
         raise DeployerError("manifest has no deployment_id")
     paths = _paths_for(manifest_path, deployment_id, state_dir)
+    paths.backend = _state_backend(allow_local=False)
     manifest = _read_deployment(paths)
     runner = CommandRunner()
     config = DeploymentConfig(
@@ -640,7 +735,7 @@ def status(
         ssh_allowed_cidrs=[], cloudflare_account_id="", access_allowed_emails=[],
         accept_new_host_key=accept_new_host_key,
     )
-    ip = _terraform_output(runner, _HETZNER_DIR, paths.hetzner_state, "server_ipv4", secrets=())
+    ip = _terraform_output(runner, _HETZNER_DIR, paths.hetzner_state, "server_ipv4", secrets=(), backend=paths.backend)
     print(json.dumps({"deployment_id": deployment_id, "status": manifest.get("status"), "server_ipv4": ip}, sort_keys=True))
     if remote:
         runner.run(_ssh_args(config, ip, _remote_status_command()), label="remote deployment status", timeout=60)
@@ -660,6 +755,7 @@ def verify(
     if not deployment_id:
         raise DeployerError("manifest has no deployment_id")
     paths = _paths_for(manifest_path, deployment_id, state_dir)
+    paths.backend = _state_backend(allow_local=False)
     manifest = _read_deployment(paths)
     config = DeploymentConfig(
         customer_id=manifest.get("customer_id", ""), region=manifest.get("region", ""),
@@ -670,7 +766,7 @@ def verify(
         accept_new_host_key=accept_new_host_key,
     )
     runner = CommandRunner()
-    ip = _terraform_output(runner, _HETZNER_DIR, paths.hetzner_state, "server_ipv4", secrets=())
+    ip = _terraform_output(runner, _HETZNER_DIR, paths.hetzner_state, "server_ipv4", secrets=(), backend=paths.backend)
     runner.run(
         _ssh_args(config, ip, _remote_verify_command(config, ip, ip)),
         label="remote deployment verification",
@@ -692,6 +788,7 @@ def _operator_context(
     if not deployment_id:
         raise DeployerError("manifest has no deployment_id")
     paths = _paths_for(manifest_path, deployment_id, state_dir)
+    paths.backend = _state_backend(allow_local=False)
     manifest = _read_deployment(paths)
     config = DeploymentConfig(
         customer_id=manifest.get("customer_id", ""), region=manifest.get("region", ""),
@@ -702,7 +799,10 @@ def _operator_context(
         accept_new_host_key=accept_new_host_key,
     )
     runner = CommandRunner()
-    ip = _terraform_output(runner, _HETZNER_DIR, paths.hetzner_state, "server_ipv4", secrets=())
+    ip = _terraform_output(
+        runner, _HETZNER_DIR, paths.hetzner_state, "server_ipv4",
+        secrets=(), backend=paths.backend,
+    )
     return paths, manifest, config, ip, runner
 
 
@@ -938,11 +1038,12 @@ def reconcile_instance(*, manifest_path: Path, state_dir: Optional[Path]) -> int
     if not deployment_id:
         raise DeployerError("manifest has no deployment_id")
     paths = _paths_for(manifest_path, deployment_id, state_dir)
+    paths.backend = _state_backend(allow_local=False)
     manifest = _read_deployment(paths)
     runner = CommandRunner()
     if manifest.get("status") == manifest_lib.DeploymentStatus.DECOMMISSIONED.value:
-        _terraform_state_is_empty(runner, _HETZNER_DIR, paths.hetzner_state, label="Hetzner")
-        _terraform_state_is_empty(runner, _CLOUDFLARE_DIR, paths.cloudflare_state, label="Cloudflare")
+        _terraform_state_is_empty(runner, _HETZNER_DIR, paths.hetzner_state, label="Hetzner", backend=paths.backend)
+        _terraform_state_is_empty(runner, _CLOUDFLARE_DIR, paths.cloudflare_state, label="Cloudflare", backend=paths.backend)
         print(json.dumps({"deployment_id": deployment_id, "status": "decommissioned", "resources": 0}, sort_keys=True))
         return 0
 
@@ -952,8 +1053,9 @@ def reconcile_instance(*, manifest_path: Path, state_dir: Optional[Path]) -> int
         ("Cloudflare", _CLOUDFLARE_DIR, paths.cloudflare_state),
     ):
         result = runner.run(
-            [f"-chdir={module}", "show", "-json", f"-state={state_path}"],
+            [f"-chdir={module}", "show", "-json", *([] if paths.backend and paths.backend.backend == "s3" else [f"-state={state_path}"])],
             label=f"inspect {label} Terraform state", timeout=120,
+            env=_terraform_env(data_dir=state_path.parent / f".terraform-{module.name}"),
         )
         try:
             payload = json.loads(result.stdout)
@@ -1031,14 +1133,14 @@ def teardown_instance(
             raise DeployerError("SSH public key must not be empty")
         if not ssh_allowed_cidrs:
             raise DeployerError("at least one SSH allowed CIDR is required")
-        secret_values = {
-            "HCLOUD_TOKEN": _secret_env("HCLOUD_TOKEN"),
-            "CLOUDFLARE_API_TOKEN": _secret_env("CLOUDFLARE_API_TOKEN"),
-        }
+        secret_values = _secret_values(
+            ("HCLOUD_TOKEN", "CLOUDFLARE_API_TOKEN"),
+            allow_environment=paths.backend is not None and paths.backend.backend == "local",
+        )
         hetzner_destroy_module = _controlled_destroy_module(_HETZNER_DIR, paths.state_dir, expected_guards=2)
         cloudflare_destroy_module = _controlled_destroy_module(_CLOUDFLARE_DIR, paths.state_dir, expected_guards=3)
-        _terraform_init(runner, hetzner_destroy_module, paths, dry_run=False)
-        _terraform_init(runner, cloudflare_destroy_module, paths, dry_run=False)
+        _terraform_init(runner, hetzner_destroy_module, paths, dry_run=False, backend=paths.backend, backend_module="hetzner")
+        _terraform_init(runner, cloudflare_destroy_module, paths, dry_run=False, backend=paths.backend, backend_module="cloudflare")
         hetzner_vars = {
             "deployment_id": deployment_id,
             "enable_cloud_init": False,
@@ -1053,15 +1155,15 @@ def teardown_instance(
         _terraform_destroy_plan_apply(
             runner, hetzner_destroy_module, paths.hetzner_state, hetzner_vars,
             {"HCLOUD_TOKEN": secret_values["HCLOUD_TOKEN"]},
-            timeout=900, label="Hetzner teardown",
+            timeout=900, label="Hetzner teardown", backend=paths.backend,
         )
-        _terraform_state_is_empty(runner, hetzner_destroy_module, paths.hetzner_state, label="Hetzner")
+        _terraform_state_is_empty(runner, hetzner_destroy_module, paths.hetzner_state, label="Hetzner", backend=paths.backend)
         _terraform_destroy_plan_apply(
             runner, cloudflare_destroy_module, paths.cloudflare_state, cloudflare_vars,
             {"CLOUDFLARE_API_TOKEN": secret_values["CLOUDFLARE_API_TOKEN"]},
-            timeout=900, label="Cloudflare teardown",
+            timeout=900, label="Cloudflare teardown", backend=paths.backend,
         )
-        _terraform_state_is_empty(runner, cloudflare_destroy_module, paths.cloudflare_state, label="Cloudflare")
+        _terraform_state_is_empty(runner, cloudflare_destroy_module, paths.cloudflare_state, label="Cloudflare", backend=paths.backend)
         _set_manifest_status(paths.manifest, manifest_lib.DeploymentStatus.DECOMMISSIONED, "Terraform states verified empty")
         _record_operation(paths.manifest, "teardown", "succeeded", "retention exported; Terraform states empty")
         return 0
@@ -1071,6 +1173,29 @@ def teardown_instance(
     except Exception as exc:
         _record_operation(paths.manifest, "teardown", "failed", str(exc))
         raise DeployerError(str(exc)) from exc
+
+
+_ROTATABLE_SECRET_NAMES = {"HCLOUD_TOKEN", "CLOUDFLARE_API_TOKEN", "GIT_DEPLOY_TOKEN", "GHCR_TOKEN"}
+
+
+def rotate_secret(*, manifest_path: Path, secret_name: str, confirm: bool) -> int:
+    """Rotate one named provider secret and leave a non-secret audit event."""
+    _require_confirmation(confirm, "secret rotation")
+    if secret_name not in _ROTATABLE_SECRET_NAMES:
+        raise DeployerError("secret rotation is limited to the approved provider secret names")
+    manifest = _load_manifest(manifest_path)
+    errors = manifest_lib.validate_manifest(manifest)
+    if errors:
+        raise DeployerError("invalid deployment manifest: " + "; ".join(errors))
+    if manifest.get("status") == manifest_lib.DeploymentStatus.DECOMMISSIONED.value:
+        raise DeployerError("cannot rotate secrets for a decommissioned deployment")
+    try:
+        secret_manager_from_env(allow_environment=False).rotate(secret_name)
+    except StateSecurityError as exc:
+        _record_operation(manifest_path, "secret-rotation", "failed", f"secret={secret_name}")
+        raise DeployerError(str(exc)) from exc
+    _record_operation(manifest_path, "secret-rotation", "succeeded", f"secret={secret_name}")
+    return 0
 
 
 def _add_remote_options(parser: argparse.ArgumentParser, *, required_key: bool) -> None:
@@ -1138,6 +1263,11 @@ def _parser() -> argparse.ArgumentParser:
     reconcile_parser = sub.add_parser("reconcile", help="Verify Terraform state belongs to the exact deployment_id")
     reconcile_parser.add_argument("--manifest", type=Path, default=_DEFAULT_MANIFEST)
     reconcile_parser.add_argument("--state-dir", type=Path)
+
+    rotate_parser = sub.add_parser("rotate-secret", help="Rotate one approved provider secret through the secret manager")
+    rotate_parser.add_argument("--manifest", type=Path, default=_DEFAULT_MANIFEST)
+    rotate_parser.add_argument("--secret-name", required=True, choices=sorted(_ROTATABLE_SECRET_NAMES))
+    rotate_parser.add_argument("--confirm", action="store_true", help="Confirm the privileged rotation")
 
     teardown_parser = sub.add_parser("teardown", help="Backup, export retention, and destroy one exact deployment")
     _add_remote_options(teardown_parser, required_key=True)
@@ -1212,6 +1342,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             )
         if args.command == "reconcile":
             return reconcile_instance(manifest_path=args.manifest, state_dir=args.state_dir)
+        if args.command == "rotate-secret":
+            return rotate_secret(manifest_path=args.manifest, secret_name=args.secret_name, confirm=args.confirm)
         if args.command == "teardown":
             return teardown_instance(
                 manifest_path=args.manifest, state_dir=args.state_dir,

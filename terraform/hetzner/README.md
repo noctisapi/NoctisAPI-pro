@@ -47,22 +47,17 @@ just never commit one that contains `ssh_public_key`, `cloudflare_tunnel_token`,
 | cloud-init bootstrap: Docker, a hardened non-root admin user, SSH hardening, cloning the repo, generating `.env.prod`, running `scripts/init_deployment.py`, `docker compose up`, installing the systemd unit, and a first local health check (`ops/vps/bootstrap-managed.sh`) | Creating the first admin-panel account (`scripts/panel_user.py`) -- deliberately left manual; see "Why the first admin account isn't automated" below |
 | Pinned, reproducible `terraform plan` | Teardown, reconciliation and state protection beyond the private CLI (NOC-037/038) |
 | Minimal firewall: 22 (restricted to `ssh_allowed_cidrs`), 80, 443 only -- matches exactly what `compose/docker-compose.prod.yml` itself publishes | Actually tearing an instance down (NOC-037) |
-| `prevent_destroy` on the server/volume (see below) | Protecting Terraform state and the secrets embedded in `user_data` (NOC-038) -- see "Known limitation" below |
-| Local Terraform state | — |
+| `prevent_destroy` on the server/volume (see below) | — |
+| Runtime-configured encrypted remote state with locking (NOC-038) | — |
 
-## Known limitation: secrets end up in local Terraform state
+## NOC-038: remote state and secrets
 
-`cloudflare_tunnel_token`, `git_deploy_token`, and `ghcr_token` are
-marked `sensitive = true` (Terraform redacts them from `plan`/`apply`
-console output -- confirmed: the whole rendered `user_data` shows as
-`(sensitive value)` since it's derived from them), but Terraform still
-writes their real values into `terraform.tfstate` in cleartext, because
-that file records every resource's actual configuration. This module
-still uses **local** state (see the table above) -- do not use this in
-a real multi-customer rollout before NOC-038 lands a real backend
-(encrypted remote state, or a different secrets-injection mechanism
-that doesn't round-trip through `user_data`/state at all). Treat
-`terraform.tfstate` as sensitive material in the meantime.
+The private Deployer now initializes this module with a tenant-scoped,
+encrypted S3-compatible backend and DynamoDB locking. The bucket, key and
+role are supplied at runtime; they are never committed to this module. The
+CLI rejects local state for real operations. See
+`documentation/NOC-038-ESTADO-SECRETS.md` for the runner contract and the
+remaining account-level recovery tests.
 
 ## "Credenciales no aparecen en logs" (NOC-033)
 

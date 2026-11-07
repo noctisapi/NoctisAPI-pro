@@ -2554,7 +2554,12 @@ async def log_all_requests(request: Request, call_next):
                 )
 
                 # Webhook alert for high-signal events — Pro only (non-blocking, never raises)
-                if licensing.has_feature(licensing.Feature.WEBHOOKS):
+                _webhooks_ok, _webhooks_reason = pro_ops.authorize_pro_feature(
+                    feature=licensing.Feature.WEBHOOKS.value,
+                    action="webhook_alert",
+                    force_refresh=False,
+                )
+                if _webhooks_ok:
                     _event_score_delta = int((hp_event.get("points") if hp_event else None) or _score_for(kind))
                     _current_actor_score = _actor_score(conn, actor_id)
                     alert_dispatcher.fire_if_high_signal(

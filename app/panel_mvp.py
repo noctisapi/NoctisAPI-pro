@@ -67,6 +67,8 @@ from app import panel_rbac
 from app import panel_membership_audit
 from app import panel_audit
 from app.structured_logging import set_request_id
+from control_center.router import router as control_center_router
+from control_center.ui import router as control_center_ui_router
 
 APP_NAME = "noctisapi-panel"
 DB_PATH = os.getenv("HP_DB_PATH", "/data/honeypot.db")
@@ -166,8 +168,10 @@ class _CloudflareAccessMiddleware:
     _PanelAuthMiddleware's per-user session gate (NOC-018) is the only
     change in behavior for installations that haven't set it up."""
 
-    def __init__(self, app_inner):
-        self._app = app_inner
+    def __init__(self, app=None, app_inner=None):
+        # Starlette constructs middleware with ``app=``; app_inner is kept
+        # for the direct-construction shape used by the unit tests.
+        self._app = app if app is not None else app_inner
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http" or not cloudflare_access.is_enabled():
@@ -203,8 +207,8 @@ class _PanelAuthMiddleware:
     only when its cookie names a non-expired, non-revoked session row owned
     by an active panel_users account."""
 
-    def __init__(self, app_inner):
-        self._app = app_inner
+    def __init__(self, app=None, app_inner=None):
+        self._app = app if app is not None else app_inner
 
     async def __call__(self, scope, receive, send):
         if scope["type"] not in ("http", "websocket"):
@@ -257,8 +261,8 @@ class _PanelRBACMiddleware:
     ends up *inner* to / running *after*) _PanelAuthMiddleware. A path with
     no entry in the matrix fails closed (denied to everyone but OWNER)."""
 
-    def __init__(self, app_inner):
-        self._app = app_inner
+    def __init__(self, app=None, app_inner=None):
+        self._app = app if app is not None else app_inner
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
@@ -295,8 +299,8 @@ class _PanelAuditMiddleware:
     ordering below. Generates/propagates the X-Request-ID used for log
     correlation (app.structured_logging), same convention as the public app."""
 
-    def __init__(self, app_inner):
-        self._app = app_inner
+    def __init__(self, app=None, app_inner=None):
+        self._app = app if app is not None else app_inner
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
@@ -360,6 +364,8 @@ app.add_middleware(_PanelAuthMiddleware)
 # before the panel even considers a session cookie.
 app.add_middleware(_CloudflareAccessMiddleware)
 app.mount("/static", StaticFiles(directory="static"), name="static")
+app.include_router(control_center_router)
+app.include_router(control_center_ui_router)
 templates = Jinja2Templates(directory="templates")
 _template_response_impl = templates.TemplateResponse
 
