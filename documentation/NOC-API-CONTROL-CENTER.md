@@ -43,6 +43,12 @@ cualquier payload que contenga datos de tarjeta; después redacciona campos
 sensibles antes de devolver el evento al worker. La persistencia idempotente
 sigue pasando por `record_billing_event`, no por el adapter.
 
+La construcción se realiza con `build_adapter_bundle`: los flags y URLs son
+configuración no secreta, mientras que los tokens sólo se resuelven mediante
+`SecretManager` de NOC-038. Por defecto todos los adapters están desactivados;
+si falta configuración obligatoria, la fábrica falla cerrada y no construye
+un adapter parcialmente configurado.
+
 - Las lecturas pasan por la sesión/RBAC existente.
 - Los jobs reciben sólo `job_type`, `deployment_id`, `idempotency_key` y
   parámetros JSON estructurados.

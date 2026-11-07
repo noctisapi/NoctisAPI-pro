@@ -46,6 +46,7 @@ from .adapters import AdapterRegistry, AdapterUnavailableError
 from .worker import READ_ONLY_JOB_TYPES, ReadOnlyJobError, ReadOnlyReconciliationWorker
 from .provider_adapters import CloudflareTunnelDeploymentAdapter, HetznerDeploymentAdapter, ProviderAdapterError
 from .billing_adapters import BillingAdapterError, SignedJsonBillingAdapter
+from .adapter_factory import AdapterBundle, AdapterConfiguration, AdapterConfigurationError, build_adapter_bundle
 
 __all__ = [
     "AUDIT_ACTIONS",
@@ -88,4 +89,8 @@ __all__ = [
     "ProviderAdapterError",
     "BillingAdapterError",
     "SignedJsonBillingAdapter",
+    "AdapterBundle",
+    "AdapterConfiguration",
+    "AdapterConfigurationError",
+    "build_adapter_bundle",
 ]
