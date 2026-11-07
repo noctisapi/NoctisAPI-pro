@@ -44,7 +44,7 @@ from .ports import (
 )
 from .adapters import AdapterRegistry, AdapterUnavailableError
 from .worker import READ_ONLY_JOB_TYPES, ReadOnlyJobError, ReadOnlyReconciliationWorker
-from .provider_adapters import HetznerDeploymentAdapter, ProviderAdapterError
+from .provider_adapters import CloudflareTunnelDeploymentAdapter, HetznerDeploymentAdapter, ProviderAdapterError
 
 __all__ = [
     "AUDIT_ACTIONS",
@@ -83,5 +83,6 @@ __all__ = [
     "ReadOnlyJobError",
     "ReadOnlyReconciliationWorker",
     "HetznerDeploymentAdapter",
+    "CloudflareTunnelDeploymentAdapter",
     "ProviderAdapterError",
 ]

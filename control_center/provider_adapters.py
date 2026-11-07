@@ -112,3 +112,69 @@ class HetznerDeploymentAdapter:
             accepted=False,
             message="Hetzner adapter is observation-only; mutations are disabled",
         )
+
+
+class CloudflareTunnelDeploymentAdapter:
+    """Observe a Cloudflare Tunnel associated with a deployment."""
+
+    _STATUS_MAP = {
+        "healthy": "active",
+        "degraded": "stale",
+        "down": "stale",
+        "inactive": "suspended",
+        "unknown": "stale",
+    }
+
+    def __init__(
+        self,
+        token: str,
+        account_id: str,
+        *,
+        transport: JsonTransport | None = None,
+        base_url: str = "https://api.cloudflare.com/client/v4",
+    ) -> None:
+        if not token.strip():
+            raise ValueError("Cloudflare API token is required")
+        if not account_id.strip():
+            raise ValueError("Cloudflare account ID is required")
+        if not base_url.startswith("https://"):
+            raise ValueError("Cloudflare API base URL must use HTTPS")
+        self._headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+        self._account_id = account_id.strip()
+        self._transport = transport or _urllib_get_json
+        self._base_url = base_url.rstrip("/")
+
+    def observe(self, target: DeploymentTarget) -> ProviderObservation:
+        if target.provider.strip().lower() != "cloudflare":
+            raise ProviderAdapterError(f"adapter cannot observe provider {target.provider}")
+        if not target.provider_ref or not target.provider_ref.strip():
+            raise ProviderAdapterError("Cloudflare observation requires provider_ref")
+        payload = self._transport(
+            f"{self._base_url}/accounts/{quote(self._account_id, safe='')}/cfd_tunnel/{quote(target.provider_ref.strip(), safe='')}",
+            self._headers,
+        )
+        tunnel = payload.get("result")
+        if not isinstance(tunnel, Mapping):
+            raise ProviderAdapterError("Cloudflare response has no tunnel result")
+        raw_status = tunnel.get("status")
+        if not isinstance(raw_status, str):
+            raise ProviderAdapterError("Cloudflare tunnel status is missing")
+        return ProviderObservation(
+            deployment_id=target.deployment_id,
+            provider="cloudflare",
+            region=target.region,
+            state=self._STATUS_MAP.get(raw_status.lower(), "stale"),
+            observed_at=_now(),
+        )
+
+    def execute(
+        self,
+        target: DeploymentTarget,
+        operation: DeploymentOperation,
+        parameters: Mapping[str, object],
+    ) -> AdapterResult:
+        return AdapterResult(
+            operation=operation,
+            accepted=False,
+            message="Cloudflare adapter is observation-only; mutations are disabled",
+        )

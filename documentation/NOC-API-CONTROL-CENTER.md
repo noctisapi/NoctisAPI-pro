@@ -33,6 +33,10 @@ servidor a estados del inventario y rechaza operaciones mutantes. El recurso
 del proveedor se identifica con `cc_deployments.provider_ref`, separado de
 `tenant_id`; los adapters siguientes deben conservar esta misma separación.
 
+`CloudflareTunnelDeploymentAdapter` aplica la misma regla al túnel de cada
+cuenta: usa `account_id` y `provider_ref`, observa su estado mediante `GET` y
+no crea, elimina ni modifica túneles.
+
 - Las lecturas pasan por la sesión/RBAC existente.
 - Los jobs reciben sólo `job_type`, `deployment_id`, `idempotency_key` y
   parámetros JSON estructurados.
