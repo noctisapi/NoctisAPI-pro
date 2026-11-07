@@ -122,8 +122,10 @@ class ReadOnlyReconciliationWorker:
             raise ReadOnlyJobError(row["job_type"])
 
         try:
+            columns = {item[1] for item in self._conn.execute("PRAGMA table_info(cc_deployments)").fetchall()}
+            provider_ref = ", provider_ref" if "provider_ref" in columns else ""
             deployment = self._conn.execute(
-                "SELECT external_id, tenant_id, provider, region FROM cc_deployments WHERE id = ?",
+                f"SELECT external_id, tenant_id, provider, region{provider_ref} FROM cc_deployments WHERE id = ?",
                 (row["deployment_id"],),
             ).fetchone()
             if deployment is None:
@@ -134,6 +136,7 @@ class ReadOnlyReconciliationWorker:
                 tenant_id=deployment[1],
                 provider=deployment[2],
                 region=deployment[3],
+                provider_ref=deployment[4] if len(deployment) > 4 else None,
             )
             observation = self._adapters.get(target.provider).observe(target)
             self._validate_observation(observation, target)

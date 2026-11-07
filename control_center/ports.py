@@ -23,6 +23,7 @@ class DeploymentTarget:
     tenant_id: str
     provider: str
     region: str
+    provider_ref: str | None = None
 
 
 @dataclass(frozen=True)

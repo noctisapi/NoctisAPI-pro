@@ -16,7 +16,7 @@ from control_center.worker import ReadOnlyJobError, ReadOnlyReconciliationWorker
 def _connection(path: Path) -> sqlite3.Connection:
     config = Config("alembic.ini")
     config.set_main_option("sqlalchemy.url", f"sqlite+pysqlite:///{path.as_posix()}")
-    command.upgrade(config, "20261107_04_control_center_worker_leases")
+    command.upgrade(config, "20261107_05_control_center_provider_refs")
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")

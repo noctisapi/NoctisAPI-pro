@@ -27,6 +27,12 @@ determinista: procesa el job read-only encolado más antiguo e ignora jobs
 mutantes. El supervisor, backoff, métricas y ciclo de vida del proceso siguen
 siendo una integración posterior.
 
+`HetznerDeploymentAdapter` es el primer adapter de observación: usa un
+transporte HTTP inyectable, exige HTTPS y `provider_ref`, traduce el estado del
+servidor a estados del inventario y rechaza operaciones mutantes. El recurso
+del proveedor se identifica con `cc_deployments.provider_ref`, separado de
+`tenant_id`; los adapters siguientes deben conservar esta misma separación.
+
 - Las lecturas pasan por la sesión/RBAC existente.
 - Los jobs reciben sólo `job_type`, `deployment_id`, `idempotency_key` y
   parámetros JSON estructurados.
