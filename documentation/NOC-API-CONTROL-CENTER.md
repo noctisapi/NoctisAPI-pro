@@ -37,6 +37,12 @@ del proveedor se identifica con `cc_deployments.provider_ref`, separado de
 cuenta: usa `account_id` y `provider_ref`, observa su estado mediante `GET` y
 no crea, elimina ni modifica túneles.
 
+`SignedJsonBillingAdapter` cubre la lectura de suscripciones y la verificación
+de eventos HMAC sobre JSON canónico. Rechaza estados comerciales desconocidos y
+cualquier payload que contenga datos de tarjeta; después redacciona campos
+sensibles antes de devolver el evento al worker. La persistencia idempotente
+sigue pasando por `record_billing_event`, no por el adapter.
+
 - Las lecturas pasan por la sesión/RBAC existente.
 - Los jobs reciben sólo `job_type`, `deployment_id`, `idempotency_key` y
   parámetros JSON estructurados.
