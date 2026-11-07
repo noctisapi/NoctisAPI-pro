@@ -29,6 +29,27 @@ class ReadOnlyReconciliationWorker:
         self._conn = conn
         self._adapters = adapters
 
+    def run_next(self) -> ProviderObservation | None:
+        """Run the oldest queued read-only job, or do nothing if none exists.
+
+        A process supervisor can call this method on its own schedule. It is
+        intentionally a single tick: lifecycle, backoff, telemetry and
+        process supervision belong outside this provider-safe boundary.
+        """
+
+        row = self._conn.execute(
+            """
+            SELECT id
+              FROM cc_jobs
+             WHERE state = 'queued' AND job_type IN ('status', 'verify', 'reconcile')
+             ORDER BY id
+             LIMIT 1
+            """
+        ).fetchone()
+        if row is None:
+            return None
+        return self.run_job(int(row[0]))
+
     def run_job(self, job_id: int) -> ProviderObservation | None:
         row = claim_job(self._conn, job_id)
         if row["job_type"] not in READ_ONLY_JOB_TYPES:

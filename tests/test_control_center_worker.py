@@ -71,6 +71,32 @@ def test_worker_reconciles_without_deploying(tmp_path: Path) -> None:
         conn.close()
 
 
+def test_worker_run_next_ignores_mutating_jobs_and_processes_oldest_read_only_job(tmp_path: Path) -> None:
+    conn = _connection(tmp_path / "control-center.db")
+    try:
+        deployment = _deployment(conn)
+        second_customer_id = create_customer(conn, external_id="cus_b", legal_name="Beta", actor_ref="operator-1")
+        conn.execute(
+            """
+            INSERT INTO cc_deployments
+              (customer_id, external_id, tenant_id, provider, region, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (second_customer_id, "dep_b", "tenant_b", "hetzner", "fsn1", "2026-11-06T00:00:00Z", "2026-11-06T00:00:00Z"),
+        )
+        conn.commit()
+        create_job(conn, deployment_id=deployment, job_type="deploy", idempotency_key="deploy-pending", requested_by="operator-1", confirmation=True)
+        status_id = create_job(conn, deployment_id="dep_b", job_type="status", idempotency_key="status-pending", requested_by="operator-1")
+        worker = ReadOnlyReconciliationWorker(conn, AdapterRegistry({"hetzner": _Adapter()}))
+
+        assert worker.run_next() is not None
+        assert conn.execute("SELECT state FROM cc_jobs WHERE id = ?", (status_id,)).fetchone()[0] == "succeeded"
+        assert conn.execute("SELECT state FROM cc_jobs WHERE id != ?", (status_id,)).fetchone()[0] == "queued"
+        assert worker.run_next() is None
+    finally:
+        conn.close()
+
+
 def test_worker_rejects_mutating_jobs_and_records_failure(tmp_path: Path) -> None:
     conn = _connection(tmp_path / "control-center.db")
     try:

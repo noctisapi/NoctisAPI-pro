@@ -22,6 +22,11 @@ adapters configurados explícitamente y `ReadOnlyReconciliationWorker` acepta
 el job de forma veraz. Los tipos mutantes se rechazan hasta implementar una
 ruta separada de autorización, aprobación y ejecución.
 
+`ReadOnlyReconciliationWorker.run_next()` ofrece además un tick de polling
+determinista: procesa el job read-only encolado más antiguo e ignora jobs
+mutantes. El supervisor, backoff, métricas y ciclo de vida del proceso siguen
+siendo una integración posterior.
+
 - Las lecturas pasan por la sesión/RBAC existente.
 - Los jobs reciben sólo `job_type`, `deployment_id`, `idempotency_key` y
   parámetros JSON estructurados.
