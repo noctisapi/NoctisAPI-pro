@@ -65,7 +65,7 @@ class AdapterBundle:
 
 def build_adapter_bundle(
     config: AdapterConfiguration,
-    secrets: SecretManager,
+    secrets: SecretManager | None = None,
     *,
     transport: JsonTransport | None = None,
 ) -> AdapterBundle:
@@ -81,7 +81,9 @@ def build_adapter_bundle(
     if config.billing_provider.strip():
         secret_names.extend((config.billing_token_secret, config.billing_webhook_secret))
 
-    secret_values = secrets.values(dict.fromkeys(secret_names)) if secret_names else {}
+    if secret_names and secrets is None:
+        raise AdapterConfigurationError("a secret manager is required for enabled adapters")
+    secret_values = secrets.values(dict.fromkeys(secret_names)) if secret_names and secrets is not None else {}
     deployment_adapters: dict[str, object] = {}
     billing_adapters: dict[str, BillingAdapter] = {}
 

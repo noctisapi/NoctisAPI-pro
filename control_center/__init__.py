@@ -47,6 +47,7 @@ from .worker import READ_ONLY_JOB_TYPES, ReadOnlyJobError, ReadOnlyReconciliatio
 from .provider_adapters import CloudflareTunnelDeploymentAdapter, HetznerDeploymentAdapter, ProviderAdapterError
 from .billing_adapters import BillingAdapterError, SignedJsonBillingAdapter
 from .adapter_factory import AdapterBundle, AdapterConfiguration, AdapterConfigurationError, build_adapter_bundle
+from .runtime import WorkerRuntimeConfig, WorkerRuntimeDisabled, build_worker, run_worker
 
 __all__ = [
     "AUDIT_ACTIONS",
@@ -93,4 +94,8 @@ __all__ = [
     "AdapterConfiguration",
     "AdapterConfigurationError",
     "build_adapter_bundle",
+    "WorkerRuntimeConfig",
+    "WorkerRuntimeDisabled",
+    "build_worker",
+    "run_worker",
 ]

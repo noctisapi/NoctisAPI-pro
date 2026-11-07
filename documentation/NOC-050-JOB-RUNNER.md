@@ -16,6 +16,11 @@
 - `ReadOnlyReconciliationWorker.run_next()` y `run_forever()` procesan sólo
   `status`/`verify`/`reconcile`; un fallo temporal vuelve a `queued` hasta
   agotar el presupuesto configurado.
+- `main_control_center_worker.py` es un entrypoint separado del panel web;
+  permanece desactivado por defecto y sólo arranca con
+  `NOCTISAPI_CONTROL_CENTER_WORKER_ENABLED=true`.
+- La construcción del worker resuelve secretos de forma perezosa mediante
+  `SecretManager` y sólo construye adapters explícitamente habilitados.
 
 ## Pospuesto
 
@@ -23,6 +28,10 @@ La supervisión de proceso, métricas, backoff avanzado, cola distribuida entre
 hosts y la ejecución contra Deployer/VPS se validarán después del despliegue de
 infraestructura. Esta etapa prueba leases y reintentos sobre SQLite temporal;
 no hace llamadas de red ni mutaciones de infraestructura.
+
+El entrypoint dedicado no debe ejecutarse todavía en producción: su activación
+queda para la fase de despliegue controlado. Cuando se habilite, seguirá siendo
+read-only y requerirá que la base de datos ya tenga las migraciones aplicadas.
 
 ```text
 pytest -q tests/test_control_center_jobs.py
